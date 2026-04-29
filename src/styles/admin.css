@@ -331,6 +331,23 @@
 
 .response-body.muted { color: var(--muted); font-style: italic; }
 
+.response-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-style: normal;
+  color: var(--charcoal);
+  font-size: 13px;
+}
+
+.response-note strong {
+  color: var(--green-dark);
+  letter-spacing: 0.3px;
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+
 .response-body ul {
   margin: 6px 0;
   padding-left: 20px;

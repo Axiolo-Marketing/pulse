@@ -304,8 +304,8 @@ values (
   13,
   'Document and Access Requests',
   'GLC Org Chart',
-  $$We have rebuilt the GLC org structure from your business plan but have not seen a visual org chart. Jeff Cohn referenced a ChatGPT-generated org chart on March 12 that was never shared. With Jeff's departure, the structure has shifted.$$,
-  $$Do you have an updated org chart you can upload, or paste a Google Drive link to the one Jeff originally created?$$,
+  $$We have rebuilt the GLC org structure from your business plan but have not seen a visual org chart. The structure has shifted recently, so we want to validate the current shape before anything depends on it.$$,
+  $$Does the org chart we have on file match how you would describe the structure today? Notes, edits, or an updated chart upload all work.$$,
   'file-upload',
   null,
   true

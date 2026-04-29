@@ -65,23 +65,26 @@ export interface CompletedUpload {
 }
 
 export interface CardHandlers {
-  // confirm-edit
+  // confirm-edit (no note field — uses Needs edit textarea instead)
   onConfirm: () => void;
   onEditStart: () => void;
   onEditCancel: () => void;
   onEditSubmit: (correction: string) => void;
-  // typed inputs
-  onSingleSelect: (option: string) => void;
-  onMultiSelectSubmit: (options: string[]) => void;
-  onTextSubmit: (text: string) => void;
-  onLinkSubmit: (url: string) => void;
-  onContactSubmit: (c: { name: string; email: string; role: string }) => void;
+  // typed inputs (each carries an optional free-form note)
+  onSingleSelect: (option: string, note?: string) => void;
+  onMultiSelectSubmit: (options: string[], note?: string) => void;
+  onTextSubmit: (text: string, note?: string) => void;
+  onLinkSubmit: (url: string, note?: string) => void;
+  onContactSubmit: (
+    c: { name: string; email: string; role: string },
+    note?: string
+  ) => void;
   // file upload
   onFilesSelected: (files: FileList) => void;
   onUploadRemove: (uploadId: string) => void;
-  onFilesContinue: () => void;
+  onFilesContinue: (note?: string) => void;
   // shared
-  onSkip: () => void;
+  onSkip: (note?: string) => void;
   onRetry: () => void;
   // attachment modal
   onAttachmentOpen: () => void;
@@ -258,7 +261,35 @@ function renderViewBody(
     <p class="question">${escape(card.question)}</p>
     ${renderPriorHint(card, args.existingResponse)}
     ${renderInput(card, saving, args)}
+    ${renderNoteField(card, saving, args.existingResponse)}
     <div class="actions">${renderActions(card, saving, args)}</div>
+  `;
+}
+
+// Optional free-form note field. Always available so the user can type or
+// talk (iOS keyboard mic) corrections, especially when reviewing an
+// active reference. confirm-edit cards already have a correction textarea
+// via the Needs edit button, so they don't get a second note field.
+function renderNoteField(
+  card: Card,
+  saving: boolean,
+  prior: ClientResponse | undefined
+): string {
+  if (card.response_type === "confirm-edit") return "";
+  const v = (prior?.response_value ?? {}) as { note?: string };
+  const prefill = v.note ?? "";
+  const dis = saving ? "disabled" : "";
+  return `
+    <label class="note-field">
+      <span class="note-label">Notes (optional)</span>
+      <textarea
+        id="note-input"
+        class="textarea note-textarea"
+        rows="2"
+        placeholder="Add a note. Tap the keyboard mic to talk."
+        ${dis}
+      >${escape(prefill)}</textarea>
+    </label>
   `;
 }
 
@@ -674,7 +705,7 @@ function dispatch(
       return;
     }
     case "skip":
-      handlers.onSkip();
+      handlers.onSkip(readNote(mount));
       return;
     case "retry":
       handlers.onRetry();
@@ -687,7 +718,7 @@ function dispatch(
       return;
     case "toggle-single": {
       const opt = btn.dataset.option ?? "";
-      handlers.onSingleSelect(opt);
+      handlers.onSingleSelect(opt, readNote(mount));
       return;
     }
     case "toggle-multi": {
@@ -706,7 +737,7 @@ function dispatch(
           "button[data-action='toggle-multi'].selected"
         )
       ).map((b) => b.dataset.option ?? "");
-      handlers.onMultiSelectSubmit(selected);
+      handlers.onMultiSelectSubmit(selected, readNote(mount));
       return;
     }
     case "text-submit": {
@@ -718,7 +749,7 @@ function dispatch(
         el?.focus();
         return;
       }
-      handlers.onTextSubmit(text);
+      handlers.onTextSubmit(text, readNote(mount));
       return;
     }
     case "link-submit": {
@@ -728,7 +759,7 @@ function dispatch(
         el?.focus();
         return;
       }
-      handlers.onLinkSubmit(url);
+      handlers.onLinkSubmit(url, readNote(mount));
       return;
     }
     case "contact-submit": {
@@ -743,11 +774,11 @@ function dispatch(
         mount.querySelector<HTMLInputElement>(focusEl)?.focus();
         return;
       }
-      handlers.onContactSubmit({ name, email, role });
+      handlers.onContactSubmit({ name, email, role }, readNote(mount));
       return;
     }
     case "files-continue":
-      handlers.onFilesContinue();
+      handlers.onFilesContinue(readNote(mount));
       return;
     case "remove-upload": {
       const id = btn.dataset.uploadId;
@@ -781,4 +812,10 @@ function isValidUrl(s: string): boolean {
   } catch {
     return false;
   }
+}
+
+function readNote(mount: HTMLElement): string | undefined {
+  const ta = mount.querySelector<HTMLTextAreaElement>("#note-input");
+  const v = (ta?.value ?? "").trim();
+  return v || undefined;
 }

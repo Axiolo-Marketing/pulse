@@ -186,13 +186,19 @@ function runApp(ctx: RunCtx): void {
   type PendingAction =
     | { kind: "confirm" }
     | { kind: "edit"; correction: string }
-    | { kind: "skip" }
-    | { kind: "single-select"; option: string }
-    | { kind: "multi-select"; options: string[] }
-    | { kind: "text"; text: string }
-    | { kind: "link"; url: string }
-    | { kind: "contact"; name: string; email: string; role: string }
-    | { kind: "files-continue" };
+    | { kind: "skip"; note?: string }
+    | { kind: "single-select"; option: string; note?: string }
+    | { kind: "multi-select"; options: string[]; note?: string }
+    | { kind: "text"; text: string; note?: string }
+    | { kind: "link"; url: string; note?: string }
+    | {
+        kind: "contact";
+        name: string;
+        email: string;
+        role: string;
+        note?: string;
+      }
+    | { kind: "files-continue"; note?: string };
 
   // markViewed inserts a viewed row for this card if and only if no row
   // already exists. ignoreDuplicates makes the operation idempotent and
@@ -289,6 +295,15 @@ function runApp(ctx: RunCtx): void {
     let value: unknown;
     let answeredAt: string | null;
 
+    // withNote folds an optional free-form note into the structured value.
+    // null is preserved (skip with no note); objects get a note field.
+    const withNote = (v: unknown, note?: string): unknown => {
+      if (!note) return v;
+      if (v === null) return { note };
+      if (typeof v === "object" && v !== null) return { ...v, note };
+      return v;
+    };
+
     switch (action.kind) {
       case "confirm":
         state = "answered";
@@ -302,43 +317,45 @@ function runApp(ctx: RunCtx): void {
         break;
       case "skip":
         state = "skipped";
-        value = null;
+        value = withNote(null, action.note);
         answeredAt = null;
         break;
       case "single-select":
         state = "answered";
-        value = { selected: action.option };
+        value = withNote({ selected: action.option }, action.note);
         answeredAt = new Date().toISOString();
         break;
       case "multi-select":
         state = "answered";
-        value = { selected: action.options };
+        value = withNote({ selected: action.options }, action.note);
         answeredAt = new Date().toISOString();
         break;
       case "text":
         state = "answered";
-        value = { text: action.text };
+        value = withNote({ text: action.text }, action.note);
         answeredAt = new Date().toISOString();
         break;
       case "link":
         state = "answered";
-        value = { url: action.url };
+        value = withNote({ url: action.url }, action.note);
         answeredAt = new Date().toISOString();
         break;
       case "contact":
         state = "answered";
-        value = {
-          name: action.name,
-          email: action.email,
-          role: action.role,
-        };
+        value = withNote(
+          { name: action.name, email: action.email, role: action.role },
+          action.note
+        );
         answeredAt = new Date().toISOString();
         break;
       case "files-continue": {
         const list = uploads.get(card.id) ?? [];
-        state = list.length > 0 ? "answered" : "skipped";
-        value = list.length > 0 ? { file_ids: list.map((u) => u.id) } : null;
-        answeredAt = list.length > 0 ? new Date().toISOString() : null;
+        const hasFiles = list.length > 0;
+        const hasNote = !!action.note;
+        state = hasFiles || hasNote ? "answered" : "skipped";
+        const base = hasFiles ? { file_ids: list.map((u) => u.id) } : null;
+        value = withNote(base, action.note);
+        answeredAt = state === "answered" ? new Date().toISOString() : null;
         break;
       }
     }
@@ -513,21 +530,21 @@ function runApp(ctx: RunCtx): void {
     onEditSubmit: (correction) => {
       void performSave({ kind: "edit", correction });
     },
-    onSingleSelect: (option) => {
+    onSingleSelect: (option, note) => {
       draftSelections = new Set([option]);
-      void performSave({ kind: "single-select", option });
+      void performSave({ kind: "single-select", option, note });
     },
-    onMultiSelectSubmit: (options) => {
-      void performSave({ kind: "multi-select", options });
+    onMultiSelectSubmit: (options, note) => {
+      void performSave({ kind: "multi-select", options, note });
     },
-    onTextSubmit: (text) => {
-      void performSave({ kind: "text", text });
+    onTextSubmit: (text, note) => {
+      void performSave({ kind: "text", text, note });
     },
-    onLinkSubmit: (url) => {
-      void performSave({ kind: "link", url });
+    onLinkSubmit: (url, note) => {
+      void performSave({ kind: "link", url, note });
     },
-    onContactSubmit: ({ name, email, role }) => {
-      void performSave({ kind: "contact", name, email, role });
+    onContactSubmit: ({ name, email, role }, note) => {
+      void performSave({ kind: "contact", name, email, role, note });
     },
     onFilesSelected: (files) => {
       void handleFiles(files);
@@ -535,11 +552,11 @@ function runApp(ctx: RunCtx): void {
     onUploadRemove: (id) => {
       void removeUpload(id);
     },
-    onFilesContinue: () => {
-      void performSave({ kind: "files-continue" });
+    onFilesContinue: (note) => {
+      void performSave({ kind: "files-continue", note });
     },
-    onSkip: () => {
-      void performSave({ kind: "skip" });
+    onSkip: (note) => {
+      void performSave({ kind: "skip", note });
     },
     onRetry: () => {
       if (pending) void performSave(pending);
