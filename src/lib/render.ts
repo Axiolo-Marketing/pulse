@@ -266,16 +266,21 @@ function renderViewBody(
   `;
 }
 
-// Optional free-form note field. Always available so the user can type or
-// talk (iOS keyboard mic) corrections, especially when reviewing an
-// active reference. confirm-edit cards already have a correction textarea
-// via the Needs edit button, so they don't get a second note field.
+// Optional free-form note field. Surfaced only on cards that don't
+// already have an open-text input — those cards reuse the same
+// "talk or type" placeholder on their primary input instead.
 function renderNoteField(
   card: Card,
   saving: boolean,
   prior: ClientResponse | undefined
 ): string {
-  if (card.response_type === "confirm-edit") return "";
+  if (
+    card.response_type === "confirm-edit" ||
+    card.response_type === "short-text" ||
+    card.response_type === "long-text"
+  ) {
+    return "";
+  }
   const v = (prior?.response_value ?? {}) as { note?: string };
   const prefill = v.note ?? "";
   const dis = saving ? "disabled" : "";
@@ -286,12 +291,14 @@ function renderNoteField(
         id="note-input"
         class="textarea note-textarea"
         rows="2"
-        placeholder="Add a note. Tap the keyboard mic to talk."
+        placeholder="${VOICE_PLACEHOLDER}"
         ${dis}
       >${escape(prefill)}</textarea>
     </label>
   `;
 }
+
+const VOICE_PLACEHOLDER = "Add a note. Tap the keyboard mic to talk.";
 
 // Surface the user's prior choice when they navigate back to a card so they
 // know the answer is already on file. The form below stays editable; saving
@@ -411,12 +418,12 @@ function renderMultiSelect(
 function renderShortText(saving: boolean, prefill?: string): string {
   const dis = saving ? "disabled" : "";
   const value = prefill ? `value="${escapeAttr(prefill)}"` : "";
-  return `<input id="text-input" class="input" type="text" placeholder="Your answer" ${value} ${dis} />`;
+  return `<input id="text-input" class="input" type="text" placeholder="${VOICE_PLACEHOLDER}" ${value} ${dis} />`;
 }
 
 function renderLongText(saving: boolean, prefill?: string): string {
   const dis = saving ? "disabled" : "";
-  return `<textarea id="text-input" class="textarea" rows="5" placeholder="Your answer" ${dis}>${escape(prefill ?? "")}</textarea>`;
+  return `<textarea id="text-input" class="textarea" rows="5" placeholder="${VOICE_PLACEHOLDER}" ${dis}>${escape(prefill ?? "")}</textarea>`;
 }
 
 function renderDocumentLink(saving: boolean, prefill?: string): string {
