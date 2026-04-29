@@ -140,11 +140,32 @@ function runApp(ctx: RunCtx): void {
   let mode: CardMode = "view";
   let saveError: string | undefined;
   let modalOpen = false;
+  let pickerOpen = false;
   let pending: PendingAction | undefined;
 
   // Per-card UI scratch state. Reset whenever the card changes.
   let draftSelections: Set<string> = new Set();
   let pendingUploads: PendingUpload[] = [];
+
+  // When navigating back to a card the user already answered, prime the
+  // selection state so multi-select chips and single-select highlights show
+  // their prior choices. Text/link/contact inputs are pre-filled at render
+  // time from the response_value directly.
+  const seedDraftFromResponse = (card: Card): void => {
+    draftSelections = new Set();
+    const r = responses.get(card.id);
+    if (!r || r.state !== "answered") return;
+    const v = (r.response_value ?? {}) as { selected?: string | string[] };
+    if (card.response_type === "multi-select" && Array.isArray(v.selected)) {
+      draftSelections = new Set(v.selected);
+    } else if (
+      card.response_type === "single-select" &&
+      typeof v.selected === "string"
+    ) {
+      draftSelections = new Set([v.selected]);
+    }
+  };
+  if (index < cards.length) seedDraftFromResponse(cards[index]);
 
   // Resume banner shown once on boot when the user is returning past the
   // start of the deck. It dismisses on the first save/advance — simpler
@@ -215,10 +236,30 @@ function runApp(ctx: RunCtx): void {
       uploads: uploads.get(card.id) ?? [],
       pending: pendingUploads,
       modalOpen,
+      pickerOpen,
       draftSelections,
       showResume,
+      existingResponse: responses.get(card.id),
+      cards,
+      responses,
       handlers,
     });
+  };
+
+  const navigateTo = (newIndex: number): void => {
+    if (newIndex < 0 || newIndex > cards.length) return;
+    if (newIndex === index && !pickerOpen) return;
+    clearRetryTimer();
+    index = newIndex;
+    mode = "view";
+    saveError = undefined;
+    pending = undefined;
+    modalOpen = false;
+    pickerOpen = false;
+    pendingUploads = [];
+    showResume = false;
+    if (index < cards.length) seedDraftFromResponse(cards[index]);
+    draw();
   };
 
   const advance = (): void => {
@@ -228,9 +269,10 @@ function runApp(ctx: RunCtx): void {
     saveError = undefined;
     pending = undefined;
     modalOpen = false;
-    draftSelections = new Set();
+    pickerOpen = false;
     pendingUploads = [];
     showResume = false;
+    if (index < cards.length) seedDraftFromResponse(cards[index]);
     draw();
   };
 
@@ -508,6 +550,23 @@ function runApp(ctx: RunCtx): void {
     },
     onAttachmentClose: () => {
       modalOpen = false;
+      draw();
+    },
+    onNavBack: () => {
+      navigateTo(index - 1);
+    },
+    onNavForward: () => {
+      navigateTo(index + 1);
+    },
+    onNavJumpTo: (i) => {
+      navigateTo(i);
+    },
+    onPickerOpen: () => {
+      pickerOpen = true;
+      draw();
+    },
+    onPickerClose: () => {
+      pickerOpen = false;
       draw();
     },
   };

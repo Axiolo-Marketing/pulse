@@ -1,4 +1,4 @@
-import type { Card } from "./supabase";
+import type { Card, ClientResponse } from "./supabase";
 
 // Tiny escape helper so we can build cards via template strings without
 // pulling in a framework. Card text comes from our own database, but we
@@ -86,6 +86,12 @@ export interface CardHandlers {
   // attachment modal
   onAttachmentOpen: () => void;
   onAttachmentClose: () => void;
+  // navigation
+  onNavBack: () => void;
+  onNavForward: () => void;
+  onNavJumpTo: (index: number) => void;
+  onPickerOpen: () => void;
+  onPickerClose: () => void;
 }
 
 export interface RenderCardArgs {
@@ -98,8 +104,12 @@ export interface RenderCardArgs {
   uploads: CompletedUpload[];
   pending: PendingUpload[];
   modalOpen: boolean;
+  pickerOpen?: boolean;
   draftSelections?: Set<string>;
   showResume?: boolean;
+  existingResponse?: ClientResponse;
+  cards?: Card[];
+  responses?: Map<string, ClientResponse>;
   handlers: CardHandlers;
 }
 
@@ -128,7 +138,7 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
 
   const body =
     mode === "edit" && card.response_type === "confirm-edit"
-      ? renderEditBody(card)
+      ? renderEditBody(card, args.existingResponse)
       : renderViewBody(card, mode, args);
 
   const attachmentBtn = card.attachment_path
@@ -142,10 +152,25 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
       ? renderModal(card, baseUrl)
       : "";
 
+  const picker =
+    args.pickerOpen && args.cards && args.responses
+      ? renderPicker(args.cards, args.responses, args.position - 1)
+      : "";
+
+  const backDisabled = position === 1 ? "disabled" : "";
+  const forwardDisabled = position === total ? "disabled" : "";
+
   mount.innerHTML = `
     <header class="topbar">
       <span class="brand"><span class="brand-mark">IGTMS</span> · Pulse</span>
-      <span class="progress">${position} of ${total}</span>
+      <nav class="nav-controls" aria-label="Card navigation">
+        <button class="nav-arrow" type="button" data-action="nav-back" ${backDisabled} aria-label="Previous card">‹</button>
+        <button class="progress-btn" type="button" data-action="picker-open" aria-haspopup="dialog">
+          ${position} of ${total}
+          <span class="progress-caret" aria-hidden="true">▾</span>
+        </button>
+        <button class="nav-arrow" type="button" data-action="nav-forward" ${forwardDisabled} aria-label="Next card">›</button>
+      </nav>
     </header>
     ${banner}
     <article class="card" aria-labelledby="card-title">
@@ -157,9 +182,70 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
       ${body}
     </article>
     ${modal}
+    ${picker}
   `;
 
   attachHandlers(mount, args);
+}
+
+function renderPicker(
+  cards: Card[],
+  responses: Map<string, ClientResponse>,
+  currentIndex: number
+): string {
+  const items = cards
+    .map((c, i) => {
+      const r = responses.get(c.id);
+      const stateClass = pickerStateClass(r);
+      const stateLabel = pickerStateLabel(r);
+      const current = i === currentIndex ? " is-current" : "";
+      return `
+        <button
+          class="picker-item${current}"
+          type="button"
+          data-action="picker-jump"
+          data-index="${i}"
+        >
+          <span class="picker-num">${i + 1}.</span>
+          <span class="picker-title">${escape(c.title)}</span>
+          <span class="picker-state ${stateClass}">${escape(stateLabel)}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="picker" role="dialog" aria-modal="true" aria-label="Jump to card">
+      <div class="picker-backdrop" data-action="picker-close"></div>
+      <div class="picker-panel">
+        <header class="picker-header">
+          <span class="picker-heading">Jump to card</span>
+          <button class="picker-close" type="button" data-action="picker-close" aria-label="Close">×</button>
+        </header>
+        <div class="picker-list">${items}</div>
+      </div>
+    </div>
+  `;
+}
+
+function pickerStateClass(r: ClientResponse | undefined): string {
+  if (!r) return "is-pending";
+  switch (r.state) {
+    case "answered": return "is-answered";
+    case "skipped":  return "is-skipped";
+    case "viewed":   return "is-viewed";
+    default:         return "is-pending";
+  }
+}
+
+function pickerStateLabel(r: ClientResponse | undefined): string {
+  if (!r) return "Not viewed";
+  switch (r.state) {
+    case "answered": return "Answered";
+    case "skipped":  return "Skipped";
+    case "viewed":   return "Viewed";
+    default:         return "Not viewed";
+  }
 }
 
 function renderViewBody(
@@ -170,9 +256,33 @@ function renderViewBody(
   const saving = mode === "saving";
   return `
     <p class="question">${escape(card.question)}</p>
+    ${renderPriorHint(card, args.existingResponse)}
     ${renderInput(card, saving, args)}
     <div class="actions">${renderActions(card, saving, args)}</div>
   `;
+}
+
+// Surface the user's prior choice when they navigate back to a card so they
+// know the answer is already on file. The form below stays editable; saving
+// again upserts the row.
+function renderPriorHint(
+  card: Card,
+  prior: ClientResponse | undefined
+): string {
+  if (!prior || prior.state === "not_started" || prior.state === "viewed") {
+    return "";
+  }
+  if (prior.state === "skipped") {
+    return `<div class="prior-hint">You skipped this earlier. Answer if you want to revisit.</div>`;
+  }
+  if (prior.state !== "answered") return "";
+  if (card.response_type === "confirm-edit") {
+    const v = (prior.response_value ?? {}) as { confirmed?: boolean };
+    return v.confirmed
+      ? `<div class="prior-hint">You confirmed this earlier.</div>`
+      : `<div class="prior-hint">You sent edits earlier.</div>`;
+  }
+  return `<div class="prior-hint">Your previous answer is loaded. Edit and resubmit to update it.</div>`;
 }
 
 function renderInput(
@@ -180,19 +290,28 @@ function renderInput(
   saving: boolean,
   args: RenderCardArgs
 ): string {
+  const prior = args.existingResponse;
+  const v = (prior?.response_value ?? {}) as {
+    text?: string;
+    url?: string;
+    correction?: string;
+    name?: string;
+    email?: string;
+    role?: string;
+  };
   switch (card.response_type) {
     case "single-select":
       return renderSingleSelect(card, args.draftSelections, saving);
     case "multi-select":
       return renderMultiSelect(card, args.draftSelections, saving);
     case "short-text":
-      return renderShortText(saving);
+      return renderShortText(saving, v.text);
     case "long-text":
-      return renderLongText(saving);
+      return renderLongText(saving, v.text);
     case "document-link":
-      return renderDocumentLink(saving);
+      return renderDocumentLink(saving, v.url);
     case "contact-share":
-      return renderContactShare(saving);
+      return renderContactShare(saving, v.name, v.email, v.role);
     case "file-upload":
       return renderFileUpload(card, saving, args);
     case "confirm-edit":
@@ -258,28 +377,36 @@ function renderMultiSelect(
   `;
 }
 
-function renderShortText(saving: boolean): string {
+function renderShortText(saving: boolean, prefill?: string): string {
   const dis = saving ? "disabled" : "";
-  return `<input id="text-input" class="input" type="text" placeholder="Your answer" ${dis} />`;
+  const value = prefill ? `value="${escapeAttr(prefill)}"` : "";
+  return `<input id="text-input" class="input" type="text" placeholder="Your answer" ${value} ${dis} />`;
 }
 
-function renderLongText(saving: boolean): string {
+function renderLongText(saving: boolean, prefill?: string): string {
   const dis = saving ? "disabled" : "";
-  return `<textarea id="text-input" class="textarea" rows="5" placeholder="Your answer" ${dis}></textarea>`;
+  return `<textarea id="text-input" class="textarea" rows="5" placeholder="Your answer" ${dis}>${escape(prefill ?? "")}</textarea>`;
 }
 
-function renderDocumentLink(saving: boolean): string {
+function renderDocumentLink(saving: boolean, prefill?: string): string {
   const dis = saving ? "disabled" : "";
-  return `<input id="link-input" class="input" type="url" inputmode="url" placeholder="https://..." ${dis} />`;
+  const value = prefill ? `value="${escapeAttr(prefill)}"` : "";
+  return `<input id="link-input" class="input" type="url" inputmode="url" placeholder="https://..." ${value} ${dis} />`;
 }
 
-function renderContactShare(saving: boolean): string {
+function renderContactShare(
+  saving: boolean,
+  name?: string,
+  email?: string,
+  role?: string
+): string {
   const dis = saving ? "disabled" : "";
+  const v = (s?: string) => (s ? `value="${escapeAttr(s)}"` : "");
   return `
     <div class="contact-fields">
-      <input id="c-name" class="input" type="text" placeholder="Name" ${dis} />
-      <input id="c-email" class="input" type="email" inputmode="email" placeholder="Email" ${dis} />
-      <input id="c-role" class="input" type="text" placeholder="Role" ${dis} />
+      <input id="c-name" class="input" type="text" placeholder="Name" ${v(name)} ${dis} />
+      <input id="c-email" class="input" type="email" inputmode="email" placeholder="Email" ${v(email)} ${dis} />
+      <input id="c-role" class="input" type="text" placeholder="Role" ${v(role)} ${dis} />
     </div>
   `;
 }
@@ -420,9 +547,14 @@ function renderActions(
   }
 }
 
-function renderEditBody(card: Card): string {
+function renderEditBody(card: Card, prior?: ClientResponse): string {
   const placeholder = "What should we update? A short note is fine.";
-  const prefill = card.default_value ?? "";
+  const v = (prior?.response_value ?? {}) as { correction?: string; confirmed?: boolean };
+  // If they previously sent edits, load those so they can refine instead of
+  // rewriting from scratch. Otherwise fall back to the card's default text.
+  const priorCorrection =
+    prior?.state === "answered" && v.confirmed === false ? v.correction ?? "" : "";
+  const prefill = priorCorrection || (card.default_value ?? "");
   return `
     <p class="question">${escape(card.question)}</p>
     <textarea
@@ -495,12 +627,20 @@ function attachHandlers(mount: HTMLElement, args: RenderCardArgs): void {
     el.addEventListener("click", () => handlers.onAttachmentClose());
   }
 
-  // Esc key closes the modal when it's open.
-  if (args.modalOpen) {
+  // Picker backdrop and close button.
+  for (const el of mount.querySelectorAll<HTMLElement>(
+    "[data-action='picker-close']"
+  )) {
+    el.addEventListener("click", () => handlers.onPickerClose());
+  }
+
+  // Esc key closes whichever overlay is open.
+  if (args.modalOpen || args.pickerOpen) {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         document.removeEventListener("keydown", onKey);
-        handlers.onAttachmentClose();
+        if (args.modalOpen) handlers.onAttachmentClose();
+        else if (args.pickerOpen) handlers.onPickerClose();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -612,6 +752,23 @@ function dispatch(
     case "remove-upload": {
       const id = btn.dataset.uploadId;
       if (id) handlers.onUploadRemove(id);
+      return;
+    }
+    case "nav-back":
+      handlers.onNavBack();
+      return;
+    case "nav-forward":
+      handlers.onNavForward();
+      return;
+    case "picker-open":
+      handlers.onPickerOpen();
+      return;
+    case "picker-close":
+      handlers.onPickerClose();
+      return;
+    case "picker-jump": {
+      const i = Number(btn.dataset.index);
+      if (Number.isFinite(i)) handlers.onNavJumpTo(i);
       return;
     }
   }
