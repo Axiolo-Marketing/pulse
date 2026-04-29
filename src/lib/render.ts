@@ -99,6 +99,7 @@ export interface RenderCardArgs {
   pending: PendingUpload[];
   modalOpen: boolean;
   draftSelections?: Set<string>;
+  showResume?: boolean;
   handlers: CardHandlers;
 }
 
@@ -118,6 +119,10 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
     ? `<div class="save-banner" role="alert">
          <span>${escape(saveError)}</span>
          <button class="banner-retry" type="button" data-action="retry">Retry</button>
+       </div>`
+    : args.showResume
+    ? `<div class="resume-banner" role="status">
+         Welcome back. Picking up where you left off.
        </div>`
     : "";
 

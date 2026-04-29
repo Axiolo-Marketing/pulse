@@ -135,7 +135,8 @@ interface RunCtx extends BootData {
 function runApp(ctx: RunCtx): void {
   const { mount, supabase, client, cards, responses, uploads } = ctx;
 
-  let index = firstUnansweredIndex(cards, responses);
+  const bootIndex = firstUnansweredIndex(cards, responses);
+  let index = bootIndex;
   let mode: CardMode = "view";
   let saveError: string | undefined;
   let modalOpen = false;
@@ -144,6 +145,22 @@ function runApp(ctx: RunCtx): void {
   // Per-card UI scratch state. Reset whenever the card changes.
   let draftSelections: Set<string> = new Set();
   let pendingUploads: PendingUpload[] = [];
+
+  // Resume banner shown once on boot when the user is returning past the
+  // start of the deck. It dismisses on the first save/advance — simpler
+  // and friendlier than a time-based fade.
+  let showResume = bootIndex > 0 && bootIndex < cards.length;
+
+  // Auto-retry timer for failed saves. Per spec, retry every 10 seconds
+  // until success. Cleared on success, manual retry, or when the user
+  // navigates to a new card.
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearRetryTimer = (): void => {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+    }
+  };
 
   type PendingAction =
     | { kind: "confirm" }
@@ -156,12 +173,38 @@ function runApp(ctx: RunCtx): void {
     | { kind: "contact"; name: string; email: string; role: string }
     | { kind: "files-continue" };
 
+  // markViewed inserts a viewed row for this card if and only if no row
+  // already exists. ignoreDuplicates makes the operation idempotent and
+  // safe to fire on every card render.
+  const markViewed = (cardId: string): void => {
+    if (responses.has(cardId)) return;
+    const row = {
+      card_id: cardId,
+      client_id: client.id,
+      state: "viewed" as ResponseState,
+      viewed_at: new Date().toISOString(),
+    };
+    supabase
+      .from("responses")
+      .upsert(row, { onConflict: "card_id,client_id", ignoreDuplicates: true })
+      .select()
+      .maybeSingle<ClientResponse>()
+      .then(({ data, error }) => {
+        if (error) {
+          console.warn("mark viewed failed:", error);
+          return;
+        }
+        if (data) responses.set(cardId, data);
+      });
+  };
+
   const draw = (): void => {
     if (index >= cards.length) {
       renderComplete(mount, client.name);
       return;
     }
     const card = cards[index];
+    if (mode === "view") markViewed(card.id);
     renderCard(mount, {
       card,
       position: index + 1,
@@ -173,11 +216,13 @@ function runApp(ctx: RunCtx): void {
       pending: pendingUploads,
       modalOpen,
       draftSelections,
+      showResume,
       handlers,
     });
   };
 
   const advance = (): void => {
+    clearRetryTimer();
     index += 1;
     mode = "view";
     saveError = undefined;
@@ -185,10 +230,12 @@ function runApp(ctx: RunCtx): void {
     modalOpen = false;
     draftSelections = new Set();
     pendingUploads = [];
+    showResume = false;
     draw();
   };
 
   const performSave = async (action: PendingAction): Promise<void> => {
+    clearRetryTimer();
     pending = action;
     saveError = undefined;
     mode = "saving";
@@ -271,12 +318,18 @@ function runApp(ctx: RunCtx): void {
 
     if (error || !data) {
       console.error("Save failed:", error);
-      saveError = "Could not save just now. Tap Retry.";
+      saveError = "Could not save just now. We will retry automatically.";
       mode = "view";
+      clearRetryTimer();
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        if (pending) void performSave(pending);
+      }, 10_000);
       draw();
       return;
     }
 
+    clearRetryTimer();
     responses.set(card.id, data);
 
     supabase

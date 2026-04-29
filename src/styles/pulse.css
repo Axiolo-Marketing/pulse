@@ -34,12 +34,32 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Keyboard focus rings. Only show when navigating by keyboard, not on
+   mouse/touch — :focus-visible handles that for us. */
+button:focus-visible,
+.option:focus-visible,
+.btn-link:focus-visible,
+.dropzone:focus-within,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+button:focus-visible {
+  outline-offset: 3px;
+}
+
 .page {
   min-height: 100vh;
+  min-height: 100dvh; /* iOS Safari respects dynamic viewport */
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 16px;
+  padding-top: max(16px, env(safe-area-inset-top));
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
 }
 
 .topbar {
@@ -76,6 +96,19 @@ body {
   padding: 24px;
   width: 100%;
   max-width: 480px;
+  animation: card-enter 0.3s ease;
+}
+
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .resume-banner {
+    animation: none;
+  }
 }
 
 @media (min-width: 720px) {
@@ -169,8 +202,8 @@ body {
   border-color: transparent;
   text-decoration: underline;
   text-underline-offset: 3px;
-  min-height: 40px;
-  padding: 8px 24px;
+  min-height: 44px;
+  padding: 10px 24px;
 }
 
 .btn-tertiary:hover { color: var(--charcoal); }
@@ -188,12 +221,20 @@ body {
   width: 100%;
   max-width: 480px;
   text-align: center;
+  animation: card-enter 0.3s ease;
 }
 
 .error-mark {
-  font-size: 32px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #FFF4E5;
   color: var(--amber);
-  margin-bottom: 12px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 48px;
+  margin: 0 auto 16px;
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
 }
 
 .error-title {
@@ -215,6 +256,16 @@ body {
   color: var(--muted);
   text-align: center;
   padding: 48px 16px;
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes loading-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading { animation: none; opacity: 0.7; }
 }
 
 .context.muted {
@@ -257,6 +308,26 @@ body {
   font-size: 14px;
 }
 
+.resume-banner {
+  width: 100%;
+  max-width: 480px;
+  background: var(--green-light);
+  border: 1px solid var(--green);
+  color: var(--green-dark);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  animation: resume-fade-in 0.3s ease;
+}
+
+@keyframes resume-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .banner-retry {
   font-family: var(--font-sans);
   font-weight: 600;
@@ -265,8 +336,10 @@ body {
   border: 1.5px solid var(--amber);
   color: var(--amber);
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 8px 14px;
+  min-height: 36px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .banner-retry:hover {
@@ -513,11 +586,18 @@ body {
   font-size: 22px;
   line-height: 1;
   cursor: pointer;
-  padding: 0 4px;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
 }
 
 .file-remove:hover {
   color: var(--amber);
+  background: var(--gray-light);
 }
 
 /* ── Reference modal ─────────────────────────────────────────────────── */
@@ -572,7 +652,17 @@ body {
   font-size: 28px;
   line-height: 1;
   cursor: pointer;
-  padding: 0 8px;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  margin-right: -8px;
+}
+
+.modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .modal-iframe {
