@@ -609,6 +609,7 @@ interface ResponseValueShape {
   email?: string;
   role?: string;
   file_ids?: string[];
+  note?: string;
 }
 
 function renderResponseBodyHtml(
@@ -618,40 +619,58 @@ function renderResponseBodyHtml(
 ): string {
   if (!response || response.state === "not_started") return "Not yet viewed.";
   if (response.state === "viewed") return "Card opened, no response yet.";
-  if (response.state === "skipped") return "Skipped.";
 
   const v = (response.response_value ?? {}) as ResponseValueShape;
+  const noteHtml = v.note
+    ? `<div class="response-note"><strong>Note:</strong> ${escape(v.note)}</div>`
+    : "";
 
+  if (response.state === "skipped") return `Skipped.${noteHtml}`;
+
+  let body: string;
   switch (card.response_type) {
     case "confirm-edit":
-      if (v.confirmed) return "Confirmed as written.";
-      return `Edited:\n${v.correction ?? ""}`;
+      body = v.confirmed
+        ? "Confirmed as written."
+        : `Edited:\n${v.correction ?? ""}`;
+      break;
     case "single-select":
-      return escape(String(v.selected ?? ""));
+      body = escape(String(v.selected ?? ""));
+      break;
     case "multi-select": {
       const arr = Array.isArray(v.selected) ? v.selected : [];
-      if (arr.length === 0) return "None selected.";
-      return `<ul>${arr.map((s) => `<li>${escape(s)}</li>`).join("")}</ul>`;
+      body =
+        arr.length === 0
+          ? "None selected."
+          : `<ul>${arr.map((s) => `<li>${escape(s)}</li>`).join("")}</ul>`;
+      break;
     }
     case "short-text":
     case "long-text":
-      return escape(v.text ?? "");
+      body = escape(v.text ?? "");
+      break;
     case "document-link":
-      return v.url
+      body = v.url
         ? `<a href="${escape(v.url)}" target="_blank" rel="noreferrer noopener">${escape(v.url)}</a>`
         : "";
+      break;
     case "contact-share":
-      return [
+      body = [
         v.name ? `<strong>${escape(v.name)}</strong>` : "",
         v.role ? ` (${escape(v.role)})` : "",
         v.email ? `\n${escape(v.email)}` : "",
       ].join("");
+      break;
     case "file-upload":
-      if (uploads.length === 0) return "No files uploaded.";
-      return `<ul>${uploads.map((u) => `<li>${escape(u.file_name)} <span style="color:var(--muted)">(${formatBytes(u.file_size_bytes)})</span></li>`).join("")}</ul>`;
+      body =
+        uploads.length === 0
+          ? "No files uploaded."
+          : `<ul>${uploads.map((u) => `<li>${escape(u.file_name)} <span style="color:var(--muted)">(${formatBytes(u.file_size_bytes)})</span></li>`).join("")}</ul>`;
+      break;
     default:
-      return "";
+      body = "";
   }
+  return body + noteHtml;
 }
 
 function formatBytes(bytes: number): string {

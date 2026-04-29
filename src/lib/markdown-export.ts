@@ -25,6 +25,7 @@ interface ResponseValueShape {
   email?: string;
   role?: string;
   file_ids?: string[];
+  note?: string;
 }
 
 // Render one card's response as a ClickUp-ready markdown block per spec
@@ -64,56 +65,57 @@ function renderResponseBody(
   if (response.state === "viewed") {
     return "_Card opened, no response yet._";
   }
+  const v = (response.response_value ?? {}) as ResponseValueShape;
+  const noteSuffix = v.note ? `\n\n**Note:** ${v.note}` : "";
+
   if (response.state === "skipped") {
-    return "_Skipped._";
+    return v.note ? `_Skipped._${noteSuffix}` : "_Skipped._";
   }
 
-  const v = (response.response_value ?? {}) as ResponseValueShape;
-
+  let body: string;
   switch (card.response_type) {
     case "confirm-edit":
-      if (v.confirmed) {
-        return "Confirmed as written.";
-      }
-      return [
-        "Edited:",
-        "",
-        ...(v.correction ?? "")
-          .split("\n")
-          .map((line) => `> ${line}`),
-      ].join("\n");
-
+      body = v.confirmed
+        ? "Confirmed as written."
+        : [
+            "Edited:",
+            "",
+            ...(v.correction ?? "").split("\n").map((line) => `> ${line}`),
+          ].join("\n");
+      break;
     case "single-select":
-      return `**${v.selected ?? ""}**`;
-
+      body = `**${v.selected ?? ""}**`;
+      break;
     case "multi-select": {
       const arr = Array.isArray(v.selected) ? v.selected : [];
-      if (arr.length === 0) return "_None selected._";
-      return arr.map((s) => `- ${s}`).join("\n");
+      body = arr.length === 0 ? "_None selected._" : arr.map((s) => `- ${s}`).join("\n");
+      break;
     }
-
     case "short-text":
     case "long-text":
-      return v.text ?? "";
-
+      body = v.text ?? "";
+      break;
     case "document-link":
-      return v.url ? `<${v.url}>` : "";
-
+      body = v.url ? `<${v.url}>` : "";
+      break;
     case "contact-share":
-      return [
+      body = [
         `**${v.name ?? ""}**${v.role ? ` (${v.role})` : ""}`,
         v.email ?? "",
       ]
         .filter(Boolean)
         .join("\n");
-
+      break;
     case "file-upload":
-      if (uploads.length === 0) return "_No files uploaded._";
-      return uploads.map((u) => `- [${u.name}](${u.signedUrl})`).join("\n");
-
+      body =
+        uploads.length === 0
+          ? "_No files uploaded._"
+          : uploads.map((u) => `- [${u.name}](${u.signedUrl})`).join("\n");
+      break;
     default:
-      return "";
+      body = "";
   }
+  return body + noteSuffix;
 }
 
 // Combine multiple card blocks into one paste-ready markdown string.
