@@ -192,7 +192,7 @@ async function draw(
   if (route.kind === "list") {
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
     const summaries = await loadEngagements(supabase);
-    renderList(container, summaries);
+    renderList(supabase, container, summaries);
     return;
   }
 
@@ -249,14 +249,27 @@ async function loadEngagements(
 }
 
 function renderList(
+  supabase: SupabaseClient,
   container: HTMLElement,
   summaries: EngagementSummary[]
 ): void {
+  const header = `
+    <div class="engagement-list-header">
+      <h2 class="engagement-list-h">Engagements</h2>
+      <button class="btn-primary-sm" type="button" data-action="new-engagement">+ New engagement</button>
+    </div>
+  `;
+
   if (summaries.length === 0) {
     container.innerHTML = `
-      <div class="error"><h1 class="error-title">No engagements yet</h1>
-      <p class="error-body">Add a client row to Supabase and refresh.</p></div>
+      ${header}
+      <div class="empty-card">
+        <p>No engagements yet. Click + New engagement to create your first one.</p>
+      </div>
     `;
+    container
+      .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
+      ?.addEventListener("click", () => openNewEngagementModal(supabase, container));
     return;
   }
 
@@ -284,6 +297,7 @@ function renderList(
     .join("");
 
   container.innerHTML = `
+    ${header}
     <div class="engagement-table-wrap">
       <table class="engagement-table">
         <thead>
@@ -300,15 +314,23 @@ function renderList(
     </div>
   `;
 
+  // The header's New engagement button lives outside the table, so handle
+  // it before the table-row branch below tries to find a parent tr.
+  container
+    .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
+    ?.addEventListener("click", () => openNewEngagementModal(supabase, container));
+
   container.addEventListener("click", async (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === "new-engagement") return; // handled above
+
     const row = btn.closest<HTMLElement>("tr[data-client-id]");
     if (!row) return;
     const clientId = row.dataset.clientId!;
-    const action = btn.dataset.action;
 
     const summary = summaries.find((s) => s.client.id === clientId);
     if (!summary) return;
@@ -330,6 +352,107 @@ function renderList(
         return;
       }
     }
+  });
+}
+
+// ── new engagement modal ─────────────────────────────────────────────────
+
+function openNewEngagementModal(
+  supabase: SupabaseClient,
+  container: HTMLElement
+): void {
+  const modalEl = document.createElement("div");
+  modalEl.className = "modal";
+  modalEl.innerHTML = `
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel new-eng-panel">
+      <header class="modal-header">
+        <span class="modal-title">New engagement</span>
+        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <form class="new-eng-form" id="new-eng-form">
+        <label class="edit-field">
+          <span class="edit-label">Client name (required)</span>
+          <input class="input" id="ne-name" type="text" autofocus required />
+        </label>
+        <label class="edit-field">
+          <span class="edit-label">Organization (optional)</span>
+          <input class="input" id="ne-org" type="text" />
+        </label>
+        <label class="edit-field">
+          <span class="edit-label">Engagement name (optional)</span>
+          <input class="input" id="ne-eng" type="text" />
+        </label>
+        <div class="edit-actions">
+          <button class="btn-primary-sm" type="submit">Create engagement</button>
+          <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+
+  const close = (): void => {
+    modalEl.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+
+  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
+    el.addEventListener("click", close);
+  }
+
+  const form = modalEl.querySelector<HTMLFormElement>("#new-eng-form")!;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (modalEl.querySelector<HTMLInputElement>("#ne-name")?.value ?? "").trim();
+    const org = (modalEl.querySelector<HTMLInputElement>("#ne-org")?.value ?? "").trim();
+    const eng = (modalEl.querySelector<HTMLInputElement>("#ne-eng")?.value ?? "").trim();
+    if (!name) {
+      modalEl.querySelector<HTMLInputElement>("#ne-name")?.focus();
+      return;
+    }
+
+    const submitBtn = modalEl.querySelector<HTMLButtonElement>("button[type='submit']");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Creating...";
+    }
+
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const { data, error } = await supabase
+      .from("clients")
+      .insert({
+        name,
+        org_name: org || null,
+        engagement_name: eng || null,
+        token,
+      })
+      .select()
+      .single<Client>();
+
+    if (error || !data) {
+      console.error("create engagement:", error);
+      toast("Could not create engagement");
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Create engagement";
+      }
+      return;
+    }
+
+    close();
+    toast(`Engagement created for ${data.name}`);
+    // Hop straight to the new client's detail view so Tom can start
+    // adding cards.
+    window.location.hash = `client/${data.id}`;
+    void container; // keeps closure alive even if router doesn't fire
   });
 }
 
@@ -450,7 +573,10 @@ function renderDetail(
         <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
       </div>
     </section>
-    ${cardsHtml}
+    <div id="cards-list">${cardsHtml}</div>
+    <div id="add-card-slot">
+      <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
+    </div>
   `;
 
   container.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => {
@@ -568,6 +694,43 @@ function renderDetail(
           btn.textContent = original;
         }
       });
+
+    articleEl
+      .querySelector<HTMLButtonElement>("[data-action='delete-card']")
+      ?.addEventListener("click", async () => {
+        const responseCount =
+          responses.get(card.id) && responses.get(card.id)!.state !== "viewed"
+            ? "an existing response"
+            : null;
+        const uploadList = uploads.get(card.id) ?? [];
+        const warningParts: string[] = [];
+        if (responseCount) warningParts.push("the response on file");
+        if (uploadList.length) warningParts.push(`${uploadList.length} uploaded file${uploadList.length === 1 ? "" : "s"}`);
+        const warning = warningParts.length
+          ? `\n\nThis will also remove ${warningParts.join(" and ")}. This cannot be undone.`
+          : "\n\nThis cannot be undone.";
+        const ok = window.confirm(`Delete card ${card.order_index}: "${card.title}"?${warning}`);
+        if (!ok) return;
+
+        const { error } = await supabase.from("cards").delete().eq("id", card.id);
+        if (error) {
+          console.error("delete card:", error);
+          toast("Could not delete");
+          return;
+        }
+        // FK on delete cascade clears responses/uploads rows. Also purge
+        // any storage objects we know about so the bucket doesn't leak.
+        for (const u of uploadList) {
+          void supabase.storage.from("pulse-uploads").remove([u.storage_path]);
+        }
+
+        const idx = cards.findIndex((c) => c.id === card.id);
+        if (idx >= 0) cards.splice(idx, 1);
+        responses.delete(card.id);
+        uploads.delete(card.id);
+        articleEl.remove();
+        toast("Card deleted");
+      });
   };
 
   // swapCardHtml replaces an article's contents and rebinds handlers
@@ -586,6 +749,216 @@ function renderDetail(
   )) {
     attachCardHandlers(articleEl);
   }
+
+  // ── Add card flow ─────────────────────────────────────────────────────
+  const addCardSlot = container.querySelector<HTMLElement>("#add-card-slot")!;
+  const cardsList = container.querySelector<HTMLElement>("#cards-list")!;
+
+  const showAddCardTrigger = (): void => {
+    addCardSlot.innerHTML = `
+      <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
+    `;
+    addCardSlot
+      .querySelector<HTMLButtonElement>("#add-card-trigger")
+      ?.addEventListener("click", showAddCardForm);
+  };
+
+  const showAddCardForm = (): void => {
+    addCardSlot.innerHTML = renderAddCardForm();
+    const formEl = addCardSlot.querySelector<HTMLElement>(".response-card.is-editing")!;
+    const typeSelect = formEl.querySelector<HTMLSelectElement>(".add-type")!;
+    const optionsField = formEl.querySelector<HTMLElement>(".add-options-field")!;
+    const showOrHideOptions = (): void => {
+      const t = typeSelect.value;
+      optionsField.style.display =
+        t === "single-select" || t === "multi-select" ? "" : "none";
+    };
+    typeSelect.addEventListener("change", showOrHideOptions);
+    showOrHideOptions();
+
+    formEl
+      .querySelector<HTMLButtonElement>("[data-action='add-card-cancel']")
+      ?.addEventListener("click", showAddCardTrigger);
+
+    formEl
+      .querySelector<HTMLButtonElement>("[data-action='add-card-save']")
+      ?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget as HTMLButtonElement;
+        const newCard = readAddForm(formEl);
+        if (!newCard) return;
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "Saving...";
+        try {
+          const nextOrder =
+            cards.length > 0 ? Math.max(...cards.map((c) => c.order_index)) + 1 : 1;
+          const { data: created, error } = await supabase
+            .from("cards")
+            .insert({
+              client_id: client.id,
+              order_index: nextOrder,
+              ...newCard,
+            })
+            .select()
+            .single<Card>();
+          if (error || !created) {
+            console.error("create card:", error);
+            toast("Could not create card");
+            return;
+          }
+          cards.push(created);
+          // Append rendered article to the cards list and bind handlers.
+          const tmp = document.createElement("div");
+          tmp.innerHTML = renderResponseCard(
+            created,
+            undefined,
+            [],
+            statusOverrides
+          ).trim();
+          const next = tmp.firstElementChild as HTMLElement | null;
+          if (next) {
+            cardsList.appendChild(next);
+            attachCardHandlers(next);
+          }
+          showAddCardTrigger();
+          toast("Card added");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+  };
+
+  addCardSlot
+    .querySelector<HTMLButtonElement>("#add-card-trigger")
+    ?.addEventListener("click", showAddCardForm);
+}
+
+// Reads a new-card payload from the inline form. Returns null if any
+// required field is empty (focuses the offender + toasts).
+function readAddForm(formEl: HTMLElement): Partial<Card> | null {
+  const title = (formEl.querySelector<HTMLInputElement>(".add-title")?.value ?? "").trim();
+  const category = (formEl.querySelector<HTMLInputElement>(".add-category")?.value ?? "").trim();
+  const context = (formEl.querySelector<HTMLTextAreaElement>(".add-context")?.value ?? "").trim();
+  const question = (formEl.querySelector<HTMLTextAreaElement>(".add-question")?.value ?? "").trim();
+  const responseType = formEl.querySelector<HTMLSelectElement>(".add-type")?.value ?? "";
+  const optionsRaw = (formEl.querySelector<HTMLTextAreaElement>(".add-options")?.value ?? "");
+  const defaultValue = (formEl.querySelector<HTMLTextAreaElement>(".add-default")?.value ?? "").trim();
+  const attachment = (formEl.querySelector<HTMLInputElement>(".add-attachment")?.value ?? "").trim();
+  const skipAllowed = formEl.querySelector<HTMLInputElement>(".add-skip")?.checked ?? true;
+
+  for (const [sel, val] of [
+    [".add-title", title],
+    [".add-category", category],
+    [".add-context", context],
+    [".add-question", question],
+  ] as const) {
+    if (!val) {
+      formEl.querySelector<HTMLElement>(sel)?.focus();
+      toast("All four required fields must be filled");
+      return null;
+    }
+  }
+
+  const isSelect = responseType === "single-select" || responseType === "multi-select";
+  let options: string[] | null = null;
+  if (isSelect) {
+    options = optionsRaw
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (options.length === 0) {
+      formEl.querySelector<HTMLElement>(".add-options")?.focus();
+      toast("At least one option is required");
+      return null;
+    }
+  }
+
+  return {
+    title,
+    category,
+    context,
+    question,
+    response_type: responseType as Card["response_type"],
+    options,
+    default_value: defaultValue || null,
+    attachment_path: attachment || null,
+    skip_allowed: skipAllowed,
+  };
+}
+
+function renderAddCardForm(): string {
+  return `
+    <article class="response-card is-editing add-card-form">
+      <div class="response-card-head">
+        <div>
+          <div class="card-num">New card</div>
+          <h3 class="card-h">Add a card</h3>
+        </div>
+      </div>
+
+      <div class="edit-grid">
+        <label class="edit-field">
+          <span class="edit-label">Title</span>
+          <input class="input add-title" type="text" />
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Category</span>
+          <input class="input add-category" type="text" placeholder="e.g. Decisions" />
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Response type</span>
+          <select class="input add-type">
+            <option value="confirm-edit">confirm-edit</option>
+            <option value="single-select">single-select</option>
+            <option value="multi-select">multi-select</option>
+            <option value="short-text">short-text</option>
+            <option value="long-text">long-text</option>
+            <option value="document-link">document-link</option>
+            <option value="contact-share">contact-share</option>
+            <option value="file-upload">file-upload</option>
+          </select>
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Context</span>
+          <textarea class="textarea add-context" rows="6"></textarea>
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Question</span>
+          <textarea class="textarea add-question" rows="3"></textarea>
+        </label>
+
+        <label class="edit-field add-options-field">
+          <span class="edit-label">Options (one per line, only for select types)</span>
+          <textarea class="textarea add-options" rows="4"></textarea>
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Default value (optional, used by confirm-edit)</span>
+          <textarea class="textarea add-default" rows="2"></textarea>
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Active reference path (optional)</span>
+          <input class="input add-attachment" type="text" placeholder="deliverables/example.html" />
+        </label>
+
+        <label class="edit-toggle">
+          <input class="add-skip" type="checkbox" checked />
+          <span>Skip allowed</span>
+        </label>
+      </div>
+
+      <div class="edit-actions">
+        <button class="btn-primary-sm" type="button" data-action="add-card-save">Add card</button>
+        <button class="btn-ghost-sm" type="button" data-action="add-card-cancel">Cancel</button>
+      </div>
+    </article>
+  `;
 }
 
 function renderResponseCard(
@@ -615,6 +988,7 @@ function renderResponseCard(
         <div class="response-card-head-right">
           <span class="response-state ${stateClass}">${escape(stateLabel)}</span>
           <button class="btn-ghost-sm" type="button" data-action="edit-card-start" title="Edit card text">Edit</button>
+          <button class="btn-ghost-sm danger" type="button" data-action="delete-card" title="Delete this card">Delete</button>
         </div>
       </div>
       <div class="response-body${responseBodyMutedClass(response)}">${renderResponseBodyHtml(card, response, uploads)}</div>

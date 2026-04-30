@@ -98,6 +98,30 @@
 
 /* ── Engagement list table ───────────────────────────────────────────── */
 
+.engagement-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+
+.engagement-list-h {
+  font-weight: 600;
+  font-size: 18px;
+  margin: 0;
+  color: var(--charcoal);
+}
+
+.empty-card {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 32px;
+  text-align: center;
+  color: var(--muted);
+}
+
 .engagement-table-wrap {
   background: var(--white);
   border-radius: var(--radius);
@@ -272,6 +296,71 @@
   background: var(--gray-light);
   color: var(--charcoal);
   border-color: var(--charcoal);
+}
+
+.btn-ghost-sm.danger {
+  color: var(--amber);
+  border-color: rgba(224, 123, 0, 0.4);
+}
+.btn-ghost-sm.danger:hover {
+  background: #FFF4E5;
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.add-card-btn {
+  margin: 16px 0 32px;
+}
+
+#add-card-slot {
+  display: block;
+}
+
+.add-card-form .edit-grid select.input {
+  appearance: auto;
+  background: var(--white);
+  cursor: pointer;
+}
+
+.new-eng-panel {
+  max-width: 460px;
+  align-self: center;
+  height: fit-content;
+  margin: 32px;
+}
+
+.new-eng-form {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.new-eng-form .edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.new-eng-form .input {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--charcoal);
+}
+
+.new-eng-form .input:focus {
+  outline: none;
+  border-color: var(--green);
+}
+
+.new-eng-form .edit-actions {
+  margin-top: 8px;
 }
 
 .response-card-head-right {
