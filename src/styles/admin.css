@@ -256,6 +256,99 @@
 }
 .btn-primary-sm:hover { background: var(--green-dark); border-color: var(--green-dark); }
 
+.btn-ghost-sm {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--muted);
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  min-height: 36px;
+}
+.btn-ghost-sm:hover {
+  background: var(--gray-light);
+  color: var(--charcoal);
+  border-color: var(--charcoal);
+}
+
+.response-card-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.response-card.is-editing {
+  outline: 2px solid var(--green);
+  outline-offset: -1px;
+}
+
+.edit-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.edit-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.edit-grid .input,
+.edit-grid .textarea {
+  margin: 0;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--charcoal);
+  resize: vertical;
+}
+
+.edit-grid .input:focus,
+.edit-grid .textarea:focus {
+  outline: none;
+  border-color: var(--green);
+}
+
+.edit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--charcoal);
+  margin-top: 4px;
+}
+
+.edit-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--green);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .copied-flash {
   background: var(--green);
   color: var(--white);

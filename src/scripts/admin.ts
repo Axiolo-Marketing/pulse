@@ -481,12 +481,12 @@ function renderDetail(
       }
     });
 
-  // Per-card handlers.
-  for (const articleEl of container.querySelectorAll<HTMLElement>(
-    ".response-card[data-card-id]"
-  )) {
+  // Per-card handlers. Re-bound after each card-level re-render via
+  // attachCardHandlers so edit/save/cancel keep working after a swap.
+  const attachCardHandlers = (articleEl: HTMLElement): void => {
     const cardId = articleEl.dataset.cardId!;
-    const card = cards.find((c) => c.id === cardId)!;
+    const card = cards.find((c) => c.id === cardId);
+    if (!card) return;
 
     const select = articleEl.querySelector<HTMLSelectElement>(".status-select");
     select?.addEventListener("change", () => {
@@ -516,6 +516,74 @@ function renderDetail(
           btn.disabled = false;
         }
       });
+
+    articleEl
+      .querySelector<HTMLButtonElement>("[data-action='edit-card-start']")
+      ?.addEventListener("click", () => {
+        swapCardHtml(articleEl, renderEditCardForm(card));
+      });
+
+    articleEl
+      .querySelector<HTMLButtonElement>("[data-action='edit-card-cancel']")
+      ?.addEventListener("click", () => {
+        swapCardHtml(
+          articleEl,
+          renderResponseCard(card, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides)
+        );
+      });
+
+    articleEl
+      .querySelector<HTMLButtonElement>("[data-action='edit-card-save']")
+      ?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget as HTMLButtonElement;
+        const patch = readEditForm(articleEl, card);
+        if (!patch) return;
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "Saving...";
+        try {
+          const { data: updated, error } = await supabase
+            .from("cards")
+            .update(patch)
+            .eq("id", card.id)
+            .select()
+            .single<Card>();
+          if (error || !updated) {
+            console.error("card update:", error);
+            toast("Could not save");
+            return;
+          }
+          // Replace in the local cards array so re-renders pick up the
+          // new text without a full reload.
+          const idx = cards.findIndex((c) => c.id === card.id);
+          if (idx >= 0) cards[idx] = updated;
+          swapCardHtml(
+            articleEl,
+            renderResponseCard(updated, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides)
+          );
+          toast("Card saved");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+  };
+
+  // swapCardHtml replaces an article's contents and rebinds handlers
+  // against the freshly rendered DOM nodes.
+  const swapCardHtml = (articleEl: HTMLElement, newHtml: string): void => {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = newHtml.trim();
+    const next = tmp.firstElementChild as HTMLElement | null;
+    if (!next) return;
+    articleEl.replaceWith(next);
+    attachCardHandlers(next);
+  };
+
+  for (const articleEl of container.querySelectorAll<HTMLElement>(
+    ".response-card[data-card-id]"
+  )) {
+    attachCardHandlers(articleEl);
   }
 }
 
@@ -543,7 +611,10 @@ function renderResponseCard(
           <div class="card-num">Card ${card.order_index} · ${escape(card.category)}</div>
           <h3 class="card-h">${escape(card.title)}</h3>
         </div>
-        <span class="response-state ${stateClass}">${escape(stateLabel)}</span>
+        <div class="response-card-head-right">
+          <span class="response-state ${stateClass}">${escape(stateLabel)}</span>
+          <button class="btn-ghost-sm" type="button" data-action="edit-card-start" title="Edit card text">Edit</button>
+        </div>
       </div>
       <div class="response-body${responseBodyMutedClass(response)}">${renderResponseBodyHtml(card, response, uploads)}</div>
       <div class="response-meta">
@@ -555,6 +626,131 @@ function renderResponseCard(
           ${response?.answered_at ? `<span>Answered ${escape(formatTimestamp(response.answered_at))}</span>` : response?.viewed_at ? `<span>Viewed ${escape(formatTimestamp(response.viewed_at))}</span>` : ""}
           <button class="btn-primary-sm" type="button" data-action="copy-card" style="margin-left:12px">Copy</button>
         </div>
+      </div>
+    </article>
+  `;
+}
+
+// readEditForm pulls a partial patch out of the inline edit form. Returns
+// null when a required field is empty (the offending input is focused so
+// the operator can fix it).
+function readEditForm(
+  articleEl: HTMLElement,
+  card: Card
+): Partial<Card> | null {
+  const titleEl = articleEl.querySelector<HTMLInputElement>(".edit-title");
+  const categoryEl = articleEl.querySelector<HTMLInputElement>(".edit-category");
+  const contextEl = articleEl.querySelector<HTMLTextAreaElement>(".edit-context");
+  const questionEl = articleEl.querySelector<HTMLTextAreaElement>(".edit-question");
+  const optionsEl = articleEl.querySelector<HTMLTextAreaElement>(".edit-options");
+  const attachmentEl = articleEl.querySelector<HTMLInputElement>(".edit-attachment");
+  const skipEl = articleEl.querySelector<HTMLInputElement>(".edit-skip");
+
+  const title = (titleEl?.value ?? "").trim();
+  const category = (categoryEl?.value ?? "").trim();
+  const context = (contextEl?.value ?? "").trim();
+  const question = (questionEl?.value ?? "").trim();
+  const attachment = (attachmentEl?.value ?? "").trim();
+
+  for (const [el, val] of [
+    [titleEl, title],
+    [categoryEl, category],
+    [contextEl, context],
+    [questionEl, question],
+  ] as const) {
+    if (!val) {
+      el?.focus();
+      toast("All four required fields must be filled");
+      return null;
+    }
+  }
+
+  const isSelect =
+    card.response_type === "single-select" || card.response_type === "multi-select";
+  let options: string[] | null | undefined;
+  if (isSelect && optionsEl) {
+    options = optionsEl.value
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (options.length === 0) {
+      optionsEl.focus();
+      toast("At least one option is required");
+      return null;
+    }
+  }
+
+  const patch: Partial<Card> = {
+    title,
+    category,
+    context,
+    question,
+    skip_allowed: skipEl?.checked ?? card.skip_allowed,
+    attachment_path: attachment || null,
+  };
+  if (isSelect) patch.options = options ?? null;
+  return patch;
+}
+
+function renderEditCardForm(card: Card): string {
+  const isSelect =
+    card.response_type === "single-select" || card.response_type === "multi-select";
+  const optionsText = isSelect && card.options
+    ? card.options.join("\n")
+    : "";
+  return `
+    <article class="response-card is-editing" data-card-id="${escape(card.id)}">
+      <div class="response-card-head">
+        <div>
+          <div class="card-num">Card ${card.order_index} · editing</div>
+          <h3 class="card-h">${escape(card.title)}</h3>
+        </div>
+      </div>
+
+      <div class="edit-grid">
+        <label class="edit-field">
+          <span class="edit-label">Title</span>
+          <input class="input edit-title" type="text" value="${escape(card.title)}" />
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Category</span>
+          <input class="input edit-category" type="text" value="${escape(card.category)}" />
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Context</span>
+          <textarea class="textarea edit-context" rows="6">${escape(card.context)}</textarea>
+        </label>
+
+        <label class="edit-field">
+          <span class="edit-label">Question</span>
+          <textarea class="textarea edit-question" rows="3">${escape(card.question)}</textarea>
+        </label>
+
+        ${
+          isSelect
+            ? `<label class="edit-field">
+                 <span class="edit-label">Options (one per line)</span>
+                 <textarea class="textarea edit-options" rows="${Math.max(4, (card.options?.length ?? 0) + 1)}">${escape(optionsText)}</textarea>
+               </label>`
+            : ""
+        }
+
+        <label class="edit-field">
+          <span class="edit-label">Active reference path (optional)</span>
+          <input class="input edit-attachment" type="text" placeholder="deliverables/example.html" value="${escape(card.attachment_path ?? "")}" />
+        </label>
+
+        <label class="edit-toggle">
+          <input class="edit-skip" type="checkbox" ${card.skip_allowed ? "checked" : ""} />
+          <span>Skip allowed</span>
+        </label>
+      </div>
+
+      <div class="edit-actions">
+        <button class="btn-primary-sm" type="button" data-action="edit-card-save">Save changes</button>
+        <button class="btn-ghost-sm" type="button" data-action="edit-card-cancel">Cancel</button>
       </div>
     </article>
   `;
