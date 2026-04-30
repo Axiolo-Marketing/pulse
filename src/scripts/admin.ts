@@ -335,8 +335,9 @@ function renderList(
 
 async function rotateToken(clientId: string): Promise<void> {
   const supabase = getAdminClient();
-  // 32 random bytes → 64 hex chars, matching the seed-time token format.
-  const newToken = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+  // 8 random bytes → 16 hex chars, matching the seed-time token format.
+  // 64 bits of entropy is plenty for a private invite link.
+  const newToken = Array.from(crypto.getRandomValues(new Uint8Array(8)))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   const { error } = await supabase

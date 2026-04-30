@@ -6,8 +6,9 @@
 --
 -- Fixed UUID lets us reference it from the card inserts below without
 -- needing a CTE or extra round-trip. The token is generated once on first
--- run via encode(gen_random_bytes(32), 'hex') (64-char hex). On re-run,
--- the on-conflict-do-nothing clause leaves the original token intact so
+-- run via encode(gen_random_bytes(8), 'hex') — 16 hex chars (64 bits of
+-- entropy), short enough to fit cleanly in an SMS. On re-run, the
+-- on-conflict-do-nothing clause leaves the original token intact so
 -- Renee's URL stays stable.
 -- ──────────────────────────────────────────────────────────────────────────
 
@@ -17,7 +18,7 @@ values (
   'Renee Mueller',
   'Vrly Media / Good Life Capital',
   'GLC Engagement v1',
-  encode(gen_random_bytes(32), 'hex')
+  encode(gen_random_bytes(8), 'hex')
 )
 on conflict (id) do nothing;
 
