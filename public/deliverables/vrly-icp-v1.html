@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vrly Media: Ideal Client Profile (Working Draft v1.1)</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --green:        #07926B;
+  --green-dark:   #065A47;
+  --green-light:  #ECF6F3;
+  --charcoal:     #3B373B;
+  --grey:         #F7F7F7;
+  --border:       #C8CDCC;
+  --white:        #FFFFFF;
+  --text:         #3B373B;
+  --text-muted:   #777777;
+  --alert-orange: #FFF0E8;
+  --alert-yellow: #FFF8E1;
+  --radius-md:    8px;
+  --radius-lg:    10px;
+  --radius-pill:  20px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Poppins', 'Segoe UI', sans-serif;
+  background: var(--grey);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+  font-weight: 400;
+}
+
+/* HEADER */
+.site-header {
+  background: var(--charcoal);
+  padding: 0 32px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.logo { display: flex; align-items: center; gap: 12px; }
+.logo-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--white);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.logo-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--green-light);
+  margin-left: 6px;
+  opacity: 0.85;
+}
+.header-tag {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--green-light);
+  background: rgba(7,146,107,0.15);
+  border: 1px solid rgba(7,146,107,0.3);
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+}
+
+/* CONTAINER */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 36px 24px 80px;
+}
+
+/* COVER BLOCK */
+.cover-block {
+  background: var(--charcoal);
+  border-radius: var(--radius-lg);
+  padding: 44px 48px;
+  margin-bottom: 36px;
+  position: relative;
+  overflow: hidden;
+}
+.cover-block::after {
+  content: '';
+  position: absolute;
+  top: -80px;
+  right: -80px;
+  width: 280px;
+  height: 280px;
+  background: radial-gradient(circle, rgba(7,146,107,0.18), transparent 70%);
+  pointer-events: none;
+}
+.cover-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green-light);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.cover-block h1 {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--white);
+  line-height: 1.2;
+  margin-bottom: 12px;
+}
+.cover-block p {
+  font-size: 15px;
+  color: rgba(255,255,255,0.7);
+  font-weight: 300;
+  max-width: 720px;
+}
+.cover-meta {
+  margin-top: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.cover-meta-pill {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green-light);
+  background: rgba(7,146,107,0.15);
+  border: 1px solid rgba(7,146,107,0.3);
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.5px;
+}
+
+/* SECTION BAR */
+.section-bar {
+  background: var(--green);
+  color: var(--white);
+  padding: 14px 24px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin: 40px 0 20px;
+}
+
+/* CARDS */
+.card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.card-header {
+  background: var(--green);
+  padding: 14px 22px;
+}
+.card-header.light {
+  background: var(--green-light);
+}
+.card-header.dark {
+  background: var(--charcoal);
+}
+.card-header h2 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--white);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.card-header.light h2 {
+  color: var(--green-dark);
+}
+.card-body {
+  padding: 22px;
+}
+.card-body h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--green-dark);
+  margin-bottom: 8px;
+}
+
+/* ALERT */
+.alert {
+  background: var(--green-light);
+  border-left: 4px solid var(--green);
+  padding: 16px 20px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: 14px;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+.alert.warn {
+  background: var(--alert-orange);
+  border-left-color: #E07B00;
+}
+.alert.caution {
+  background: var(--alert-yellow);
+  border-left-color: #B68900;
+}
+.alert strong {
+  color: var(--green-dark);
+  font-weight: 600;
+}
+
+/* QUOTE */
+.quote-block {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--green);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  padding: 24px 28px;
+  margin: 20px 0;
+}
+.quote-block .quote-text {
+  font-size: 17px;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text);
+  line-height: 1.55;
+  margin-bottom: 12px;
+}
+.quote-block .quote-source {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+/* TABLE */
+.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.data-table th {
+  background: var(--green);
+  color: var(--white);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 12px 16px;
+  text-align: left;
+}
+.data-table th.center { text-align: center; }
+.data-table td {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  vertical-align: top;
+}
+.data-table tr:nth-child(even) td {
+  background: var(--grey);
+}
+.data-table td.center { text-align: center; }
+.data-table td strong {
+  color: var(--green-dark);
+  font-weight: 600;
+}
+
+/* PILL */
+.pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.pill-green   { background: var(--green-light); color: var(--green-dark); }
+.pill-orange  { background: var(--alert-orange); color: #B85900; }
+.pill-yellow  { background: var(--alert-yellow); color: #8C6700; }
+.pill-dark    { background: rgba(59,55,59,0.08); color: var(--charcoal); }
+
+/* GRID */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+@media (max-width: 720px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+
+/* PIPELINE PATH */
+.pipeline {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+@media (max-width: 720px) {
+  .pipeline { grid-template-columns: 1fr; }
+}
+.pipeline-stage {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 14px;
+  text-align: center;
+  position: relative;
+}
+.pipeline-stage:not(:last-child)::after {
+  content: '→';
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--green);
+  font-weight: 600;
+  font-size: 16px;
+}
+@media (max-width: 720px) {
+  .pipeline-stage:not(:last-child)::after { display: none; }
+}
+.pipeline-stage .stage-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--green);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+.pipeline-stage .stage-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.pipeline-stage .stage-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* CHECKLIST GRID */
+.check-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+@media (max-width: 720px) {
+  .check-grid { grid-template-columns: 1fr; }
+}
+.check-grid > div {
+  padding: 22px 24px;
+}
+.check-grid > div:first-child {
+  background: var(--green-light);
+  border-right: 1px solid var(--border);
+}
+@media (max-width: 720px) {
+  .check-grid > div:first-child {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+.check-grid > div:last-child {
+  background: var(--alert-orange);
+}
+.check-grid h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  letter-spacing: 0.3px;
+}
+.check-grid > div:first-child h4 { color: var(--green-dark); }
+.check-grid > div:last-child h4 { color: #B85900; }
+.check-list { list-style: none; }
+.check-list li {
+  padding: 8px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.check-list li strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.check-grid > div:first-child .check-list li strong { color: var(--green-dark); }
+.check-grid > div:last-child .check-list li strong { color: #B85900; }
+
+/* FOOTER */
+.site-footer {
+  background: var(--charcoal);
+  text-align: center;
+  padding: 24px;
+  color: var(--green-light);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+/* UTILITY */
+.muted { color: var(--text-muted); font-size: 13px; }
+p { margin-bottom: 12px; }
+p:last-child { margin-bottom: 0; }
+ul.bullets {
+  list-style: none;
+  padding: 0;
+}
+ul.bullets li {
+  position: relative;
+  padding: 6px 0 6px 24px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+ul.bullets li::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+}
+.divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 32px 0;
+}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="logo">
+    <svg width="28" height="28" viewBox="0 0 40 40" fill="none">
+      <path d="M14 20C14 16.686 16.686 14 20 14H28C31.314 14 34 16.686 34 20C34 23.314 31.314 26 28 26H24" stroke="#07926B" stroke-width="3.5" stroke-linecap="round"/>
+      <path d="M26 20C26 23.314 23.314 26 20 26H12C8.686 26 6 23.314 6 20C6 16.686 8.686 14 12 14H16" stroke="#07926B" stroke-width="3.5" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <span class="logo-text">IGTMS</span>
+      <span class="logo-sub">Vrly Media ICP</span>
+    </div>
+  </div>
+  <span class="header-tag">Working Draft v1.1</span>
+</header>
+
+<div class="container">
+
+  <!-- COVER -->
+  <div class="cover-block">
+    <div class="cover-eyebrow">Ideal Client Profile</div>
+    <h1>Vrly Media</h1>
+    <p>The SMB owner who needs marketing but cannot staff it. A working draft built from discovery transcripts, direct input from Renee Mueller, and IGTMS engagement context gathered March to April 2026. Renee should review and confirm before this is used for outbound or sales enablement.</p>
+    <div class="cover-meta">
+      <span class="cover-meta-pill">IGTMS</span>
+      <span class="cover-meta-pill">April 2026</span>
+      <span class="cover-meta-pill">Confidential</span>
+      <span class="cover-meta-pill">For Renee Review</span>
+    </div>
+  </div>
+
+  <!-- SECTION 1: STATUS -->
+  <div class="section-bar">Document Status and Framing</div>
+
+  <div class="alert">
+    <strong>This is Working Draft v1.1.</strong> It is the foundation layer, not a finished ICP. Items marked Complete are sourced and confirmed from Renee Mueller directly. Items marked Draft exist but require Renee's review. Items marked Pending require Renee input before they can be built.
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h2>ICP Element Status</h2></div>
+    <div class="card-body" style="padding: 0;">
+      <table class="data-table" style="border: 0; border-radius: 0; margin: 0;">
+        <thead>
+          <tr>
+            <th style="width: 40%;">ICP Element</th>
+            <th style="width: 18%;" class="center">Status</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Primary Avatar Description</td><td class="center"><span class="pill pill-green">Complete</span></td><td>Confirmed by Renee, April 2026</td></tr>
+          <tr><td>Revenue Range ($2M to $8M)</td><td class="center"><span class="pill pill-green">Complete</span></td><td>Confirmed by Renee, April 2026</td></tr>
+          <tr><td>Industry Prioritization</td><td class="center"><span class="pill pill-yellow">Draft</span></td><td>Directional, Renee to confirm ranking</td></tr>
+          <tr><td>Package to Avatar Fit</td><td class="center"><span class="pill pill-green">Complete</span></td><td>Sourced from master context and transcripts</td></tr>
+          <tr><td>Buying Signals</td><td class="center"><span class="pill pill-green">Complete</span></td><td>Confirmed from discovery</td></tr>
+          <tr><td>Disqualifiers</td><td class="center"><span class="pill pill-yellow">Draft</span></td><td>Renee to review before use in qualification</td></tr>
+          <tr><td>Per-Package Pricing</td><td class="center"><span class="pill pill-orange">Pending</span></td><td>Not yet confirmed, awaiting Renee input</td></tr>
+          <tr><td>Margin by Service Line</td><td class="center"><span class="pill pill-orange">Pending</span></td><td>Awaiting margin report from Renee</td></tr>
+          <tr><td>Network Dependency Context</td><td class="center"><span class="pill pill-green">Complete</span></td><td>Renee confirmed 75% referral dependency</td></tr>
+          <tr><td>Dual Pipeline Path (GLC Crossover)</td><td class="center"><span class="pill pill-green">Complete</span></td><td>Confirmed from GTM strategy document</td></tr>
+          <tr><td>Acquisition Channel Map</td><td class="center"><span class="pill pill-yellow">Draft</span></td><td>Updated to reflect Jeff Cohn full departure</td></tr>
+          <tr><td>Independent Outbound Strategy</td><td class="center"><span class="pill pill-orange">Pending</span></td><td>Separate messaging workstream deliverable</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SECTION 2: PRIMARY AVATAR -->
+  <div class="section-bar">The Primary Avatar</div>
+
+  <p class="muted" style="margin-bottom: 20px;">Vrly's current 13 clients were acquired entirely through Renee's personal network and the ERS sphere. No independent pipeline exists. The avatar below reflects who those clients are and who Vrly is best positioned to serve going forward.</p>
+
+  <div class="quote-block">
+    <p class="quote-text">The busy entrepreneur who knows they need marketing but does not have the time to do it, the budget to staff it full-time, or the capacity to manage a vendor relationship. They are also building toward an exit, succession, or scaling event in the next 5 to 10 years and value a partner who understands both their marketing problem and their business horizon.</p>
+    <div class="quote-source">Renee Mueller, Discovery, March 2026</div>
+  </div>
+
+  <div class="alert">
+    <strong>This dual lens matters.</strong> Vrly is not just an agency for SMBs. Vrly is the front door of the Goodlife Capital platform. The marketing work is real and immediate. The advisory and investment relationship is the long horizon. Sales conversations should reflect both.
+  </div>
+
+  <!-- SECTION 3: PROFILE -->
+  <div class="section-bar">Firmographic and Psychographic Profile</div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header light"><h2>Firmographic Profile</h2></div>
+      <div class="card-body">
+        <ul class="bullets">
+          <li><strong>Revenue:</strong> $2M to $8M annually. Established business, not a startup.</li>
+          <li><strong>Business Type:</strong> SMB in professional services, home services, legal, medical, or large nonprofit. Owner-operated or small leadership team.</li>
+          <li><strong>Staff Size:</strong> Small to mid-size. Unlikely to have a dedicated marketing hire. May have an admin or front desk function.</li>
+          <li><strong>Geography:</strong> Nebraska home base. National reach through GLC network. Content Engine and AI packages carry no geographic restriction.</li>
+          <li><strong>Marketing Maturity:</strong> Inconsistent or absent. May have tried agencies with mixed results. No internal marketing ops in place.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header light"><h2>Psychographic Profile</h2></div>
+      <div class="card-body">
+        <ul class="bullets">
+          <li><strong>Time Constrained:</strong> Too busy running the business to create content, manage campaigns, or hold vendor relationships.</li>
+          <li><strong>Results Oriented:</strong> Skeptical of marketing spend without clear ROI. Responds to operational and financial framing.</li>
+          <li><strong>Authority Seeker:</strong> Has expertise and a story to tell but no system for getting it out. Cannot maintain visibility alone.</li>
+          <li><strong>Exit Aware:</strong> Thinking about scale, a future exit, or succession. Makes them a natural GLC advisory candidate.</li>
+          <li><strong>Network Driven:</strong> Trusts referrals over cold outreach. Most likely to convert through a warm GLC or ERS introduction.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 4: STRONG FIT BY INDUSTRY -->
+  <div class="section-bar">Strong Fit by Industry</div>
+
+  <p class="muted" style="margin-bottom: 16px;">The industries below represent the highest-confidence fit based on Renee's current client base and the Vrly package portfolio.</p>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width: 22%;">Industry</th>
+        <th>Profile</th>
+        <th style="width: 28%;">Best Fit Packages</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Home Services</strong></td>
+        <td>HVAC, plumbing, roofing, landscaping, cleaning. Recurring customer base. Owner-operated. Needs consistent presence without in-house staff.</td>
+        <td>Content Engine, Ads, AI Assistant</td>
+      </tr>
+      <tr>
+        <td><strong>Legal</strong></td>
+        <td>Law firms, solo practitioners. High trust required. Referral dependent. Front desk and missed-call pain is consistent.</td>
+        <td>AI Assistant, Content Engine, Reputation Mgmt</td>
+      </tr>
+      <tr>
+        <td><strong>Medical / Healthcare</strong></td>
+        <td>Private practices, specialty clinics. High call volume, appointment-driven, staff-constrained. After-hours coverage critical.</td>
+        <td>AI Assistant, Content Engine, SEO</td>
+      </tr>
+      <tr>
+        <td><strong>Professional Services</strong></td>
+        <td>Accounting, consulting, financial advisory, insurance. Expertise-rich but content-poor. Strong M&amp;A and succession crossover.</td>
+        <td>Content Engine, AI Audit, AI Assistant</td>
+      </tr>
+      <tr>
+        <td><strong>Large Nonprofits</strong></td>
+        <td>Established nonprofits with budget discipline and Google Ad Grant eligibility. Up to $10K/month in free ad spend available.</td>
+        <td>Ads (Grants), Content Engine, Crowdfunding</td>
+      </tr>
+      <tr>
+        <td><strong>SMBs Broadly</strong></td>
+        <td>Any owner-operated business $2M to $8M considering growth, sale, or succession. Broader avatar when GLC advisory is the downstream goal.</td>
+        <td>AI Audit, Content Engine, GLC Advisory Path</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- SECTION 5: PACKAGE TO AVATAR FIT -->
+  <div class="section-bar">Package to Avatar Fit</div>
+
+  <p class="muted" style="margin-bottom: 16px;">Each Vrly package maps to a specific avatar profile and trigger. The GLC Crossover column reflects the advisory and investment pathway each package opens when the client relationship matures.</p>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width: 18%;">Package</th>
+        <th style="width: 22%;">Best Fit Avatar</th>
+        <th>The Trigger</th>
+        <th style="width: 25%;">GLC Crossover</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Content Engine</strong><br><span class="muted" style="font-size: 11px;">Highest margin. Axiolo fulfills.</span></td>
+        <td>Any SMB owner with a story to tell and no time to tell it. All industries.</td>
+        <td><em>"I know I should be creating content. I just never get around to it."</em></td>
+        <td>M&amp;A and advisory crossover. Visibility builds trust before any transaction.</td>
+      </tr>
+      <tr>
+        <td><strong>AI Assistant</strong><br><span class="muted" style="font-size: 11px;">High margin post-build.</span></td>
+        <td>Small professional services firm with a front desk or receptionist function.</td>
+        <td><em>"We miss calls. Front desk is overwhelmed. We lose leads after hours."</em></td>
+        <td>Client savings $40K to $50K/year. Operational win opens the advisory door.</td>
+      </tr>
+      <tr>
+        <td><strong>Ads Management</strong><br><span class="muted" style="font-size: 11px;">Logan Boyce fulfills.</span></td>
+        <td>Established nonprofit with capacity to absorb $20K/month in Google Ad Grant spend.</td>
+        <td><em>"We qualify for Google Ad Grants but no one is managing them."</em></td>
+        <td>Nonprofit referral path into ERS Foundation pipeline and grant programs.</td>
+      </tr>
+      <tr>
+        <td><strong>AI Audit</strong><br><span class="muted" style="font-size: 11px;">IGTMS led. Entry point product.</span></td>
+        <td>Any SMB owner unsure where their marketing or operations are breaking down.</td>
+        <td><em>"I spend on marketing but cannot track what works."</em></td>
+        <td>Primary trigger into GLC advisory. GHL fires cross-sell when profile matches.</td>
+      </tr>
+      <tr>
+        <td><strong>Social Media Mgmt</strong><br><span class="muted" style="font-size: 11px;">Phasing toward Content Engine.</span></td>
+        <td>SMB owner who wants consistent presence without internal staff.</td>
+        <td><em>"We just need someone to keep posting for us."</em></td>
+        <td>Lower strategic value. Migrate toward Content Engine over time.</td>
+      </tr>
+      <tr>
+        <td><strong>Crowdfunding Package</strong><br><span class="muted" style="font-size: 11px;">Currently inactive.</span></td>
+        <td>SMB or nonprofit looking to raise capital from their existing network.</td>
+        <td><em>"I want to bring my community into this."</em></td>
+        <td>Aligns with GLC capital vehicle layer. Sales conversations paused until fulfillment is identified.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- SECTION 6: BUYING SIGNALS -->
+  <div class="section-bar">Buying Signals and Disqualifiers</div>
+
+  <div class="check-grid">
+    <div>
+      <h4>✓ Green Light: Engage</h4>
+      <ul class="check-list">
+        <li><strong>No marketing staff</strong>Owner is doing marketing themselves or not at all. Clear pain and capacity gap.</li>
+        <li><strong>Frustrated with prior agencies</strong>Has tried vendors before. Receptive to a managed, outcome-oriented approach.</li>
+        <li><strong>Referral or warm intro</strong>Came through Renee's sphere, ERS, or GLC advisory. Trust already established.</li>
+        <li><strong>Exit or sale on horizon</strong>5 to 10 year horizon. Wants business more transferable. Highest GLC advisory crossover.</li>
+        <li><strong>Established revenue at $2M+</strong>Marketing budget exists even if unallocated. Stabilizing and scaling.</li>
+        <li><strong>Google Ad Grant eligible</strong>Qualifying nonprofit with $10K/month in free ad spend sitting unused.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>✗ Red Light: Do Not Engage</h4>
+      <ul class="check-list">
+        <li><strong>Under $1M revenue</strong>Budget constraints make MRR commitments difficult. High churn risk.</li>
+        <li><strong>Wants immediate lead volume</strong>Expects ads to replace a broken sales process. Vrly builds systems, not quick fixes.</li>
+        <li><strong>Cannot provide raw content</strong>Content Engine requires a 1-hour client interview. Anchor product does not work without it.</li>
+        <li><strong>Wants to approve everything</strong>High-touch approval chains slow fulfillment and erode margin.</li>
+        <li><strong>No recurring revenue appetite</strong>Looking for a one-time project. Does not fit the MRR model.</li>
+        <li><strong>No warm introduction path</strong>Cold outbound has produced zero clients to date. Low-conversion channel.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- SECTION 7: DUAL PIPELINE -->
+  <div class="section-bar">The Dual Pipeline Path</div>
+
+  <p class="muted" style="margin-bottom: 16px;">Every Vrly client is also a potential GLC advisory client, investor, or acquisition target. Marketing is the entry point. Advisory is the conversion.</p>
+
+  <div class="pipeline">
+    <div class="pipeline-stage">
+      <div class="stage-label">Entry</div>
+      <div class="stage-title">Vrly Client</div>
+      <div class="stage-sub">MRR begins</div>
+    </div>
+    <div class="pipeline-stage">
+      <div class="stage-label">Serve</div>
+      <div class="stage-title">Profit Proven</div>
+      <div class="stage-sub">Results delivered</div>
+    </div>
+    <div class="pipeline-stage">
+      <div class="stage-label">Trust</div>
+      <div class="stage-title">Relationship Built</div>
+      <div class="stage-sub">GHL trigger fires</div>
+    </div>
+    <div class="pipeline-stage">
+      <div class="stage-label">Convert</div>
+      <div class="stage-title">GLC Advisory</div>
+      <div class="stage-sub">Succession / M&amp;A</div>
+    </div>
+    <div class="pipeline-stage">
+      <div class="stage-label">Outcome</div>
+      <div class="stage-title">Investor / Exit</div>
+      <div class="stage-sub">Platform flywheel</div>
+    </div>
+  </div>
+
+  <div class="alert">
+    <strong>The Key Insight:</strong> The Vrly ICP and the GLC advisory ICP are the same person at different stages of the same journey. Serving them well in marketing is what earns the right to advise them on their business.
+  </div>
+
+  <!-- SECTION 8: ACQUISITION CHANNELS -->
+  <div class="section-bar">Client Acquisition Context</div>
+
+  <p class="muted" style="margin-bottom: 16px;">All 13 current clients were acquired through warm referrals and Renee's personal network. Salespeople have never built independent pipeline.</p>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width: 26%;">Channel</th>
+        <th style="width: 18%;" class="center">Current Status</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Renee / ERS personal network</strong></td>
+        <td class="center"><span class="pill pill-green">Primary (~75%)</span></td>
+        <td>Highest conversion. Zero acquisition cost. Not scalable without Renee.</td>
+      </tr>
+      <tr>
+        <td><strong>Jeff Cohn legacy network</strong></td>
+        <td class="center"><span class="pill pill-dark">Inactive</span></td>
+        <td>Jeff has departed. Renee retains the podcast asset and the 532 KB opportunity pipeline in GHL but no new referrals flow from this channel.</td>
+      </tr>
+      <tr>
+        <td><strong>Coaching network (Logan)</strong></td>
+        <td class="center"><span class="pill pill-yellow">Contributing</span></td>
+        <td>Logan's work surfaces warm prospects organically.</td>
+      </tr>
+      <tr>
+        <td><strong>Cold / independent outbound</strong></td>
+        <td class="center"><span class="pill pill-orange">Zero to date</span></td>
+        <td>Salespeople have not built independent pipeline. Messaging workstream priority.</td>
+      </tr>
+      <tr>
+        <td><strong>Podcast / content marketing</strong></td>
+        <td class="center"><span class="pill pill-yellow">In build</span></td>
+        <td>ERS Podcast rebrand active. Renee promoting. Episodes 2-7 recorded, not released.</td>
+      </tr>
+      <tr>
+        <td><strong>GLC Advisory referrals</strong></td>
+        <td class="center"><span class="pill pill-orange">Untapped</span></td>
+        <td>Advisory clients are natural Vrly referral sources. Formal loop not yet built.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="alert warn">
+    <strong>Network Dependency Risk:</strong> Approximately 75% of current Vrly clients came from Renee's personal network. Salespeople have never built independent pipeline. This ICP was developed to support the transition from referral-only growth to a documented, repeatable acquisition model.
+  </div>
+
+  <!-- SECTION 9: SOURCES -->
+  <div class="section-bar">Source Record</div>
+
+  <div class="card">
+    <div class="card-body">
+      <ul class="bullets">
+        <li>IGTMS discovery transcripts, March to April 2026, primary source</li>
+        <li>Renee Mueller direct input via calls, Slack, and text, high trust</li>
+        <li>GLC_Master_Context.md, IGTMS engagement reference document</li>
+        <li>GLC_03_GTM_Strategy.md, client business plan, highest authority</li>
+        <li>GLC_Revenue_Map_2026.md, Renee's platform revenue map</li>
+        <li>VRLY Website Content, Marketing Child Pages, prior team, directional only</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="alert caution">
+    <strong>Open Items Before This ICP Is Final:</strong> Renee to review and confirm avatar description and industry prioritization. Per-package pricing to be confirmed before this is used in sales enablement. Independent pipeline strategy is a separate messaging workstream deliverable. Load into ClickUp once Renee approves.
+  </div>
+
+</div>
+
+<footer class="site-footer">
+  IGTMS &nbsp;·&nbsp; Vrly Media ICP Working Draft v1.1 &nbsp;·&nbsp; April 2026 &nbsp;·&nbsp; Confidential
+</footer>
+
+</body>
+</html>
