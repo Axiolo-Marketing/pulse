@@ -2,16 +2,16 @@
 
 **Repository:** tomdigati/pulse
 **Product owner:** Tom DiGati, Client Transformation Lead, IGTMS
-**Specification version:** 1.0
+**Specification version:** 1.1 (post-shipping update)
 **Last updated:** April 2026
 
 ---
 
 ## How to Use This Document
 
-This is the project brief for Claude Code. Read this entire document before writing any code. Every section below is intentional. The constraints, design choices, and user details are based on real engagement context with a real client. Do not generalize or simplify what is here.
+This is the v1-as-built source of truth for Pulse. The original v1.0 brief lives in git history (`b5fc78f`). Every section below has been updated to match what actually shipped, including optimizations and design changes made during the build. Where the implementation diverges from the original brief, the rationale is in a "Changed from v1.0" callout.
 
-When you are ready to build, follow the implementation order in Section 11. Confirm each milestone before moving to the next.
+Read this whole document before changing anything. The constraints reflect real engagement context with a real first client (Renee Mueller).
 
 ---
 
@@ -21,7 +21,7 @@ When you are ready to build, follow the implementation order in Section 11. Conf
 
 Pulse is a mobile-first decision and validation tool. A consultant (the operator) sends a single secure link to a client (the user). The user opens the link on any device, taps through a sequence of pre-populated decision cards, confirms or corrects what we already know, and uploads documents where needed. Progress saves automatically. The user can stop and resume at any time from any device with the same link.
 
-The operator sees responses in real time as they come in, then exports those responses to whatever project management or operations system the engagement uses (in v1, that is ClickUp).
+The operator sees responses in real time as they come in, edits card text directly when wording needs to change, and exports responses to whatever project management or operations system the engagement uses (in v1, that is ClickUp).
 
 ### Why Pulse Exists
 
@@ -48,52 +48,52 @@ Pulse is an IGTMS product. Tom DiGati owns the codebase. End users see only IGTM
 - No em-dashes anywhere (use commas, parentheses, or sentence breaks instead)
 - Use "you" and "your" in user-facing copy
 - Avoid jargon, acronyms, and consultant-speak
-- Avoid words like "audit," "accountability," "compliance", these feel transactional and pressuring
+- Avoid words like "audit," "accountability," "compliance"
 
 ---
 
 ## 2. The User: Renee Mueller
 
-The first deployment of Pulse is for Renee Mueller, President of Good Life Capital and CEO of Vrly Media. Every design decision should be evaluated against whether it serves her specifically. If it does not work for Renee, it does not ship.
+The first deployment of Pulse is for Renee Mueller, President of Good Life Capital and CEO of Vrly Media. Every design decision is evaluated against whether it serves her specifically. If it does not work for Renee, it does not ship.
 
 ### What We Know About Her
 
 **Behavioral profile:**
 - Mobile-first. She lives on her phone between events, flights, and speaking engagements.
-- Time-starved. She regularly misses meetings due to travel and double-booking. She apologizes often for delayed responses.
+- Time-starved. Regularly misses meetings due to travel and double-booking.
 - Has dyscalculia and flips numbers. Numbers must be plain and large. Never bury figures in dense paragraphs.
 - Strong communicator. Comfortable saying she does not know something. Prefers fast-moving sessions over polished documents she cannot influence.
 - Exhausted but engaged. Doing homework on her phone when she has 5 minutes.
 - Communicates by layering toward her point. Mirror-and-confirm approach works best.
 
-**Quote from a typical Renee message:**
-> "I still have plenty to get you, working on it, but yes just trying to cover all the other bases as well. I apologize I didn't respond yesterday, it's been a little bit of a whirlwind with traveling, and we had the opening for an event last night, and speaking today, then done!"
-
 **What this means for Pulse design:**
-- The interface must be tappable, not type-heavy.
-- Sessions must be resumable. She will start, get interrupted, and pick up later from a different device.
-- Cognitive load per card must be minimal. One question, one decision, one tap.
-- The system must save automatically. She will close the browser without thinking about it.
-- The tone must be warm and forgiving. No progress bars that scold. No reminders that nag.
+- Tappable, not type-heavy.
+- Resumable across sessions and devices.
+- One question, one decision, one tap per card.
+- Auto-save on every action.
+- Warm, forgiving tone. No scolding progress bars.
 
 ### Authentication Approach for Renee
 
-Renee gets a single unique URL. Tom sends it via text or email. She opens it on any device and is automatically logged in. No password. No login screen. No account creation. The URL itself is her identity.
+Renee gets a single unique URL. Tom sends it via text or email. She opens it on any device and is automatically logged in. **No password. No login screen. No account creation. The URL itself is her identity.** This is intentional friction reduction.
 
-The URL contains a long random token (32+ characters) that maps to her record in Supabase. The token is permanent for v1 (no expiration). If the token leaks, Tom can rotate it from the admin view.
+The URL contains a 16-hex-character random token (64 bits of entropy) that maps to her record in Supabase. The token is permanent for v1 and rotates only when Tom rotates it from the admin view.
+
+> **Changed from v1.0**: The original brief called for a 32+ character token. We use 16 hex chars (64 bits of entropy) so the URL fits cleanly in an SMS preview. 64 bits is unguessable for a private invite link; the brute-force surface is theoretical at this scale.
 
 ---
 
 ## 3. The Operator: Tom DiGati
 
-Tom is the consultant sending the pulse. He needs:
-- A simple admin view to see Renee's responses as they arrive
-- A way to view uploaded files
-- A way to export responses for pasting into ClickUp
-- A way to add or edit cards (in a future version, but v1 can have cards defined in code)
-- A way to generate a new client engagement and create the unique URL
+Tom is the consultant sending the pulse. He uses Pulse from a desktop browser (admin is not mobile-optimized; the user-facing app is). He needs:
 
-For v1, the admin view can be simple, a single password-protected page that lists all responses for the active engagement.
+- A simple admin view to see Renee's responses as they arrive
+- A way to view uploaded files (signed download URLs)
+- A way to export responses for pasting into ClickUp
+- A way to **edit card text** directly from the admin (title, category, context, question, options, attachment, skip-allowed) so wording fixes don't require a deploy
+- A way to generate a new client engagement and rotate the unique URL
+
+For v1, the admin view is a single password-protected page that lists all engagements and lets Tom drill into per-engagement responses with editing and export per card.
 
 ---
 
@@ -101,395 +101,98 @@ For v1, the admin view can be simple, a single password-protected page that list
 
 Every interaction in Pulse is a card. A card is a single unit of decision or input. The user sees one card at a time. Each card has:
 
-- **Title**, short, plain language, describes what we are asking about
-- **Context**, what we already know, written in 2 to 4 sentences. This is the "what we know" content from the source material. Never longer than the user can read in 15 seconds.
-- **Question**, the specific decision or input we need from the user. One question per card. Never compound.
-- **Response type**, one of: confirm-edit, single-select, multi-select, short-text, long-text, file-upload, document-link, contact-share
-- **Options** (for select types), the answer choices
+- **Title**, short, plain language
+- **Context**, what we already know, 2 to 4 sentences. The "what we know" content from the source material. Should read in 15 seconds.
+- **Question**, one specific decision or input we need from the user. Never compound.
+- **Response type**, one of: `confirm-edit`, `single-select`, `multi-select`, `short-text`, `long-text`, `file-upload`, `document-link`, `contact-share`
+- **Options** (for select types), the answer choices (jsonb array)
+- **Default value**, the existing text shown for confirm-edit cards (nullable)
 - **Skip allowed**, boolean. Some cards must be answered. Most can be skipped.
-- **Category**, for grouping in the admin view (Client Review, Vendor Access, Decisions, Document Requests)
+- **Category**, for grouping in the admin view (Client Review, Document and Access Requests, Decisions)
+- **Attachment path** *(new in shipped v1)*, optional path to an HTML reference file (relative to site base, e.g. `deliverables/glc-org-chart.html`). If set, the card renders a "View Active Reference" button that opens the file in a sandboxed iframe modal.
 
 ### Card Response Types
 
 **confirm-edit**
-The most common type. We show what we believe to be true. User taps "Yes, correct" or "Needs edit." If they tap edit, a single short text field appears with the existing text pre-filled. They edit and save. Three buttons total: Confirm, Edit, Skip.
+The most common type. We show what we believe to be true. User taps "Yes, correct" or "Needs edit" or "Skip for now." If they tap edit, a textarea opens for a free-form correction.
 
 **single-select**
-2 to 4 options. User taps one. Option list is short and mutually exclusive.
+2 to 5 options. User taps one. **Auto-saves on tap** and advances. Options are mutually exclusive.
 
 **multi-select**
-2 to 8 options. User taps any number. Useful for "which of these apply" questions.
+2 to 9 options. User toggles any number, then taps Continue.
 
 **short-text**
 Single line input. Email addresses, names, URLs.
 
 **long-text**
-Multi-line textarea. Used sparingly. Only when no other format fits.
+Multi-line textarea. Used sparingly. Placeholder reads *"Add a note. Tap the keyboard mic to talk."* — the iOS keyboard mic dictates straight into the textarea, no extra wiring needed.
 
 **file-upload**
-User taps to upload one or more files. Supports PDF, DOCX, PNG, JPG, CSV, XLSX. Max 25MB per file. Up to 5 files per card.
+User taps to upload one or more files. Supports PDF, DOCX, PNG, JPG, CSV, XLSX. Max 25MB per file. Up to 5 files per card. Streams to Supabase Storage at `{client_id}/{card_id}/{uuid}-{filename}`.
 
 **document-link**
-User pastes a URL to a Google Doc, Drive folder, or other shared resource.
+User pastes a URL to a Google Doc, Drive folder, or other shared resource. Must start with `http://` or `https://`.
 
 **contact-share**
-Specialized type for asking Renee to share a contact (name, email, role) with us. Three short text fields.
+Three short text fields: name, email, role. Email is required.
+
+### Optional Notes Field *(new in shipped v1)*
+
+On every card type **except** `confirm-edit`, `short-text`, and `long-text`, an optional "Notes (optional)" textarea renders below the primary input. Placeholder: *"Add a note. Tap the keyboard mic to talk."* The note is folded into `response_value.note` on save, surfaces in the admin response detail, and shows up in the ClickUp markdown export under a `**Note:**` suffix.
+
+`confirm-edit` cards already have a free-form correction path via "Needs edit" so they don't get a duplicate field. `short-text` and `long-text` cards already have an open text input that uses the same voice-friendly placeholder, so a separate notes field would be redundant.
 
 ### Card State
 
-Each card has one of these states for each user:
-- `not_started`, user has not seen this card
-- `viewed`, user opened the card but did not respond
+Each card has one of these states for each user (per-user, not per-card globally):
+- `not_started`, no row exists in `responses`
+- `viewed`, user landed on the card but didn't submit. Inserted automatically the first time the card renders.
 - `answered`, user submitted a response
 - `skipped`, user explicitly skipped
-- `needs_edit`, user said edit but did not finish typing the correction
+- `needs_edit`, reserved (not currently emitted by the v1 client; the edit-then-submit flow goes straight to `answered`)
 
-The system tracks state per user, not per card globally.
+The `viewed` row gives the operator a signal that the user opened a card but didn't act. Inserted via `INSERT ... ON CONFLICT DO NOTHING` so re-renders are idempotent.
 
 ---
 
 ## 5. Renee's v1 Card Set
 
-These 19 cards are the v1 deployment for Renee. Source content is from the ClickUp export `Vrly_IGTMS_Data_Capture.txt` plus additional items from the GLC Master Context that did not make it into ClickUp.
+These 19 cards are the v1 deployment for Renee. Source content is from the ClickUp export `Vrly_IGTMS_Data_Capture.txt` plus additional items from the GLC Master Context.
 
-Each card below specifies title, context, question, response type, and category. Use these verbatim in the seed data.
+Each card below specifies title, context, question, response type, and category. The seed file uses these verbatim. Tom can edit any of this from the admin without a redeploy.
 
 ### Category: Client Review (8 cards)
 
----
-
-**Card 1: Service Delivery Matrix**
-
-*Category:* Client Review
-*Question type:* confirm-edit
-
-*Context shown to Renee:*
-We have reconstructed your current service delivery model from the prior team's project sheet. Content Engine is owned by Enrique on production with Doug on strategy and is currently stalled. Ads Management is active under Logan Boyce. The website is in Phase 5 with Jenn on development and Enrique on graphics. Something Good Magazine had Megan on content, Enrique on design, and Jenn on layout, with March and April issues in progress when the team departed. CRM and automation work is incomplete and returning to GHL. Vrly Foundation has Jenn on web and CRM and Logan on ads, with the landing page and donor capture incomplete.
-
-*Question:*
-Is this picture accurate? If anything has changed or was never quite right, please tell us where to update.
-
-*Skip allowed:* yes
-
----
-
-**Card 2: Sale to Fulfillment Process**
-
-*Category:* Client Review
-*Question type:* long-text
-
-*Context shown to Renee:*
-We understand that leads come in primarily through your personal network, the ERS sphere, and Logan's coaching network. Once a prospect is ready, you sell them on a package, MRR billing begins, and a 90-day onboarding model takes over. The prior team built an ads onboarding form in Typeform routed through Vendasta, and a 6-email onboarding series was planned but never completed. Today, website changes and landing page requests route through Vendasta to your inbox, which makes you the bottleneck at every stage.
-
-*Question:*
-What moves a client from "sold" to "in onboarding" today, now that the prior team is gone? If anything currently lives in your head or in undocumented habits, that is exactly what we want to capture here.
-
-*Skip allowed:* yes
-
----
-
-**Card 3: Ideal Client Profile (ICP) Confirmation**
-
-*Category:* Client Review
-*Question type:* confirm-edit
-
-*Context shown to Renee:*
-We have you serving the busy entrepreneur, SMB owner, $2M to $8M revenue, who knows they need marketing but cannot staff it full-time. They are also building toward an exit, succession, or scaling event in the next 5 to 10 years. Strong industry fits include Home Services, Legal, Medical, Professional Services, and Large Nonprofits eligible for Google Ad Grants. Approximately 75% of your current clients came through your personal network or the ERS sphere.
-
-*Question:*
-Does this match how you think about your ideal client today? If you would tighten or widen this anywhere, tell us.
-
-*Skip allowed:* yes
-
----
-
-**Card 4: Current Services and Packages**
-
-*Category:* Client Review
-*Question type:* confirm-edit
-
-*Context shown to Renee:*
-We have six core packages on file: Vrly Content Engine (anchor product, fulfilled by Axiolo), Ads Management (Logan Boyce), AI Audit (entry point, IGTMS-led), AI Assistant (vendor TBD), Social Media Management (fulfilled by Axiolo, phasing toward Content Engine), and Crowdfunding Platform (fulfillment vendor TBD).
-
-*Question:*
-Are these still the active packages? If you have added, paused, or retired anything, tell us.
-
-*Skip allowed:* yes
-
----
-
-**Card 5: Active Vendor List**
-
-*Category:* Client Review
-*Question type:* confirm-edit
-
-*Context shown to Renee:*
-Active vendors we have on record: Logan Boyce / Digital Tabby (ads), Axiolo (incoming white-label fulfillment), Vendasta (current platform, being replaced), Magcloud (Something Good Magazine distribution). Prior team vendors with unconfirmed status: Jenn, Enrique, Megan Cimple, Mark Fisher, Aadeck, Magnfi Team.
-
-*Question:*
-Is the active vendor list correct, and which of the prior team vendors still have any ongoing relationship with you?
-
-*Skip allowed:* yes
-
----
-
-**Card 6: CMO Responsibilities**
-
-*Category:* Client Review
-*Question type:* confirm-edit
-
-*Context shown to Renee:*
-We have the CMO role at Vrly currently performed by you, with IGTMS providing fractional strategy. The role covers vendor and fulfillment oversight, content manager coordination with Logan, client communication and retention, package strategy and margin management, marketing for Vrly itself, and GLC ecosystem alignment. Rebecca's Operations Team handles back of house only.
-
-*Question:*
-Does this reflect the CMO function as you would describe it, or have we missed anything you consider part of this role?
-
-*Skip allowed:* yes
-
----
-
-**Card 7: Ownership of Delivery by Stages**
-
-*Category:* Client Review
-*Question type:* long-text
-
-*Context shown to Renee:*
-We have a six-stage model: Sale (you), Handoff to fulfillment (currently informal and you-dependent), Onboarding Days 1-30 (foundation and activation, owner unclear), Execution Days 31-60 (Axiolo and Logan), Optimization Days 61-90 (owner unclear), and Ongoing Post-90 (owner unclear).
-
-*Question:*
-For the stages where ownership is unclear, who do you currently expect to own each one? If the answer is "I do for now," that is fine to say.
-
-*Skip allowed:* yes
-
----
-
-**Card 8: SLA or Service Guarantees**
-
-*Category:* Client Review
-*Question type:* confirm-edit
-
-*Context shown to Renee:*
-The only SLA-adjacent language we have found is in your client onboarding document: billing continues even when client delays cause timeline slippage. We have not located any formal performance guarantee, turnaround commitment, or service-level agreement.
-
-*Question:*
-Are there any verbal or written commitments you have made to current clients that we should know about? Even informal ones count.
-
-*Skip allowed:* yes
-
----
+1. **Service Delivery Matrix** — `confirm-edit`
+2. **Sale to Fulfillment Process** — `long-text`
+3. **Ideal Client Profile (ICP) Confirmation** — `confirm-edit`, with `attachment_path = deliverables/vrly-icp-v1.html`
+4. **Current Services and Packages** — `confirm-edit`
+5. **Active Vendor List** — `confirm-edit`
+6. **CMO Responsibilities** — `confirm-edit`
+7. **Ownership of Delivery by Stages** — `long-text`
+8. **SLA or Service Guarantees** — `confirm-edit`
 
 ### Category: Document and Access Requests (6 cards)
 
----
-
-**Card 9: Vendasta Access**
-
-*Category:* Document and Access Requests
-*Question type:* file-upload
-
-*Context shown to Renee:*
-We need access to Vendasta to complete the migration audit before the GHL build begins. The Vendasta contract runs through August 2026, and we need to validate what the prior team built before anything is rebuilt. We also need to resolve the Sammy's Superheroes email deliverability issue.
-
-*Question:*
-Can you share Vendasta admin credentials or send a workspace invitation to Tom? You can upload a screenshot of the credentials, paste them in a follow-up text, or attach an invite confirmation here.
-
-*Skip allowed:* yes
-
----
-
-**Card 10: Website Admin Access**
-
-*Category:* Document and Access Requests
-*Question type:* file-upload
-
-*Context shown to Renee:*
-The Vrly website is at vrlymultimedia.com on WordPress (Cloudways), with a target launch of May 20, 2026. We need admin access to assess the staging site before any rebuild work happens.
-
-*Question:*
-Please add the Axiolo team as admins or upload the WordPress credentials here. If easier, paste the WP login URL into a short text reply on the next card.
-
-*Skip allowed:* yes
-
----
-
-**Card 11: Pitch Decks and Brand Materials**
-
-*Category:* Document and Access Requests
-*Question type:* file-upload
-
-*Context shown to Renee:*
-We have not received pitch decks, brand guidelines, or service one-pagers. We know website wireframes (by Jenn) exist and a brand guidelines consistency checklist was in progress.
-
-*Question:*
-Can you upload any pitch decks, brand assets, or service one-pagers you have? Or paste a Google Drive link below if it is easier.
-
-*Skip allowed:* yes
-
----
-
-**Card 12: Case Studies and Testimonials**
-
-*Category:* Document and Access Requests
-*Question type:* long-text
-
-*Context shown to Renee:*
-We do not have any client case studies or testimonials on file. We know the AI Assistant has documented client savings of $40K to $50K per year, but no formal case study has been written.
-
-*Question:*
-Are there any client testimonials, results data, or before-and-after examples you can share, even informally? Even an email from a happy client would help.
-
-*Skip allowed:* yes
-
----
-
-**Card 13: GLC Org Chart**
-
-*Category:* Document and Access Requests
-*Question type:* file-upload
-
-*Context shown to Renee:*
-We have rebuilt the GLC org structure from your business plan but have not seen a visual org chart. Jeff Cohn referenced a ChatGPT-generated org chart on March 12 that was never shared. With Jeff's departure, the structure has shifted.
-
-*Question:*
-Do you have an updated org chart you can upload, or paste a Google Drive link to the one Jeff originally created?
-
-*Skip allowed:* yes
-
----
-
-**Card 14: Tools List Confirmation**
-
-*Category:* Document and Access Requests
-*Question type:* multi-select
-
-*Context shown to Renee:*
-Tools we have on file across the GLC ecosystem: GHL, Vendasta, AppFolio, InvestNext, Stripe, NMI, QuickBooks, Zoom Enterprise, Google Workspace, Slack, ClickUp, Claude, Zapier, WordPress on Cloudways, Magcloud, Kisi.
-
-*Question:*
-Which of these are you keeping, and which should we mark as deprecated? Tap any that should NOT be in your stack going forward.
-
-*Options:*
-- Vendasta (deprecating)
-- Zapier (deprecating, moving to N8N)
-- Wix (if applicable)
-- WordPress on Cloudways (if migrating to Astro)
-- Magcloud (if Something Good Magazine is being paused)
-- Kisi (if shared spaces are being deprioritized)
-
-*Skip allowed:* yes
-
----
+9. **Vendasta Access** — `file-upload`
+10. **Website Admin Access** — `file-upload`
+11. **Pitch Decks and Brand Materials** — `file-upload`
+12. **Case Studies and Testimonials** — `long-text`
+13. **GLC Org Chart** — `file-upload`, with `attachment_path = deliverables/glc-org-chart.html`
+14. **Tools List Confirmation** — `multi-select` (6 deprecation candidates)
 
 ### Category: Decisions (5 cards)
 
----
+15. **Operator Hire Timeline** — `single-select` (5 options, **required**)
+16. **Doug Documents Validation** — `multi-select` (8 options)
+17. **Logan Introduction Status** — `single-select` (4 options, **required**)
+18. **Axiolo Part 1 Approval** — `multi-select` (9 itemized options, **required**)
+19. **Anything Else We Should Know** — `long-text`
 
-**Card 15: Operator Hire Timeline**
+> **Changed from v1.0**: Card 13's wording was updated to remove all references to Jeff Cohn (per Tom's request after seeing the deployed copy). Original context and question are preserved in git history.
 
-*Category:* Decisions
-*Question type:* single-select
-
-*Context shown to Renee:*
-The Operations Team has confirmed that an operator hire below you is the critical path for everything else. Without that role filled, you remain the bottleneck for marketing, vendor coordination, and client delivery. Mark has indicated a preference for a US-based hire, and Rebecca's team will write the role criteria.
-
-*Question:*
-What is your honest current expectation on when you can move on this hire?
-
-*Options:*
-- Within 30 days
-- Within 60 days
-- Within 90 days
-- Longer than 90 days
-- I need help structuring this before I can commit
-
-*Skip allowed:* no
-
----
-
-**Card 16: Doug Documents Validation**
-
-*Category:* Decisions
-*Question type:* multi-select
-
-*Context shown to Renee:*
-The prior team's project sheet lists these items as Complete under Doug. We need to know which ones are actually current and which should be retired or replaced.
-
-*Question:*
-Which of these still reflect how you operate today? Tap any that are still in use.
-
-*Options:*
-- Initial funnel concept mapping
-- Funnel architecture mapping
-- Messaging framework drafts
-- Unified Vrly business agreement
-- Formal sales handoff SOP
-- Client onboarding document
-- Client offboarding document
-- First 90 days at Vrly document
-
-*Skip allowed:* yes
-
----
-
-**Card 17: Logan Introduction Status**
-
-*Category:* Decisions
-*Question type:* single-select
-
-*Context shown to Renee:*
-You agreed on the Axiolo call to introduce Logan Boyce to Gabriel directly. This is the gate before Axiolo can coordinate creative and landing pages with Logan on active campaigns.
-
-*Question:*
-Where are you with the Logan introduction?
-
-*Options:*
-- Done, intro made
-- Will do this week
-- Will do next week
-- Need Tom to draft the intro for me
-
-*Skip allowed:* no
-
----
-
-**Card 18: Axiolo Part 1 Approval**
-
-*Category:* Decisions
-*Question type:* multi-select
-
-*Context shown to Renee:*
-Gabriel has sent the proposal with Part 1 (Unblocking Vrly) and Part 2 (Ongoing Services). Part 1 is itemized so you can pick what to move on now.
-
-*Question:*
-Which Part 1 items would you like to move forward on this week? Tap any that you are ready to approve.
-
-*Options:*
-- TopForm onboarding coordination (Included)
-- Aksarben Mortgage 2 funnel landing pages ($2,000)
-- Vrly Content Engine landing page ($750)
-- Vrly Media second landing page ($750)
-- Vrly Foundation landing page ($750)
-- Sammy's Superheroes email deliverability diagnostic ($500)
-- Vrly Media website rebuild Astro ($3,500)
-- Zapier to N8N migration ($1,500)
-- Vrly-branded email setup (Included)
-
-*Skip allowed:* no
-
----
-
-**Card 19: Anything Else We Should Know**
-
-*Category:* Decisions
-*Question type:* long-text
-
-*Context shown to Renee:*
-We have covered the items currently on our radar. If something is on your mind that did not show up in these cards, this is where to put it.
-
-*Question:*
-Is there anything else we should know, decide on, or unblock for you?
-
-*Skip allowed:* yes
+The full body text for each card is in `supabase/seed.sql`. Re-running the seed updates card content idempotently via `ON CONFLICT (client_id, order_index) DO UPDATE`.
 
 ---
 
@@ -498,66 +201,135 @@ Is there anything else we should know, decide on, or unblock for you?
 ### Tables
 
 **clients**
-- `id` uuid primary key, default `gen_random_uuid()`
-- `name` text not null (e.g. "Renee Mueller")
-- `org_name` text (e.g. "Vrly Media / Good Life Capital")
-- `engagement_name` text (e.g. "GLC Engagement v1")
-- `token` text not null unique (32+ char random string used in URL)
-- `created_at` timestamptz default now()
-- `last_active_at` timestamptz nullable
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | `gen_random_uuid()` |
+| name | text not null | "Renee Mueller" |
+| org_name | text | "Vrly Media / Good Life Capital" |
+| engagement_name | text | "GLC Engagement v1" |
+| token | text not null unique | 16-hex-char random, generated via `encode(gen_random_bytes(8), 'hex')` |
+| created_at | timestamptz | default now() |
+| last_active_at | timestamptz | nullable, touched on every save |
 
 **cards**
-- `id` uuid primary key, default `gen_random_uuid()`
-- `client_id` uuid not null, references `clients(id)` on delete cascade
-- `order_index` integer not null (display order within the client's deck)
-- `category` text not null (e.g. "Client Review", "Document and Access Requests", "Decisions")
-- `title` text not null
-- `context` text not null
-- `question` text not null
-- `response_type` text not null (one of: confirm-edit, single-select, multi-select, short-text, long-text, file-upload, document-link, contact-share)
-- `options` jsonb (for select types)
-- `default_value` text (the existing text shown for confirm-edit cards)
-- `skip_allowed` boolean default true
-- `created_at` timestamptz default now()
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| client_id | uuid FK → clients(id) | on delete cascade |
+| order_index | integer | unique with client_id |
+| category | text not null | |
+| title | text not null | |
+| context | text not null | |
+| question | text not null | |
+| response_type | text not null | check constraint enforces enum |
+| options | jsonb | nullable, array of strings for select types |
+| default_value | text | nullable |
+| skip_allowed | boolean | default true |
+| **attachment_path** | text | nullable, relative path to HTML reference |
+| created_at | timestamptz | |
 
 **responses**
-- `id` uuid primary key, default `gen_random_uuid()`
-- `card_id` uuid not null, references `cards(id)` on delete cascade
-- `client_id` uuid not null, references `clients(id)` on delete cascade
-- `state` text not null (one of: not_started, viewed, answered, skipped, needs_edit)
-- `response_value` jsonb (the actual answer, structure depends on response_type)
-- `viewed_at` timestamptz nullable
-- `answered_at` timestamptz nullable
-- `created_at` timestamptz default now()
-- `updated_at` timestamptz default now()
-- unique constraint on (`card_id`, `client_id`)
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| card_id | uuid FK → cards(id) | on delete cascade |
+| client_id | uuid FK → clients(id) | on delete cascade |
+| state | text not null | enum: not_started, viewed, answered, skipped, needs_edit |
+| response_value | jsonb | shape depends on response_type, see §6.3 |
+| viewed_at | timestamptz | set on first render |
+| answered_at | timestamptz | set on submit |
+| created_at | timestamptz | |
+| updated_at | timestamptz | trigger auto-updates |
+| **unique** | (card_id, client_id) | upsert key |
 
 **uploads**
-- `id` uuid primary key, default `gen_random_uuid()`
-- `card_id` uuid not null, references `cards(id)` on delete cascade
-- `client_id` uuid not null, references `clients(id)` on delete cascade
-- `file_name` text not null
-- `file_size_bytes` integer not null
-- `storage_path` text not null (path in Supabase storage bucket)
-- `mime_type` text
-- `uploaded_at` timestamptz default now()
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| card_id | uuid FK | on delete cascade |
+| client_id | uuid FK | on delete cascade |
+| file_name | text not null | |
+| file_size_bytes | integer not null | |
+| storage_path | text not null | `{client_id}/{card_id}/{uuid}-{filename}` |
+| mime_type | text | |
+| uploaded_at | timestamptz | default now() |
 
-### Storage Buckets
+### 6.1 Helper Functions
 
-- `pulse-uploads`, private bucket for all client file uploads
-- File path convention: `{client_id}/{card_id}/{uuid}-{filename}`
+```sql
+-- Read the x-pulse-token request header (NULL if absent).
+create or replace function public.pulse_request_token()
+returns text language sql stable as $$
+  select nullif(coalesce(
+    current_setting('request.headers', true)::jsonb->>'x-pulse-token',
+    ''
+  ), '');
+$$;
 
-### Row Level Security
+-- Resolve the client_id for the presented token.
+create or replace function public.pulse_request_client_id()
+returns uuid language sql stable as $$
+  select id from public.clients
+  where token = public.pulse_request_token() limit 1;
+$$;
+```
 
-For v1, the application uses the Supabase service role key from a serverless function or build-time environment. RLS is enabled on all tables but bypassed via service role for authenticated operations. Public access to the database is blocked.
+### 6.2 Row Level Security
 
-A simpler v1 approach: use Supabase's anon key with RLS policies that allow read and write only when a valid token is in the request. For v1, the token-in-URL flow can be implemented as a custom JWT or a simpler client-side header that the API validates.
+All four tables have RLS enabled. The user-facing app uses the **anon key** plus an `x-pulse-token` request header. RLS policies read the header via `pulse_request_token()` and only return rows whose `client_id` matches.
 
-Recommended for v1: client-side token in URL → exchange for a short-lived Supabase session via a serverless edge function → use that session for all queries. This avoids exposing service role keys in the browser.
+Grants are explicit and column-scoped:
 
-### Seed Data
+```sql
+grant select on public.clients to anon, authenticated;
+-- last_active_at is the only column anon can update; the token can never
+-- be overwritten via PostgREST even with a valid policy match.
+grant update (last_active_at) on public.clients to anon, authenticated;
+grant select on public.cards to anon, authenticated;
+grant select, insert, update on public.responses to anon, authenticated;
+grant select, insert on public.uploads to anon, authenticated;
+```
 
-The 19 cards in Section 5 are seed data. Build a `seed.sql` or `seed.ts` file that inserts Renee's client record and all 19 cards on initial deployment.
+Policies (one per table):
+- **clients**: `clients_self_read` (select where token matches), `clients_self_touch` (update where token matches)
+- **cards**: `cards_self_read` (select where `client_id = pulse_request_client_id()`)
+- **responses**: `responses_self_read`, `responses_self_insert`, `responses_self_update`
+- **uploads**: `uploads_self_read`, `uploads_self_insert`
+
+### 6.3 Storage
+
+Bucket `pulse-uploads`, private. File path convention:
+```
+{client_id}/{card_id}/{uuid}-{sanitized-filename}
+```
+
+Storage policies on `storage.objects`:
+- `pulse_uploads_self_read`: select where `(storage.foldername(name))[1] = pulse_request_client_id()::text`
+- `pulse_uploads_self_insert`: same with check
+
+The `x-pulse-token` header propagates from supabase-js's `global.headers` into the storage service's RLS context. Verified during M4: a real upload from the browser landed in storage and inserted the matching `uploads` row, all gated by token.
+
+### 6.4 response_value shapes
+
+| Response type | Shape (when state = 'answered') |
+|---|---|
+| confirm-edit | `{ confirmed: true }` or `{ confirmed: false, correction: string }` |
+| single-select | `{ selected: string, note?: string }` |
+| multi-select | `{ selected: string[], note?: string }` |
+| short-text | `{ text: string }` *(no separate note — the input is the note)* |
+| long-text | `{ text: string }` *(same)* |
+| document-link | `{ url: string, note?: string }` |
+| contact-share | `{ name, email, role, note?: string }` |
+| file-upload | `{ file_ids: uuid[], note?: string }` |
+
+When state = `skipped` and a note was typed, value is `{ note: string }`. Otherwise null.
+
+### 6.5 Seed
+
+`supabase/seed.sql` is idempotent:
+- Renee's client row uses fixed UUID `00000000-0000-0000-0000-000000000001`. `ON CONFLICT (id) DO NOTHING` so the token is generated only on first run and stays stable on re-runs.
+- All 19 cards use `ON CONFLICT (client_id, order_index) DO UPDATE` so re-running picks up wording changes without recreating rows.
+- Attachment paths set in a separate, idempotent block at the end of the seed.
 
 ---
 
@@ -565,250 +337,292 @@ The 19 cards in Section 5 are seed data. Build a `seed.sql` or `seed.ts` file th
 
 ### Architecture
 
-- Single-page application (SPA) using vanilla JavaScript, or a lightweight framework (Svelte or Astro recommended for performance and simplicity)
-- Static build deployed to GitHub Pages
-- All Supabase calls happen client-side via the JavaScript client
-- Token captured from URL on load and stored in `sessionStorage` for the session
-- Mobile-first responsive design, looks great on a phone first, desktop second
+- Astro 5 static site, code-split per page.
+- Two pages:
+  - `src/pages/index.astro` — user-facing app (Renee).
+  - `src/pages/admin.astro` — operator console (Tom).
+- Each page bundles its own JS chunk. The user-facing chunk contains the **anon key only**. The admin chunk contains the **service role key**. Verified against the production build (the JWT signature for the service role key appears in the admin chunk and not the user chunk).
+- Vanilla TypeScript + DOM-string templates. No framework runtime.
+- All state lives in Supabase. No localStorage for app state. SessionStorage is used only for the admin-login flag and the picker's transient unlock state.
 
 ### URL Pattern
 
-`https://pulse.igtms.com/?t={token}`
+```
+https://tomdigati.github.io/pulse/?t={16-hex-char-token}
+```
 
-If `pulse.igtms.com` is not yet pointed at GitHub Pages, fallback URL:
-`https://tomdigati.github.io/pulse/?t={token}`
+Custom domain (`pulse.igtms.com`) is deferred per §14.1. The `base: "/pulse"` Astro config makes the site work under the GitHub Pages subpath.
 
-### App Flow
+### Bootstrap Flow
 
-1. User opens link
-2. App reads `t` parameter from URL
-3. App queries Supabase for the client record matching the token
-4. If found, app loads all cards for that client and any existing responses
-5. App displays the first unanswered card
-6. User taps through cards
-7. Each response auto-saves to Supabase as it is submitted
-8. Progress indicator shows X of Y completed
-9. On the final card, user sees a "Thank you, Tom will follow up" screen
+1. Page loads, runs `src/scripts/app.ts`.
+2. Script reads `?t=` from the URL.
+3. Builds a Supabase client with the anon key plus a `x-pulse-token` header.
+4. Fetches the `clients` row (RLS gates it to the matching token), then in parallel:
+   - All 19 cards for that client
+   - All existing responses
+   - All existing uploads
+5. Computes `bootIndex = firstUnansweredIndex(cards, responses)` — the first card where state is not `answered` or `skipped`. (`viewed` counts as not-answered, so reopening the link returns the user to the card they left.)
+6. Renders that card. If `bootIndex > 0`, also renders the resume banner.
 
 ### Card UI Pattern
 
-Each card is full-screen on mobile. The structure is:
-
 ```
-+--------------------------------+
-|  [Pulse logo]      [3 of 19]   |
-|                                |
-|  Category: Client Review       |
-|                                |
-|  Card Title                    |
-|  ----------------------------  |
-|  Context paragraph here.       |
-|  Two to four sentences.        |
-|  Maximum 60 to 80 words.       |
-|                                |
-|  Question text here?           |
-|                                |
-|  [Response interface]          |
-|                                |
-|  [   Confirm   ]               |
-|  [   Edit      ]               |
-|  [   Skip      ]               |
-+--------------------------------+
++------------------------------------------+
+|  IGTMS · Pulse    [‹]  4 of 19 ▾  [›]    |
+|------------------------------------------|
+|  [optional resume banner]                |
+|                                          |
+|  CATEGORY                                |
+|  Card Title                              |
+|  ─────────────────────────────────────── |
+|  Context paragraph.                      |
+|                                          |
+|  [↗ View Active Reference] (optional)    |
+|                                          |
+|  Question text?                          |
+|                                          |
+|  [Response interface]                    |
+|                                          |
+|  Notes (optional)                        |
+|  [textarea]                              |
+|                                          |
+|  [   Continue / Confirm   ]              |
+|  [   Skip for now         ]              |
++------------------------------------------+
 ```
 
-For confirm-edit cards, the three buttons stack vertically on mobile. Confirm is the primary action (filled green button). Edit is secondary (outlined). Skip is tertiary (text link).
+### 7.1 Navigation Controls *(new in shipped v1)*
 
-### Visual Design
+The topbar shows three controls grouped on the right:
 
-- Background: `#F7F7F7` (light gray) for the page
-- Card surface: `#FFFFFF` with a subtle shadow
-- Card border-radius: 12px
-- Padding inside card: 24px on mobile, 32px on desktop
-- Typography:
-  - Card title: Poppins SemiBold 600, 22px on mobile, 28px on desktop
-  - Category label: Poppins Medium 500, 11px, uppercase, letter-spacing 1px, color `#07926B`
-  - Context: Poppins Regular 400, 15px, line-height 1.6, color `#3B373B`
-  - Question: Poppins SemiBold 600, 17px, color `#3B373B`
-  - Buttons: Poppins SemiBold 600, 16px
-- Primary button: background `#07926B`, white text, border-radius 8px, padding 14px 24px, full width on mobile
-- Secondary button: white background, `#07926B` border 1.5px, `#07926B` text
-- Tertiary link: no background, `#777777` text, underline on hover
+- **Back arrow** (`‹`) — goes to the previous card. Disabled at index 0.
+- **Progress button** (`4 of 19 ▾`) — clickable to open the slide picker.
+- **Forward arrow** (`›`) — goes to the next card. Disabled at index 19.
 
-### Save and Resume
+The user can also progress through the deck via Confirm / Continue / Skip buttons (which save their response, then advance).
 
-- Every response is saved to Supabase the moment the user submits it
-- On page load, the app fetches the user's existing responses and skips ahead to the first unanswered card
-- A "Resume where you left off" message shows briefly on return visits
-- A small progress indicator (e.g. "3 of 19" or "16% complete") is visible at the top
+**Slide picker** is a modal overlay listing all 19 cards with their state (Answered, Skipped, Viewed, Not viewed). Tap a row to jump directly. Esc and backdrop-tap dismiss. The current card is highlighted in green.
 
-### File Upload UX
+### 7.2 Pre-fill on Revisit *(new in shipped v1)*
 
-- User taps the upload area (large dashed border, 120px tall, says "Tap to upload or paste link")
-- Native file picker opens on mobile (iOS will show camera, photos, files options)
-- File uploads stream to Supabase storage with a progress bar
-- After upload, file appears as a chip with name and size, with an X to remove
-- Up to 5 files per card
-- Max 25MB per file
+Navigating back to an already-answered card pre-loads the form so the user can refine instead of restart:
+- multi-select / single-select chips: prior selections highlighted via `seedDraftFromResponse` on each navigation
+- short-text / long-text / document-link: input value pre-filled from `response_value`
+- contact-share: all three fields pre-filled
+- confirm-edit's edit textarea: pre-filled with the prior `correction` if edits were sent before
 
-### Empty States and Errors
+Above the input, a small green strip ("prior-hint") explains the loaded state:
+- "You confirmed this earlier."
+- "You sent edits earlier."
+- "You skipped this earlier. Answer if you want to revisit."
+- "Your previous answer is loaded. Edit and resubmit to update it."
 
-- If the URL has no token: show "This link is missing a code. Please check the link your consultant sent you."
-- If the token is invalid: show "We could not find your engagement. Please check the link or contact Tom."
-- If the network fails on save: show a banner "Could not save just now. We will retry automatically." Retry every 10 seconds until success.
-- If the user closes the app mid-card without submitting: state is `viewed` and they can pick up there next time.
+Re-submission upserts the same `(card_id, client_id)` row.
+
+### 7.3 Active Reference Modal *(new in shipped v1)*
+
+If a card has `attachment_path` set, the card renders a "View Active Reference" button between context and question. Tapping it opens a modal with a sandboxed iframe loading `{BASE_URL}{attachment_path}`. Sandbox is `allow-scripts` so interactive deliverables work; same-origin is denied, so iframe content can't reach the parent.
+
+Files live in `pulse/public/deliverables/`. They deploy via the standard GitHub Actions build — drop a new file in the directory, commit, push, and reference it via the admin's Edit form.
+
+Modal closes on:
+- The X in the panel header
+- Tap on the dim backdrop
+- Esc key
+
+### 7.4 Save and Resume
+
+- Every response is saved on submit.
+- Re-saves upsert on `(card_id, client_id)`. `viewed_at` is preserved through the upsert so the admin can see when the card was first opened separately from when it was answered.
+- After save, `last_active_at` is updated on the client row (best-effort, fire-and-forget).
+- On boot, `firstUnansweredIndex` returns the user to where they left.
+- Resume banner ("Welcome back. Picking up where you left off.") shows whenever `bootIndex > 0`. It dismisses on the first save or advance.
+
+> **Changed from v1.0**: The brief called for a time-based banner fade. We dismiss on first interaction instead — cleaner UX and more reliable than a setTimeout (which had quirky behavior in dev mode).
+
+### 7.5 File Upload UX
+
+- Tap the green dropzone → native iOS picker (Camera, Photos, Files).
+- File streams to Supabase Storage with a pending chip showing percent / error state.
+- After successful upload, an `uploads` row is inserted and the file appears as a chip with name, size, and an X to remove.
+- Up to 5 files per card. Max 25MB per file. Both limits surface in the dropzone label.
+- Continue is enabled when there's at least one file OR a non-empty note.
+
+### 7.6 Empty States and Errors
+
+- Missing token: "This link is missing a code. Please check the link your consultant sent you."
+- Invalid token: "We could not find your engagement. Please check the link or contact Tom."
+- Network failure on save: amber banner reading "Could not save just now. We will retry automatically." Plus a manual Retry button. The app retries the same action every 10 seconds until success (per spec §7); manual Retry cancels the timer and retries immediately.
+
+### 7.7 Polish Notes
+
+- Tap targets ≥44px throughout (per Apple HIG)
+- Safe-area insets on `.page` padding so iPhone notch / home indicator don't crowd content
+- `min-height: 100dvh` for iOS Safari's dynamic viewport
+- Card / error / banner enter with a 0.3s fade + 6px translateY; loading state pulses subtly. All respect `prefers-reduced-motion`
+- Focus rings via `:focus-visible` on every interactive element (visible on keyboard, not on mouse/touch)
 
 ---
 
 ## 8. Tom's Admin View
 
-A separate page at `/admin` that requires a password (set via environment variable). It shows:
+Lives at `/admin/` (e.g. `https://tomdigati.github.io/pulse/admin/`). Desktop only (per Tom's preference; not mobile-optimized). Password-gated. After login, two views:
 
-### Engagement List
-A simple table:
-- Client name
-- Org name
-- Engagement name
-- Cards completed / total
-- Last active timestamp
-- Action buttons: View Responses, Copy Link, Rotate Token
+### 8.1 Login
 
-### Response Detail View
-For a selected client, show all cards in order with:
-- Card title and category
-- The user's response (formatted appropriately for the response type)
-- Timestamp of response
-- Any uploaded files (with download links)
-- Skipped cards clearly marked
+Single password field. Input → SHA-256 → compare to `PUBLIC_ADMIN_PASSWORD_HASH` (inlined into the admin chunk at build time). On match, `sessionStorage` flag set; tab close ends the session.
 
-### Export Format
-A "Copy as Markdown" button that produces a clipboard-ready markdown summary of all responses, formatted to paste directly into a ClickUp comment or doc.
+### 8.2 Engagement List
 
-### Admin Authentication
-For v1, a single shared password for Tom is sufficient. Stored as `ADMIN_PASSWORD` in environment variables. Validated client-side against a hash stored in the build, OR validated via a Supabase edge function. The simpler v1 approach is fine.
+Table with one row per client:
+
+| Client | Engagement | Progress | Last active | Actions |
+|---|---|---|---|---|
+| Renee Mueller<br>Vrly Media / GLC | GLC Engagement v1 | 4 / 19 | 2 hours ago | View · Copy link · Rotate token |
+
+- **Progress** = `count(answered) + count(skipped) / total`, rendered as a green pill.
+- **Last active** uses the operator's local timezone via `Intl.DateTimeFormat`. Relative format under 24h ("2 hours ago"); absolute with timezone for older.
+- **Copy link** writes the production URL with the current token to the clipboard.
+- **Rotate token** generates a fresh 16-hex-char token, PATCHes the row, copies the new URL. The old URL stops working immediately.
+
+### 8.3 Response Detail
+
+For a selected client, all 19 cards in order. Each card row shows:
+- Card number and category
+- Title
+- State badge (Answered green, Skipped amber, Viewed gray, Not viewed gray)
+- Formatted response body
+- Suggested ClickUp status dropdown (per §14.3 mapping, override-able)
+- Timestamp ("Answered 5 minutes ago" or "Viewed 2 hours ago")
+- **Edit button** *(new in shipped v1)* and **Copy** button
+
+### 8.4 Card Editing *(new in shipped v1)*
+
+Tapping Edit on any row swaps the read-only header for an inline form:
+
+- Title
+- Category
+- Context (textarea)
+- Question (textarea)
+- Options (one per line, only for select types)
+- Active reference path (e.g. `deliverables/example.html`, optional)
+- Skip allowed toggle
+
+Save PATCHes the `cards` row (service role bypasses RLS), updates the local cards array, and re-renders just that article. Cancel reverts. A toast confirms each save.
+
+Existing responses are tied to `card_id`, not card text, so prior answers remain valid after edits.
+
+### 8.5 ClickUp Markdown Export
+
+Per spec §14.3 format. Two paths:
+- **Per-card Copy** button on each row — copies a single card's block.
+- **Copy all as Markdown** at the top — concatenates all 19 blocks separated by `---`.
+
+File-upload responses include 7-day signed URLs in the markdown (long enough for the link to stay good in ClickUp).
 
 ---
 
-## 9. Tech Stack and Tools
+## 9. Tech Stack
 
-### Required
-- **Frontend framework:** Vanilla JavaScript or Astro (recommended for static-first builds with islands of interactivity). Svelte or React are also acceptable if the engineer prefers.
-- **Database and storage:** Supabase (free tier is sufficient for v1)
-- **Hosting:** GitHub Pages
-- **Domain:** `pulse.igtms.com` (DNS to be configured separately, fallback to `tomdigati.github.io/pulse/` for v1)
-- **Build tooling:** Whatever the framework requires, Vite for Astro/Svelte, etc.
-- **Package manager:** npm or pnpm
+| | |
+|---|---|
+| Frontend | Astro 5, vanilla TypeScript, no framework runtime |
+| Database | Supabase Postgres |
+| Storage | Supabase Storage (private bucket `pulse-uploads`) |
+| Hosting | GitHub Pages |
+| CI/CD | GitHub Actions (`actions/deploy-pages@v4`) |
+| Build | `npm run build` (Vite under Astro) |
+| Package manager | npm |
+| Domain | `tomdigati.github.io/pulse/` (custom domain deferred) |
+
+### Dependencies
+
+- `@supabase/supabase-js` (browser)
+- `pg` (devDep, used by `scripts/apply-sql.mjs` for one-off SQL applies)
 
 ### Environment Variables
-- `SUPABASE_URL`, Supabase project URL
-- `SUPABASE_ANON_KEY`, Supabase anon public key
-- `ADMIN_PASSWORD`, password for Tom's admin view (or hash thereof)
 
-### Dependencies (suggested)
-- `@supabase/supabase-js`, Supabase client
-- A markdown export library if needed (or write a small one inline)
+Build-time:
+- `PUBLIC_SUPABASE_URL`
+- `PUBLIC_SUPABASE_ANON_KEY` — inlined into both pages
+- `PUBLIC_SUPABASE_SERVICE_ROLE_KEY` — inlined into the **admin chunk only**
+- `PUBLIC_ADMIN_PASSWORD_HASH` — SHA-256 hex of the admin password
+
+Local-only (never inlined):
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — used by `scripts/verify.mjs` and `scripts/apply-sql.mjs`
 
 ### What NOT to Use
-- No backend server, all logic is client-side or Supabase edge functions
-- No authentication library (Auth0, Firebase Auth, etc.), token-in-URL is the auth model
-- No analytics SDKs in v1, privacy first
-- No third-party UI component libraries, use vanilla CSS or Tailwind if preferred
+
+- No backend server. Everything is client-side or Supabase edge functions (none defined yet).
+- No third-party auth library. Token-in-URL is the auth model.
+- No analytics SDKs.
+- No third-party UI component libraries. Vanilla CSS.
 
 ---
 
 ## 10. Deployment Plan
 
-### Initial Setup
+### Initial Setup (one-time, completed)
 
-1. Clone `tomdigati/pulse` locally
-2. Initialize the project structure (frontend, package.json, README)
-3. Create a Supabase project named "pulse-prod" (or "pulse-dev" first if preferred)
-4. Run the schema SQL to create tables
-5. Run the seed SQL to populate Renee's cards
-6. Add Supabase URL and anon key to `.env.local` and to GitHub repo secrets
-7. Build the frontend to a `dist/` folder
-8. Configure GitHub Pages to deploy from a `gh-pages` branch or from `/dist`
-9. Set up GitHub Actions to build and deploy on push to `main`
+1. Astro scaffold under `pulse/` with `base: "/pulse"`.
+2. Supabase project `yhphmutbquhgikqjypch` created.
+3. Schema applied via `scripts/apply-sql.mjs` (uses a direct Postgres connection with `pg`).
+4. Seed applied (creates Renee + 19 cards + a test client).
+5. Repo secrets set via `gh secret set`:
+   - `PUBLIC_SUPABASE_URL`
+   - `PUBLIC_SUPABASE_ANON_KEY`
+   - `PUBLIC_SUPABASE_SERVICE_ROLE_KEY`
+   - `PUBLIC_ADMIN_PASSWORD_HASH`
+6. GitHub Pages enabled with `build_type: workflow` via `gh api repos/.../pages -X POST`.
+7. `.github/workflows/deploy.yml` builds on push to `main` and on `workflow_dispatch`.
 
-### Custom Domain (Optional, Post-v1)
+### Iteration Loop
 
-1. In GitHub Pages settings, add `pulse.igtms.com` as the custom domain
-2. In the IGTMS DNS provider, add a CNAME record pointing `pulse.igtms.com` to `tomdigati.github.io`
-3. Wait for DNS propagation
-4. Confirm HTTPS is enabled
+1. Edit code locally.
+2. Branch + commit + `git push`.
+3. Open PR via `gh pr create`.
+4. Merge → workflow runs → production updates in ~30 seconds.
+
+### Adding a New HTML Deliverable
+
+1. Drop the file in `pulse/public/deliverables/<slug>.html`.
+2. `git add public/deliverables/<slug>.html && git commit -m "Add <slug> deliverable" && git push`.
+3. Wire it to a card via the admin Edit feature (Active reference path = `deliverables/<slug>.html`).
 
 ### Renee's Onboarding
 
-1. Generate Renee's record in the database with a unique token
-2. Construct her URL: `https://pulse.igtms.com/?t={token}`
-3. Tom sends the URL via text message with a short framing note
-4. Renee opens the link, taps through cards over multiple sessions
-5. Tom monitors the admin view as responses come in
-6. Tom exports responses to ClickUp using the "Copy as Markdown" button
+1. Tom resets responses if needed (via `scripts/apply-sql.mjs` or admin).
+2. Tom copies Renee's URL from the admin (Copy link button).
+3. Tom sends via SMS with a short framing note.
+4. Renee opens, taps through cards over multiple sessions.
+5. Tom monitors the admin as responses come in.
+6. Tom exports responses to ClickUp using the markdown buttons.
 
 ---
 
-## 11. Implementation Order
+## 11. Implementation Order (as shipped)
 
-Follow this sequence. Do not skip ahead. Confirm each milestone before moving to the next.
+The original v1.0 brief defined Milestones 1–9. Everything 1–8 shipped. Milestone 9 ("send to Renee") is the operational handoff and not a code change. Several post-M8 polish PRs followed once Tom started testing.
 
-### Milestone 1: Project Initialization
-- Initialize the framework (Astro recommended)
-- Set up the Supabase project
-- Run the database schema
-- Insert seed data for Renee's client record and all 19 cards
-- Confirm: I can query Supabase and see the cards.
+### Shipped Milestones
 
-### Milestone 2: Token Authentication and Card Loading
-- Build the token capture from URL
-- Build the Supabase client and fetch the client record by token
-- Fetch all cards for that client and any existing responses
-- Display card 1 as a static page (no interactivity yet)
-- Confirm: opening the URL with a valid token shows card 1 with the correct content.
-
-### Milestone 3: Card Interaction and Response Saving
-- Implement the confirm-edit response type fully
-- Save responses to Supabase on submit
-- Move to the next card on submit
-- Show progress indicator
-- Confirm: I can tap through 5 cards and see responses in the Supabase responses table.
-
-### Milestone 4: All Response Types
-- Implement single-select, multi-select, short-text, long-text, document-link, contact-share
-- Implement file-upload with Supabase storage integration
-- Confirm: every response type works on mobile and desktop, and uploads land in Supabase storage.
-
-### Milestone 5: Save and Resume Flow
-- On page load, skip ahead to the first unanswered card
-- Show resume message
-- Persist progress across sessions and devices
-- Confirm: I can close the browser at card 5 and return on a different device to card 5.
-
-### Milestone 6: IGTMS Brand Polish
-- Apply full IGTMS brand system (Poppins, color palette, spacing, button styles)
-- Mobile-first layout polish
-- Tap-target sizing (minimum 44px)
-- Smooth transitions between cards
-- Empty states and error states
-- Confirm: the app feels like a finished IGTMS product on a phone.
-
-### Milestone 7: Admin View
-- Build `/admin` route with password gate
-- Engagement list table
-- Response detail view per client
-- "Copy as Markdown" export button
-- Confirm: I can log into admin, see Renee's responses, and copy them to ClickUp format.
-
-### Milestone 8: Production Deployment
-- Configure GitHub Actions for auto-build and deploy
-- Generate Renee's production token
-- Construct her URL
-- Test the full flow end-to-end on a real phone with the production link
-- Confirm: Renee's URL works and saves responses to production Supabase.
-
-### Milestone 9: Send to Renee
-- Tom sends the URL with a short text
-- Monitor responses as they arrive
-- Iterate on cards based on Renee's actual usage
+| # | What | PR |
+|---|---|---|
+| M1 | Astro scaffold + Supabase schema/seed/verify | #1 |
+| M2 | Token-header RLS + URL auth + render Card 1 | #1 |
+| M3 | Confirm/Edit/Skip + response upserts + retry banner | #1 |
+| M4 | All response types + Active Reference modal + file upload | #1 |
+| M5 | Save and resume + viewed-state + resume banner | #1 |
+| M6 | Brand polish, tap targets, transitions, focus rings, auto-retry | #1 |
+| M7 | `/admin` with password gate + ClickUp markdown export | #1 |
+| M8 | GitHub Actions deploy + first production deploy | #1 |
+| Post-M8 | Back/forward navigation + slide picker | #2 |
+| Post-M8 | Notes textarea on every card + Card 13 Jeff removal | #3 |
+| Post-M8 | Drop redundant notes on open-text cards | #4 |
+| Post-M8 | Inline card editing in admin | #5 |
+| Post-M8 | Shorter 16-char tokens | #6 |
+| Post-M8 | ICP deliverable wired to Card 3 | #7 |
 
 ---
 
@@ -816,67 +630,58 @@ Follow this sequence. Do not skip ahead. Confirm each milestone before moving to
 
 Pulse v1 is successful if all of the following are true:
 
-1. Renee opens her link on her phone in under 5 seconds
-2. She taps through at least 10 cards in a single session of under 5 minutes
-3. She returns to the app at least once and resumes where she left off
-4. She uploads at least one document successfully from her phone
-5. Her responses are visible to Tom in the admin view in real time
-6. Tom exports her responses to ClickUp using the markdown export
-7. Renee gives positive feedback on the experience (verbatim or implicit)
-8. The product feels like an IGTMS product, not a generic survey tool
+1. Renee opens her link on her phone in under 5 seconds. ✓
+2. She taps through at least 10 cards in a single session of under 5 minutes.
+3. She returns to the app at least once and resumes where she left off. ✓ (resume flow shipped)
+4. She uploads at least one document successfully from her phone. ✓ (file-upload verified)
+5. Her responses are visible to Tom in the admin view in real time. ✓
+6. Tom exports her responses to ClickUp using the markdown export. ✓
+7. Renee gives positive feedback on the experience.
+8. The product feels like an IGTMS product, not a generic survey tool. ✓
 
-If all eight criteria are met, Pulse v1 ships and the platform is validated. From there, additional clients can be onboarded by creating new client records and unique tokens.
+Items 2, 3, 7 require Renee actually using the app and are validated post-send.
 
 ---
 
 ## 13. Future Enhancements (Out of Scope for v1)
 
-These are noted for context but are explicitly not part of the v1 build:
+Not in v1, noted for context:
 
-- Card creation and editing through the admin UI (v1 cards are seeded in code)
-- Multi-engagement support per client (v1 is one engagement per token)
-- Email or SMS notifications when responses are submitted
+- Move admin queries behind a Supabase edge function so the service role key isn't in the bundle (current security caveat for admin URL discovery)
+- Custom domain `pulse.igtms.com` (DNS not configured)
+- Card creation through admin UI (cards are seeded; admin can edit but not create)
+- Per-client password gate (current model: URL token alone is the credential)
+- Multi-engagement support per client
+- Email or SMS notifications on submit
 - Collaborative responses (multiple stakeholders per client)
-- Conditional card logic (if X then Y)
-- Analytics and engagement metrics
-- White-labeling for other consultants beyond IGTMS
-- Custom branding per engagement
-
-These will be considered after v1 ships and Pulse is validated with Renee.
+- Conditional card logic
+- Analytics
+- White-labeling for other consultants
 
 ---
 
 ## 14. Configuration Decisions (Locked)
 
-These decisions are confirmed by Tom and locked for v1. Implement against these specifications.
-
 ### 14.1 Production URL
-
-For v1, the production URL is the GitHub Pages default:
 
 ```
 https://tomdigati.github.io/pulse/
 ```
 
-Custom domain (`pulse.igtms.com`) is deferred to a future phase. No domain purchase or DNS configuration is needed for v1.
-
-The application must work correctly under the GitHub Pages URL pattern, including any subpath routing required by Pages defaults.
+Custom domain deferred. App's Astro config has `base: "/pulse"` and `site: "https://tomdigati.github.io"` to match.
 
 ### 14.2 Admin Authentication
 
-The admin view uses a single shared password stored as the `ADMIN_PASSWORD` environment variable. No multi-user auth, no Supabase auth users, no password reset flow. Tom is the only operator in v1.
+Single shared password. Hash stored as `PUBLIC_ADMIN_PASSWORD_HASH` (SHA-256 hex). Inlined at build into the admin chunk only. Login flag in `sessionStorage`; tab close ends the session.
 
-Implementation pattern:
-
-- Password (or hash thereof) committed in build-time environment config
-- Single `/admin` login screen with password field only
-- On successful login, set a session flag in `sessionStorage`
-- Session expires when the browser tab closes
-- No "remember me" or persistent sessions in v1
+To rotate:
+```bash
+echo -n "<new-password>" | shasum -a 256
+gh secret set PUBLIC_ADMIN_PASSWORD_HASH --repo tomdigati/pulse --body "<new-hash>"
+gh workflow run deploy.yml --repo tomdigati/pulse --ref main
+```
 
 ### 14.3 ClickUp Export Format
-
-The "Copy as Markdown" button on a client's response detail view should produce a clipboard-ready markdown block formatted to update an existing ClickUp task description. The export format is:
 
 ```
 # {Card Title}
@@ -884,89 +689,76 @@ The "Copy as Markdown" button on a client's response detail view should produce 
 **Status:** {recommended_status}
 
 ## Response from {Client Name}
-{Renee's response in plain markdown body text}
+{response body, with Note: suffix if a note was provided}
 
 ## Original Context
-{The card's original context paragraph}
+{the card's context}
 
 ## Original Question
-{The card's original question}
+{the card's question}
 
 ---
 ```
 
-One block per card, separated by `---` rules. Each block uses H1 for the card title, H2 for the response and reference sections, and plain body for the response content.
+One block per card. The "Copy all" button concatenates with `---` rules between.
 
-The recommended status is selected automatically based on response state and content:
+**Recommended status** is auto-suggested per the table below. Tom can override per-card via a dropdown before copying.
 
-| Response Pattern | Recommended Status |
+| Response pattern | Status |
 |---|---|
-| User confirmed without edit | `IGTMS Review` |
-| User edited the existing content | `IGTMS Review` |
-| User uploaded a file | `IGTMS Review` |
-| User skipped a card | `Waiting on Good Life` |
-| User said they need help (single-select option) | `Needs Attention` |
-| User indicated a blocker | `Blocked` |
-| Card has not been viewed yet | `Waiting on Good Life` |
-| User selected "Done" or "Approved" option | `Approved` |
-| User indicated all items in scope are complete | `Complete` |
+| Confirmed without edit | IGTMS Review |
+| Edited the existing content | IGTMS Review |
+| Uploaded a file | IGTMS Review |
+| Skipped a card | Waiting on Good Life |
+| Said they need help (regex on "need help") | Needs Attention |
+| Indicated a blocker (regex on "blocked", "stuck", "waiting on") | Blocked |
+| Card not yet viewed | Waiting on Good Life |
+| Selected "Done" or "Approved" or "Complete" | Approved |
+| Empty file-upload, empty multi-select | Waiting on Good Life |
 
-The full set of valid status values for the export:
-
-- `Waiting on IGTMS`
-- `Waiting on Good Life`
-- `Needs Attention`
-- `IGTMS Review`
-- `Client Review`
-- `Blocked`
-- `Approved`
-- `Complete`
-
-The admin view should also allow Tom to override the recommended status from a dropdown before copying, in case the automatic suggestion is wrong for a specific response.
+Valid status values:
+`Waiting on IGTMS`, `Waiting on Good Life`, `Needs Attention`, `IGTMS Review`, `Client Review`, `Blocked`, `Approved`, `Complete`.
 
 ### 14.4 Timestamps
 
-All timestamps shown in the admin view are displayed in Tom's local timezone. The application detects the operator's timezone from the browser using `Intl.DateTimeFormat().resolvedOptions().timeZone` and formats accordingly.
-
-Stored timestamps in Supabase remain in UTC. Conversion happens at display time, not at storage time.
-
-Timestamp format in the admin view:
-
-```
-April 23, 2026 at 4:15 PM CDT
-```
-
-Or relative format for recent activity:
-
-```
-2 hours ago
-```
-
-Use the relative format for anything within the last 24 hours, and the absolute format with timezone for anything older.
+Display in operator's local timezone via `Intl.DateTimeFormat`. Relative format under 24h ("2 hours ago"); absolute with timezone for older ("April 23, 2026 at 4:15 PM CDT"). Stored in UTC; conversion at display time.
 
 ### 14.5 Production Deployment SLA
 
-There is no formal SLA. Tom owns the entire product end to end. Deployment happens when Tom is satisfied with the build. No external timeline pressure exists.
-
-This is an in-house tool for IGTMS use. No customer commitments, no uptime guarantees, no support agreements. If the app breaks, Tom fixes it on his own schedule.
+No formal SLA. Tom owns the entire stack. Deploys when Tom is satisfied. No customer commitments, no uptime guarantees.
 
 ### 14.6 Hosting and Infrastructure Ownership
 
-Tom owns the entire stack:
-
-- GitHub repository: `tomdigati/pulse` (personal)
-- Supabase project: created and owned by Tom
-- GitHub Pages: deployed from Tom's repository
-- Domain: not configured for v1, will use GitHub Pages default URL
+- GitHub repository: `tomdigati/pulse`
+- Supabase project: `yhphmutbquhgikqjypch`
+- GitHub Pages: enabled with Actions source
+- Domain: GitHub Pages default
 
 No third-party dependencies on Axiolo infrastructure for hosting. Axiolo's role is engineering capability where needed, not ownership of the deployed product.
+
+### 14.7 Token Format *(new in shipped v1)*
+
+16 hex chars, generated via `encode(gen_random_bytes(8), 'hex')` in SQL or `crypto.getRandomValues(new Uint8Array(8))` in the admin's rotate flow. 64 bits of entropy.
+
+### 14.8 Bundle Isolation *(new in shipped v1)*
+
+Astro splits per page. Verified against the production build:
+
+| Bundle | Anon key | Service role key | Admin password hash |
+|---|---|---|---|
+| User-facing (`/`) | yes | **no** | **no** |
+| Admin (`/admin/`) | yes | yes | yes |
+
+The user-facing chunk cannot be used to read other clients' data; the anon key + RLS gate it to the matching token. Anyone who fetches the admin chunk can extract the service role key and password hash — that's an accepted v1 caveat (single operator, internal use). Pre-public hardening is to move admin queries behind an edge function (see §13).
+
+### 14.9 HMR in Dev *(new in shipped v1)*
+
+Both `app.ts` and `admin.ts` call `import.meta.hot.decline()` so any code change forces a full page reload in dev. This prevents stale module instances from accumulating button listeners on the same DOM during iteration. Production builds don't include the HMR client.
 
 ---
 
 ## End of Specification
 
-This document is the source of truth for Pulse v1. Update this file as decisions evolve. All implementation should reference this specification.
-
-For questions, contact Tom DiGati directly.
+This document is the source of truth for Pulse v1 as deployed. Update it as decisions evolve.
 
 *Pulse by IGTMS. Decisions, not paperwork.*
