@@ -141,7 +141,7 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
 
   const body =
     mode === "edit" && card.response_type === "confirm-edit"
-      ? renderEditBody(card, args.existingResponse)
+      ? renderEditBody(card)
       : renderViewBody(card, mode, args);
 
   const attachmentBtn = card.attachment_path
@@ -585,14 +585,11 @@ function renderActions(
   }
 }
 
-function renderEditBody(card: Card, prior?: ClientResponse): string {
+function renderEditBody(card: Card): string {
+  // Textarea opens blank. We deliberately do not pre-fill from default_value
+  // or any prior correction — operators don't want prompted content nudging
+  // the client toward a specific phrasing.
   const placeholder = "What should we update? A short note is fine.";
-  const v = (prior?.response_value ?? {}) as { correction?: string; confirmed?: boolean };
-  // If they previously sent edits, load those so they can refine instead of
-  // rewriting from scratch. Otherwise fall back to the card's default text.
-  const priorCorrection =
-    prior?.state === "answered" && v.confirmed === false ? v.correction ?? "" : "";
-  const prefill = priorCorrection || (card.default_value ?? "");
   return `
     <p class="question">${escape(card.question)}</p>
     <textarea
@@ -601,7 +598,7 @@ function renderEditBody(card: Card, prior?: ClientResponse): string {
       rows="5"
       placeholder="${escape(placeholder)}"
       autofocus
-    >${escape(prefill)}</textarea>
+    ></textarea>
     <div class="actions">
       <button class="btn btn-primary" type="button" data-action="edit-submit">Save changes</button>
       <button class="btn btn-tertiary" type="button" data-action="edit-cancel">Cancel</button>
