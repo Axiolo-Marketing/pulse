@@ -17,9 +17,19 @@ create table if not exists public.clients (
   org_name         text,
   engagement_name  text,
   token            text not null unique,
+  -- Markdown brief: profile, deck sketch, ops log, handoff notes.
+  -- Edited from /admin/, optionally copied as markdown to share.
+  brief            text,
   created_at       timestamptz not null default now(),
   last_active_at   timestamptz
 );
+
+-- Backfill for projects predating the brief column.
+alter table public.clients
+  add column if not exists brief text;
+
+-- brief is admin-only. Service role bypasses RLS, so no anon grant
+-- needed; anon's column-scoped UPDATE remains limited to last_active_at.
 
 create table if not exists public.cards (
   id             uuid primary key default gen_random_uuid(),

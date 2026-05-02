@@ -212,7 +212,7 @@ async function loadEngagements(
 ): Promise<EngagementSummary[]> {
   const { data: clients, error } = await supabase
     .from("clients")
-    .select("id, name, org_name, engagement_name, token, created_at, last_active_at")
+    .select("id, name, org_name, engagement_name, token, brief, created_at, last_active_at")
     .order("created_at", { ascending: false });
   if (error || !clients) {
     console.error("load clients:", error);
@@ -495,7 +495,7 @@ async function loadDetail(
 ): Promise<DetailData | null> {
   const { data: client, error: clientErr } = await supabase
     .from("clients")
-    .select("id, name, org_name, engagement_name, token, created_at, last_active_at")
+    .select("id, name, org_name, engagement_name, token, brief, created_at, last_active_at")
     .eq("id", clientId)
     .single<Client>();
   if (clientErr || !client) return null;
@@ -573,6 +573,7 @@ function renderDetail(
         <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
       </div>
     </section>
+    <section id="brief-slot">${renderBriefView(client)}</section>
     <div id="cards-list">${cardsHtml}</div>
     <div id="add-card-slot">
       <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
@@ -607,6 +608,67 @@ function renderDetail(
         btn.disabled = false;
       }
     });
+
+  // ── Brief (engagement narrative) ─────────────────────────────────────
+  const briefSlot = container.querySelector<HTMLElement>("#brief-slot")!;
+
+  const showBriefView = (): void => {
+    briefSlot.innerHTML = renderBriefView(client);
+    briefSlot
+      .querySelector<HTMLButtonElement>("[data-action='brief-edit']")
+      ?.addEventListener("click", showBriefEdit);
+    briefSlot
+      .querySelector<HTMLButtonElement>("[data-action='brief-add']")
+      ?.addEventListener("click", showBriefEdit);
+    briefSlot
+      .querySelector<HTMLButtonElement>("[data-action='brief-copy']")
+      ?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget as HTMLButtonElement;
+        await navigator.clipboard.writeText(client.brief ?? "");
+        flashCopied(btn, "Copied!");
+        toast("Brief copied as Markdown");
+      });
+  };
+
+  const showBriefEdit = (): void => {
+    briefSlot.innerHTML = renderBriefEdit(client);
+    const ta = briefSlot.querySelector<HTMLTextAreaElement>("#brief-textarea")!;
+    ta.focus();
+    ta.setSelectionRange(0, 0);
+
+    briefSlot
+      .querySelector<HTMLButtonElement>("[data-action='brief-cancel']")
+      ?.addEventListener("click", showBriefView);
+
+    briefSlot
+      .querySelector<HTMLButtonElement>("[data-action='brief-save']")
+      ?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget as HTMLButtonElement;
+        const next = ta.value;
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.textContent = "Saving...";
+        try {
+          const { error } = await supabase
+            .from("clients")
+            .update({ brief: next || null })
+            .eq("id", client.id);
+          if (error) {
+            console.error("brief save:", error);
+            toast("Could not save brief");
+            return;
+          }
+          client.brief = next || null;
+          toast("Brief saved");
+          showBriefView();
+        } finally {
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
+      });
+  };
+
+  showBriefView(); // attach initial handlers (the HTML was rendered inline above)
 
   // Per-card handlers. Re-bound after each card-level re-render via
   // attachCardHandlers so edit/save/cancel keep working after a swap.
@@ -958,6 +1020,127 @@ function renderAddCardForm(): string {
         <button class="btn-ghost-sm" type="button" data-action="add-card-cancel">Cancel</button>
       </div>
     </article>
+  `;
+}
+
+// ── Brief (engagement narrative) ───────────────────────────────────────
+
+const BRIEF_TEMPLATE = `# <Client name> · <Engagement name>
+
+**Status:** Drafting / Active / Complete / Paused
+**URL:** *(pulled from Copy link above)*
+**Sent:** *(date)*
+**Cards:** *(N)*
+
+---
+
+## 1. Client profile
+
+**Name:** <full name>
+**Role and org:**
+**How we met:**
+
+### Behavioral profile
+- Mobile-first or desktop-first?
+- Tappable, willing to type, voice-friendly?
+- Time-starved? Specific time windows when they're reachable?
+- Numbers-comfortable, or does dyscalculia / number anxiety apply?
+- Communication style: direct? layered?
+- Any other quirks: language, time zone, vision, attention rhythms.
+
+### Representative quote
+> *(a real message or transcript snippet so anyone reading can hear them)*
+
+### What this means for the deck
+- Card order
+- Tone (which words to use, which to avoid)
+- Response types to favor
+- Skip policy
+
+---
+
+## 2. Engagement context
+
+What this engagement is trying to validate, unblock, or align.
+
+- Source material (transcripts, business plans, prior work)
+- Open items
+- Decisions we're trying to surface
+
+---
+
+## 3. The card deck
+
+| # | Title | Type | Skip |
+|---|---|---|---|
+| 1 | … | confirm-edit | required |
+
+---
+
+## 4. Active References
+
+Any HTML deliverables for this engagement. Drop files in \`public/deliverables/\` and wire them via the Edit form on each card.
+
+---
+
+## 5. Operations log
+
+- **YYYY-MM-DD** — sent the link, …
+
+---
+
+## 6. Handoff
+
+- [ ] All required cards answered
+- [ ] Responses exported to ClickUp
+- [ ] Token rotated or revoked if access should end
+`;
+
+function renderBriefView(client: Client): string {
+  const hasBrief = !!(client.brief && client.brief.trim().length > 0);
+  if (!hasBrief) {
+    return `
+      <div class="brief-card brief-empty">
+        <div class="brief-head">
+          <span class="brief-label">Engagement brief</span>
+          <button class="btn-primary-sm" type="button" data-action="brief-add">+ Write brief</button>
+        </div>
+        <p class="brief-empty-body">
+          A one-page narrative for this engagement: who the client is, how they move,
+          what we're validating. Editable here, copyable as Markdown to share.
+        </p>
+      </div>
+    `;
+  }
+  return `
+    <div class="brief-card">
+      <div class="brief-head">
+        <span class="brief-label">Engagement brief</span>
+        <div class="brief-actions">
+          <button class="btn-ghost-sm" type="button" data-action="brief-copy">Copy as Markdown</button>
+          <button class="btn-ghost-sm" type="button" data-action="brief-edit">Edit</button>
+        </div>
+      </div>
+      <pre class="brief-body">${escape(client.brief ?? "")}</pre>
+    </div>
+  `;
+}
+
+function renderBriefEdit(client: Client): string {
+  const value = client.brief && client.brief.trim().length > 0
+    ? client.brief
+    : BRIEF_TEMPLATE;
+  return `
+    <div class="brief-card brief-editing">
+      <div class="brief-head">
+        <span class="brief-label">Editing engagement brief</span>
+        <div class="brief-actions">
+          <button class="btn-primary-sm" type="button" data-action="brief-save">Save brief</button>
+          <button class="btn-ghost-sm" type="button" data-action="brief-cancel">Cancel</button>
+        </div>
+      </div>
+      <textarea id="brief-textarea" class="brief-textarea" rows="22">${escape(value)}</textarea>
+    </div>
   `;
 }
 
