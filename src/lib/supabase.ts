@@ -49,6 +49,7 @@ export interface Client {
   org_name: string | null;
   engagement_name: string | null;
   token: string;
+  brief: string | null;
   created_at: string;
   last_active_at: string | null;
 }

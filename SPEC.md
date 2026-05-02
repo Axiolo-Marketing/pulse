@@ -11,7 +11,7 @@
 
 This is the product specification for Pulse. It describes how Pulse works, what it offers, and how Tom uses it to onboard a client. It is **not** about any specific engagement — it should apply equally to engagement #1 and engagement #50.
 
-Each individual engagement (Renee Mueller, Josh Rosen, future clients) has its own brief in `engagements/<slug>.md`. That's where client-specific behavioral notes, the actual card deck, the live URL, and engagement status live. Use the template at `engagements/_template.md` when bringing on a new client.
+Each individual engagement (Renee Mueller, Josh Rosen, future clients) has its own brief stored in the database, edited from `/admin/`. That's where client-specific behavioral notes, the deck sketch, the live URL, the operations log, and the handoff checklist live. The admin pre-fills new briefs with a structured template so the shape is right from the first keystroke.
 
 For the operational runbook — "how to onboard a new client end-to-end" — see §11.5.
 
@@ -69,13 +69,15 @@ Pulse is built for time-starved decision-makers — founders, principals, execut
 
 ### Profile per engagement
 
-Every engagement starts with a one-page profile capturing how *this* client moves so the deck can be tuned to them. The template is in `engagements/_template.md`. Fields include:
+Every engagement starts with a one-page profile capturing how *this* client moves so the deck can be tuned to them. Fields include:
 - Role and org context
 - Behavioral profile (mobile-first? voice-first? prefers numbers or prose? quirks like dyscalculia, ESL, dyslexia, time zones, etc.)
 - A representative quote so anyone reading can hear their voice
 - What this means for their deck (card order, tone, response types to favor)
 
-The first deployment for **Renee Mueller** is documented in [engagements/renee-mueller.md](./engagements/renee-mueller.md). The second engagement, **Josh Rosen / HotSpex**, is in [engagements/josh-rosen.md](./engagements/josh-rosen.md). Both are reference patterns for new engagements.
+The brief lives in `clients.brief` and is edited from `/admin/`. New briefs open with a structured template pre-filled so the shape is right from the first keystroke. Click **Copy as Markdown** to share the brief with the client, the team, or anywhere markdown pastes (email, Slack, ClickUp).
+
+The first deployment is **Renee Mueller** (GLC). The second is **Josh Rosen** (HotSpex). Both briefs are accessible inside the admin at their respective engagement detail pages.
 
 ---
 
@@ -84,11 +86,13 @@ The first deployment for **Renee Mueller** is documented in [engagements/renee-m
 Tom is the consultant running every engagement. He uses Pulse from a desktop browser (admin is desktop-only by design; the user-facing app is mobile-first). For each engagement he:
 
 - Creates the engagement (admin → "+ New engagement")
+- Writes the engagement brief — profile, deck sketch, ops log, handoff (admin → "+ Write brief" or Edit)
 - Authors the card deck (admin → per-card "+ Add card", or via direct SQL for bulk)
 - Sends the URL to the client via SMS or email
 - Watches responses arrive in real time (admin engagement detail)
 - Edits card wording when needed (admin → Edit on each card)
 - Exports responses to ClickUp (admin → Copy as Markdown, per-card or whole engagement)
+- Shares the brief with the client or team (admin → Copy brief as Markdown)
 - Rotates the token if the link leaks (admin → Rotate token)
 
 Tom is the only operator. There is no multi-user admin in v1. The admin is gated by a single shared password.
@@ -201,6 +205,7 @@ Match the IGTMS brand if you can — Poppins, the green palette, the radius/shad
 | token | text not null unique | 16-hex-char random, generated via `encode(gen_random_bytes(8), 'hex')` |
 | created_at | timestamptz | default now() |
 | last_active_at | timestamptz | nullable, touched on every save |
+| brief | text | nullable, markdown engagement narrative edited from /admin/ |
 
 **cards**
 | Column | Type | Notes |
@@ -543,41 +548,46 @@ Schema applied via `scripts/apply-sql.mjs`. Repo secrets set via `gh secret set`
 
 ## 11.5 Onboarding a New Client (runbook)
 
-**Pre-work (you, before opening the admin):**
-
-1. Decide on the client's profile and engagement context. Capture this in `engagements/<slug>.md` using `engagements/_template.md` as a starting point. This forces a one-page articulation of who they are, how they move, and what the engagement is trying to validate or unblock.
-2. Sketch the card deck. For each card, decide: title, category, response type, what we already know (context), what we're asking (question), whether skip is allowed. Keep the deck tight (5–20 cards). The engagement file is a good place for this draft.
-3. Build any HTML reference deliverables (`public/deliverables/<slug>.html`). Commit and push so they're live before you wire them to cards.
+The whole flow happens in `/admin/` — no terminal, no git, no files.
 
 **Create the engagement:**
 
-4. Open `/admin/`, sign in, click **+ New engagement**.
-5. Fill name, org, engagement name. Submit.
-6. The admin lands you on an empty detail view with a fresh token.
+1. Open `/admin/`, sign in, click **+ New engagement**.
+2. Fill name, org, engagement name. Submit. The admin lands you on the empty detail view with a fresh token.
+
+**Write the brief:**
+
+3. Click **+ Write brief** at the top. A markdown editor opens, pre-filled with a structured template (profile, deck sketch, source material, ops log, handoff checklist).
+4. Fill in what you know about the client and what this engagement is trying to validate. Save.
+5. The brief is now editable inline at any time. Use **Copy as Markdown** to paste it into an email, Slack, ClickUp, or anywhere you want to share context with the client or the team.
 
 **Author the cards:**
 
-7. Click **+ Add card** at the bottom for each card in your sketch. Most cards take ~30 seconds to fill.
-8. For long contexts (Card 1 of Renee's deck is a paragraph), it's faster to author in your editor, then paste in.
-9. Wire any active references via the attachment path field.
+6. Scroll to **+ Add card** at the bottom and add each card you want. Title, category, response type (dropdown), context, question, options (if select), default value (if confirm-edit), attachment path (if you have an HTML reference), skip allowed.
+7. Save. The card appends to the deck.
+8. Edit and Delete are available on every row.
+
+**(Optional) Wire an active reference:**
+
+9. If a card benefits from a visual reference (org chart, ICP one-pager, sales playbook excerpt), drop the HTML file at `pulse/public/deliverables/<slug>.html` (or have a dev do it for you) and reference it via the Edit form's "Active reference path" field, e.g. `deliverables/glc-org-chart.html`.
 
 **Send to the client:**
 
-10. Click **Copy link** on the engagement detail (or in the engagement list).
-11. SMS or email the URL. The link works on any device, no password.
+10. Click **Copy link** on the engagement detail or in the engagement list.
+11. SMS or email the URL. The link works on any device. No password, no account.
 
 **Operate the engagement:**
 
 12. Watch responses arrive in the admin (refresh to see new state).
-13. Edit any card wording inline as needed. Existing responses stay valid.
-14. When the client is done, **Copy all as Markdown** and paste into ClickUp.
-15. Mark the engagement complete in your `engagements/<slug>.md`.
+13. Edit any card wording inline if you want to refine. Existing responses stay valid because they're tied to `card_id`, not the wording.
+14. Update the brief's operations log as the engagement progresses.
+15. When the client is done, **Copy all as Markdown** and paste the responses into ClickUp.
 
 **Hygiene:**
 
-- Update the client's engagement file with the URL (or just the token suffix), date sent, completion date, and any notes that came back.
-- If you need to start over with that client, **Rotate token** (admin). Old link stops working immediately.
+- If the link leaks or you want to start over, click **Rotate token**. Old URL stops working immediately.
 - Don't share the admin URL or password with the client.
+- The brief is the single source of truth for engagement narrative — you don't need to keep notes anywhere else.
 
 ---
 
@@ -710,6 +720,6 @@ Both `app.ts` and `admin.ts` call `import.meta.hot.decline()` so any code change
 
 ## End of Specification
 
-Source of truth for the Pulse product as deployed. Each engagement has its own brief in `engagements/<slug>.md`.
+Source of truth for the Pulse product as deployed. Each engagement has its own brief in the database, edited from `/admin/`.
 
 *Pulse by IGTMS. Decisions, not paperwork.*

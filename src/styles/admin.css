@@ -452,6 +452,85 @@
   margin-bottom: 12px;
 }
 
+/* ── Engagement brief ──────────────────────────────────────────────── */
+
+.brief-card {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+  margin: 0 0 16px;
+}
+
+.brief-card.brief-editing {
+  outline: 2px solid var(--green);
+  outline-offset: -1px;
+}
+
+.brief-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.brief-label {
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.brief-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.brief-empty .brief-empty-body {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.brief-body {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--charcoal);
+  background: var(--gray-light);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.brief-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--charcoal);
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  width: 100%;
+  resize: vertical;
+  min-height: 360px;
+}
+
+.brief-textarea:focus {
+  outline: none;
+  border-color: var(--green);
+}
+
 .response-card-head {
   display: flex;
   align-items: flex-start;
