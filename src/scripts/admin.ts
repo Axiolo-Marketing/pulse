@@ -31,6 +31,9 @@ interface UploadRow {
   storage_path: string;
   mime_type: string | null;
   uploaded_at: string;
+  // Decorated at load time with a 24-hour signed URL so the admin can
+  // click to view/download. Refreshes on every reload.
+  signedUrl?: string;
 }
 
 interface EngagementSummary {
@@ -532,8 +535,20 @@ async function loadDetail(
     })
   );
 
+  // Generate 24-hour signed URLs for every upload so the admin can
+  // click filenames to view or download. Done in parallel for speed.
+  const allUploads = (uploadsResult.data ?? []) as UploadRow[];
+  await Promise.all(
+    allUploads.map(async (row) => {
+      const { data } = await supabase.storage
+        .from("pulse-uploads")
+        .createSignedUrl(row.storage_path, 60 * 60 * 24);
+      row.signedUrl = data?.signedUrl;
+    })
+  );
+
   const uploads = new Map<string, UploadRow[]>();
-  for (const row of (uploadsResult.data ?? []) as UploadRow[]) {
+  for (const row of allUploads) {
     const list = uploads.get(row.card_id) ?? [];
     list.push(row);
     uploads.set(row.card_id, list);
@@ -1419,7 +1434,15 @@ function renderResponseBodyHtml(
       body =
         uploads.length === 0
           ? "No files uploaded."
-          : `<ul>${uploads.map((u) => `<li>${escape(u.file_name)} <span style="color:var(--muted)">(${formatBytes(u.file_size_bytes)})</span></li>`).join("")}</ul>`;
+          : `<ul class="uploads-list">${uploads
+              .map((u) => {
+                const label = `${escape(u.file_name)} <span class="upload-size">(${formatBytes(u.file_size_bytes)})</span>`;
+                if (u.signedUrl) {
+                  return `<li><a href="${escape(u.signedUrl)}" target="_blank" rel="noreferrer noopener" class="upload-link">${label}</a></li>`;
+                }
+                return `<li>${label} <span class="upload-error">(download unavailable, refresh)</span></li>`;
+              })
+              .join("")}</ul>`;
       break;
     default:
       body = "";
