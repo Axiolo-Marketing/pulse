@@ -4,7 +4,7 @@ import type { Status } from "./status-suggest";
 export interface UploadInfo {
   id: string;
   name: string;
-  signedUrl: string;
+  sizeBytes: number;
 }
 
 export interface ExportArgs {
@@ -12,7 +12,13 @@ export interface ExportArgs {
   client: Client;
   response: ClientResponse | undefined;
   status: Status;
-  uploads: UploadInfo[]; // resolved signed URLs for this card's files
+  uploads: UploadInfo[]; // attachment summaries (no URLs — files live in admin)
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 interface ResponseValueShape {
@@ -107,10 +113,16 @@ function renderResponseBody(
         .join("\n");
       break;
     case "file-upload":
-      body =
-        uploads.length === 0
-          ? "_No files uploaded._"
-          : uploads.map((u) => `- [${u.name}](${u.signedUrl})`).join("\n");
+      if (uploads.length === 0) {
+        body = "_No files uploaded._";
+      } else {
+        const list = uploads
+          .map((u) => `- \`${u.name}\` (${formatBytes(u.sizeBytes)})`)
+          .join("\n");
+        body =
+          `**Files attached (${uploads.length}):**\n${list}\n\n` +
+          `_Files live in the Pulse admin. Search for the file names above to locate them in your local archive._`;
+      }
       break;
     default:
       body = "";
