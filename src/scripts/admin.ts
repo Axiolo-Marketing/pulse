@@ -584,6 +584,7 @@ function renderDetail(
         <div class="org">${escape(client.org_name ?? "")} · ${escape(client.engagement_name ?? "")}</div>
       </div>
       <div class="detail-actions">
+        <button class="btn-secondary-sm" type="button" id="download-md">Download as Markdown</button>
         <button class="btn-secondary-sm" type="button" id="copy-all">Copy all as Markdown</button>
         <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
       </div>
@@ -612,7 +613,7 @@ function renderDetail(
       const btn = e.currentTarget as HTMLButtonElement;
       btn.disabled = true;
       try {
-        const md = await buildEngagementMarkdown(supabase, data, statusOverrides);
+        const md = buildEngagementMarkdown(data, statusOverrides);
         await navigator.clipboard.writeText(md);
         flashCopied(btn, "Copied!");
         toast("All cards copied as Markdown");
@@ -621,6 +622,21 @@ function renderDetail(
         toast("Could not copy");
       } finally {
         btn.disabled = false;
+      }
+    });
+
+  container
+    .querySelector<HTMLButtonElement>("#download-md")
+    ?.addEventListener("click", (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      try {
+        const md = buildEngagementMarkdown(data, statusOverrides);
+        triggerDownload(md, downloadFilename(client));
+        flashCopied(btn, "Downloaded");
+        toast(`Saved ${downloadFilename(client)}`);
+      } catch (err) {
+        console.error("download:", err);
+        toast("Could not download");
       }
     });
 
@@ -703,8 +719,7 @@ function renderDetail(
         const btn = e.currentTarget as HTMLButtonElement;
         btn.disabled = true;
         try {
-          const md = await buildSingleCardMarkdown(
-            supabase,
+          const md = buildSingleCardMarkdown(
             client,
             card,
             responses.get(card.id),
@@ -1458,52 +1473,85 @@ function formatBytes(bytes: number): string {
 
 // ── markdown export plumbing ─────────────────────────────────────────────
 
-async function resolveUploads(
-  supabase: SupabaseClient,
-  uploads: UploadRow[]
-): Promise<UploadInfo[]> {
-  const out: UploadInfo[] = [];
-  for (const u of uploads) {
-    const { data } = await supabase.storage
-      .from("pulse-uploads")
-      .createSignedUrl(u.storage_path, 60 * 60 * 24 * 7); // 7 days
-    out.push({
-      id: u.id,
-      name: u.file_name,
-      signedUrl: data?.signedUrl ?? "",
-    });
-  }
-  return out;
+// Map upload rows to the markdown export's lightweight shape. No storage
+// round trip — files are referenced by name in the markdown so they can
+// be located by directory search; download happens in the admin UI.
+function summarizeUploads(uploads: UploadRow[]): UploadInfo[] {
+  return uploads.map((u) => ({
+    id: u.id,
+    name: u.file_name,
+    sizeBytes: u.file_size_bytes,
+  }));
 }
 
-async function buildSingleCardMarkdown(
-  supabase: SupabaseClient,
+function buildSingleCardMarkdown(
   client: Client,
   card: Card,
   response: ClientResponse | undefined,
   uploads: UploadRow[],
   statusOverride: Status | undefined
-): Promise<string> {
+): string {
   const status = statusOverride ?? suggestStatus(card, response);
-  const resolved = await resolveUploads(supabase, uploads);
-  return renderCardMarkdown({ card, client, response, status, uploads: resolved });
+  return renderCardMarkdown({
+    card,
+    client,
+    response,
+    status,
+    uploads: summarizeUploads(uploads),
+  });
 }
 
-async function buildEngagementMarkdown(
-  supabase: SupabaseClient,
+function buildEngagementMarkdown(
   data: DetailData,
   overrides: Map<string, Status>
-): Promise<string> {
+): string {
   const blocks: string[] = [];
   for (const card of data.cards) {
     const response = data.responses.get(card.id);
     const status = overrides.get(card.id) ?? suggestStatus(card, response);
-    const resolved = await resolveUploads(supabase, data.uploads.get(card.id) ?? []);
     blocks.push(
-      renderCardMarkdown({ card, client: data.client, response, status, uploads: resolved })
+      renderCardMarkdown({
+        card,
+        client: data.client,
+        response,
+        status,
+        uploads: summarizeUploads(data.uploads.get(card.id) ?? []),
+      })
     );
   }
   return renderEngagementMarkdown(blocks);
+}
+
+// Slugify a value for filename usage (kebab-case, alpha-num + dashes only).
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function downloadFilename(client: Client): string {
+  const today = new Date().toISOString().slice(0, 10);
+  const parts = [client.org_name, client.engagement_name]
+    .map((s) => s?.trim())
+    .filter((s): s is string => !!s)
+    .map(slugify);
+  const stem = parts.length > 0 ? parts.join("-") : slugify(client.name);
+  return `${stem}-${today}.md`;
+}
+
+function triggerDownload(text: string, filename: string): void {
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ── tiny UI helpers ──────────────────────────────────────────────────────
