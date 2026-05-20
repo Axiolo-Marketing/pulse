@@ -20,3 +20,8 @@ class Response(SQLModel, table=True):
     answered_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
     updated_at: datetime = Field(default_factory=utcnow_naive)
+    # Last-known ClickUp status, set by the webhook receiver when a task's
+    # status changes upstream. May differ from the Pulse-suggested status
+    # until the next push or webhook event.
+    clickup_status: str | None = None
+    clickup_status_updated_at: datetime | None = None

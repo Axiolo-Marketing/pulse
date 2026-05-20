@@ -16,6 +16,7 @@ from pulse_api.observability import (
 from pulse_api.routes import admin_api as admin_api_routes
 from pulse_api.routes import auth as auth_routes
 from pulse_api.routes import client_api as client_api_routes
+from pulse_api.routes import clickup as clickup_routes
 from pulse_api.routes import oauth as oauth_routes
 from pulse_api.routes import uploads as uploads_routes
 
@@ -42,6 +43,11 @@ app.add_middleware(
 )
 
 app.include_router(auth_routes.router)
+# clickup_routes registers static paths under /api/auth/clickup/* which
+# would otherwise be consumed by oauth_routes' parameterized
+# /{provider}/authorize. Register clickup FIRST so its more-specific
+# static path matches before the generic provider pattern.
+app.include_router(clickup_routes.router)
 app.include_router(oauth_routes.router)
 app.include_router(client_api_routes.router)
 app.include_router(uploads_routes.router)

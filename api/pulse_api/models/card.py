@@ -24,3 +24,6 @@ class Card(SQLModel, table=True):
     skip_allowed: bool = True
     attachment_path: str | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
+    # Back-reference for idempotent re-pushes. Set on first push;
+    # subsequent pushes UPDATE the existing ClickUp task by this id.
+    clickup_task_id: str | None = None

@@ -71,6 +71,21 @@ The `db-init` directory contains `01-pulse-roles.sql` — runs once on a fresh D
 
 Adding a card response type means: (1) update the `response_type` CHECK constraint in a new Alembic migration, (2) extend the renderer in `src/scripts/app.ts`, (3) extend the admin display formatter in `admin.ts`, (4) extend `src/lib/status-suggest.ts` for ClickUp status. SPEC §4 has the canonical list + `response_value` shapes.
 
+## ClickUp integration (bidirectional, per-user OAuth)
+
+Optional integration that pushes Pulse cards to ClickUp tasks and reflects task status changes back via webhook. Operator-side wiring is documented in `deploy/README.md` ("ClickUp integration setup").
+
+Code paths:
+- OAuth + webhook receiver: `api/pulse_api/routes/clickup.py`
+- ClickUp REST client: `api/pulse_api/clickup.py` (the auth header has NO `Bearer` prefix — common footgun)
+- Status + markdown body builders (Python ports of the TS originals): `api/pulse_api/clickup_export.py`
+- Push endpoint + set-list endpoint: `api/pulse_api/routes/admin_api.py`
+- Frontend Connect / Push / status badge: `src/scripts/admin.ts` + `src/lib/api.ts`
+
+In-DB secrets policy: **never store secrets in plaintext.** ClickUp access tokens and webhook secrets go through `api/pulse_api/crypto.py` (Fernet via `MultiFernet` for key rotation). All ciphertext-bearing columns are suffixed `_enc`. The repo layer encrypts on write and decrypts on read; the route layer only ever sees plaintext. Same policy applies to any future secret stored in Postgres.
+
+Webhook auth: per-workspace HMAC-SHA256 against the secret ClickUp gave us at `create_webhook` time. The receiver reads `X-Signature`, looks up `clickup_workspaces.webhook_secret_enc` by `team_id` from the JSON body, decrypts, computes the HMAC, refuses on mismatch.
+
 ## File uploads
 
 Local-disk under `settings.upload_dir` (`/var/lib/pulse/uploads/` in prod). Path convention `{client_id}/{card_id}/{uuid}-{filename}`. The trust boundary is the `client_id` prefix — `api/pulse_api/storage.py` reconstructs paths from authenticated state (`pulse_request_client_id()`), never from the request body.

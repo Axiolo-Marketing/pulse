@@ -123,6 +123,35 @@ async def update_card(session: AsyncSession, card_id: str, fields: dict) -> dict
     return dict(row) if row else None
 
 
+async def set_clickup_task_id(
+    session: AsyncSession, card_id: str, clickup_task_id: str
+) -> None:
+    """Record the ClickUp task id created/returned for this card. Idempotent
+    re-pushes use this back-reference to UPDATE instead of CREATE."""
+    await session.execute(
+        text(
+            "update public.cards set clickup_task_id = :tid "
+            "where id = cast(:cid as uuid)"
+        ),
+        {"tid": clickup_task_id, "cid": card_id},
+    )
+
+
+async def get_card_by_clickup_task_id(
+    session: AsyncSession, clickup_task_id: str
+) -> dict | None:
+    """Used by the webhook receiver to route status updates back to a card.
+    BYPASSRLS — webhook handler has no token, looks up across all clients."""
+    result = await session.execute(
+        text(
+            f"select {CARD_COLS} from public.cards where clickup_task_id = :tid limit 1"
+        ),
+        {"tid": clickup_task_id},
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
 async def delete_card(session: AsyncSession, card_id: str) -> bool:
     try:
         result = await session.execute(

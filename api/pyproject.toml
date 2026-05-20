@@ -20,6 +20,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "structlog>=24.4",
     "sentry-sdk[fastapi]>=2.18",
+    "cryptography>=43.0",
     "uvicorn[standard]>=0.32",
 ]
 

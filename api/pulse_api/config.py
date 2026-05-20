@@ -67,5 +67,19 @@ class Settings(BaseSettings):
     rate_limit_token_validation: str = "10/minute"  # /api/me + /api/auth/login
     rate_limit_account_enumeration: str = "5/minute"  # signup + forgot-password
 
+    # ── ClickUp integration ──────────────────────────────────────────────
+    clickup_client_id: str = ""
+    clickup_client_secret: str = ""
+    clickup_redirect_uri: str = ""
+
+    # ── Column-level encryption ─────────────────────────────────────────
+    # Comma-separated list of Fernet keys. First entry is the primary
+    # (used for new encryption); all entries are tried in order for
+    # decryption to support key rotation. Generate a key with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Empty in development is tolerated; the crypto helper raises clearly
+    # the first time anything tries to encrypt or decrypt without a key.
+    encryption_keys: str = ""
+
 
 settings = Settings()

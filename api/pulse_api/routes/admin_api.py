@@ -7,19 +7,23 @@ otherwise block.
 """
 from typing import Any
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse_api import storage
+from pulse_api import clickup, clickup_export, storage
 from pulse_api.auth.middleware import get_current_admin
 from pulse_api.db import get_admin_session
 from pulse_api.models import User
+from pulse_api.observability import log
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
+from pulse_api.repos import users as users_repo
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
 
@@ -102,7 +106,7 @@ async def get_engagement(
     return {
         "client": client,
         "cards": await cards_repo.list_for_client(session, client_id),
-        "responses": await responses_repo.list_for_client(session, client_id),
+        "responses": await responses_repo.admin_list_for_client(session, client_id),
         "uploads": await uploads_repo.list_for_client(session, client_id),
     }
 
@@ -136,6 +140,168 @@ async def update_engagement(
         raise HTTPException(status_code=404, detail="engagement not found")
     await session.commit()
     return row
+
+
+class SetClickUpListRequest(BaseModel):
+    """Operator pastes a ClickUp list URL (or bare list id). Backend
+    extracts the numeric id and stores it. Empty string clears the
+    binding (disables the Push button for that engagement)."""
+    url_or_id: str = Field(default="", max_length=500)
+
+
+_CLICKUP_LIST_URL_RE = re.compile(r"/li/(\d+)")
+
+
+def _parse_clickup_list_id(value: str) -> str | None:
+    """Accept either:
+      - Bare numeric id: '901234567'
+      - List URL: 'https://app.clickup.com/12345/v/li/901234567'
+    Returns the numeric id, or None if the input doesn't look like either.
+    Empty/whitespace input returns None (caller treats as 'clear binding')."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return value
+    m = _CLICKUP_LIST_URL_RE.search(value)
+    return m.group(1) if m else None
+
+
+@router.patch("/clients/{client_id}/clickup-list")
+async def set_clickup_list(
+    client_id: str,
+    req: SetClickUpListRequest,
+    session: AsyncSession = Depends(get_admin_session),
+    user: User = Depends(get_current_admin),
+) -> dict:
+    list_id = _parse_clickup_list_id(req.url_or_id)
+    list_name: str | None = None
+    # If a token is connected AND a list id was provided, fetch the list
+    # name so the UI can display it without the operator re-typing.
+    if list_id:
+        token = await users_repo.get_clickup_token(session, user.id)
+        if token:
+            try:
+                lst = await clickup.ClickUpClient(token).get_list(list_id)
+                list_name = lst.get("name")
+            except clickup.ClickUpError as exc:
+                log.warning("clickup.list_lookup_failed", list_id=list_id, detail=str(exc))
+
+    row = await clients_repo.set_clickup_list(session, client_id, list_id, list_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    await session.commit()
+    return row
+
+
+@router.post("/clients/{client_id}/push-clickup")
+async def push_to_clickup(
+    client_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    user: User = Depends(get_current_admin),
+) -> dict:
+    """Push (create or update) one ClickUp task per Pulse card. Cards with
+    `clickup_task_id` already set get UPDATEd; others get CREATEd and the
+    returned id is stored. File-upload cards push attachments after the
+    task is created/updated.
+
+    Returns a structured summary so the operator sees exactly what
+    happened — including per-card errors when a single push fails."""
+    # Pre-flight: user connected? engagement configured?
+    token = await users_repo.get_clickup_token(session, user.id)
+    if not token:
+        raise HTTPException(status_code=400, detail="clickup not connected for this user")
+
+    engagement = await clients_repo.get_by_id(session, client_id)
+    if engagement is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    list_id = engagement.get("clickup_list_id")
+    if not list_id:
+        raise HTTPException(status_code=400, detail="engagement has no clickup_list_id; set one first")
+
+    cards = await cards_repo.list_for_client(session, client_id)
+    responses_list = await responses_repo.list_for_client(session, client_id)
+    uploads = await uploads_repo.list_for_client(session, client_id)
+
+    # Index responses by card_id and uploads by card_id for fast lookup.
+    response_by_card = {r["card_id"]: r for r in responses_list}
+    uploads_by_card: dict[str, list[dict]] = {}
+    for u in uploads:
+        uploads_by_card.setdefault(u["card_id"], []).append(u)
+
+    api = clickup.ClickUpClient(token)
+    created: list[str] = []
+    updated: list[str] = []
+    attached = 0
+    errors: list[dict] = []
+
+    # Load each card with its existing clickup_task_id from the DB so we
+    # know create-vs-update. list_for_client doesn't include that column
+    # by design (admin-only), so do a separate small SELECT.
+    from sqlalchemy import text as _sql_text
+    task_id_rows = (
+        await session.execute(
+            _sql_text("select id::text, clickup_task_id from public.cards where client_id = cast(:c as uuid)"),
+            {"c": client_id},
+        )
+    ).mappings().all()
+    task_id_by_card = {r["id"]: r["clickup_task_id"] for r in task_id_rows}
+
+    for card in cards:
+        response = response_by_card.get(card["id"])
+        status = clickup_export.suggest_status(card, response)
+        body = clickup_export.render_response_body(
+            card, response, uploads_by_card.get(card["id"], [])
+        )
+        task_payload = {
+            "name": card["title"],
+            "description": body,
+            "status": status,
+        }
+
+        existing_task_id = task_id_by_card.get(card["id"])
+        try:
+            if existing_task_id:
+                await api.update_task(existing_task_id, task_payload)
+                task_id = existing_task_id
+                updated.append(card["id"])
+            else:
+                resp = await api.create_task(list_id, task_payload)
+                task_id = str(resp.get("id") or "")
+                if task_id:
+                    await cards_repo.set_clickup_task_id(session, card["id"], task_id)
+                    created.append(card["id"])
+                else:
+                    errors.append({"card_id": card["id"], "error": "create_task returned no id"})
+                    continue
+        except clickup.ClickUpError as exc:
+            errors.append({"card_id": card["id"], "error": str(exc)})
+            continue
+
+        # Push attachments. Each failure is per-file, not fatal.
+        for u in uploads_by_card.get(card["id"], []):
+            try:
+                path = storage.resolve_within_upload_dir(u["storage_path"])
+                if not path.exists():
+                    errors.append({"upload_id": u["id"], "error": "file missing on disk"})
+                    continue
+                await api.upload_attachment(
+                    task_id,
+                    filename=u["file_name"],
+                    content=path.read_bytes(),
+                    mime_type=u.get("mime_type") or "application/octet-stream",
+                )
+                attached += 1
+            except (clickup.ClickUpError, storage.StoragePathError) as exc:
+                errors.append({"upload_id": u["id"], "error": str(exc)})
+
+    await session.commit()
+    return {
+        "created": created,
+        "updated": updated,
+        "attached": attached,
+        "errors": errors,
+    }
 
 
 @router.post("/clients/{client_id}/rotate-token")

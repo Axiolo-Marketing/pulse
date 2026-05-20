@@ -312,23 +312,28 @@ function parseRoute(): Route {
   return { kind: "list" };
 }
 
-async function runAdmin(mount: HTMLElement, _user: AuthUser): Promise<void> {
-  mount.innerHTML = renderShell();
-  attachShellHandlers(mount);
+async function runAdmin(mount: HTMLElement, user: AuthUser): Promise<void> {
+  mount.innerHTML = renderShell(user);
+  attachShellHandlers(mount, user);
 
   const container = mount.querySelector<HTMLElement>(".admin-container")!;
 
   let route = parseRoute();
-  await draw(container, route);
+  await draw(container, route, user);
 
   window.addEventListener("hashchange", async () => {
     route = parseRoute();
-    await draw(container, route);
+    await draw(container, route, user);
   });
 }
 
-function renderShell(): string {
+function renderShell(user: AuthUser): string {
   const baseSlash = BASE_URL.endsWith("/") ? BASE_URL : `${BASE_URL}/`;
+  const connected = !!user.clickup_connected;
+  const cuLabel = connected ? "ClickUp: connected" : "ClickUp: not connected";
+  const cuAction = connected
+    ? `<button class="btn-ghost-sm" type="button" id="clickup-disconnect">Disconnect</button>`
+    : `<a class="btn-ghost-sm" href="${escape(authApi.connectClickUpUrl())}">Connect ClickUp</a>`;
   return `
     <div class="admin-page">
       <header class="admin-header">
@@ -338,7 +343,11 @@ function renderShell(): string {
           Pulse
           <span class="admin-title" style="margin-left:8px">Admin</span>
         </span>
-        <button class="admin-logout" type="button" id="logout">Sign out</button>
+        <span class="admin-header-actions" style="display:inline-flex;align-items:center;gap:10px">
+          <span class="clickup-badge ${connected ? "connected" : "disconnected"}" title="${escape(cuLabel)}">${escape(cuLabel)}</span>
+          ${cuAction}
+          <button class="admin-logout" type="button" id="logout">Sign out</button>
+        </span>
       </header>
       <div class="admin-container">
         <div class="loading">Loading...</div>
@@ -347,7 +356,7 @@ function renderShell(): string {
   `;
 }
 
-function attachShellHandlers(mount: HTMLElement): void {
+function attachShellHandlers(mount: HTMLElement, user: AuthUser): void {
   mount.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", async () => {
     try {
       await authApi.logout();
@@ -357,14 +366,31 @@ function attachShellHandlers(mount: HTMLElement): void {
     window.location.hash = "";
     renderLogin(mount);
   });
+
+  mount.querySelector<HTMLButtonElement>("#clickup-disconnect")?.addEventListener("click", async () => {
+    if (!window.confirm("Disconnect ClickUp? Existing tasks in ClickUp aren't deleted, but Pulse will stop syncing.")) return;
+    try {
+      await authApi.disconnectClickUp();
+      user.clickup_connected = false;
+      toast("ClickUp disconnected");
+      // Re-render the shell so the badge flips.
+      mount.innerHTML = renderShell(user);
+      attachShellHandlers(mount, user);
+      const container = mount.querySelector<HTMLElement>(".admin-container")!;
+      await draw(container, parseRoute(), user);
+    } catch (err) {
+      console.error("clickup disconnect:", err);
+      toast("Could not disconnect");
+    }
+  });
 }
 
-async function draw(container: HTMLElement, route: Route): Promise<void> {
+async function draw(container: HTMLElement, route: Route, user: AuthUser): Promise<void> {
   if (route.kind === "list") {
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
     try {
       const summaries = await adminApi.listClients();
-      renderList(container, summaries);
+      renderList(container, summaries, user);
     } catch (err) {
       console.error("load engagements:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
@@ -375,7 +401,7 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
   container.innerHTML = `<div class="loading">Loading responses...</div>`;
   try {
     const detail = await adminApi.getClient(route.clientId);
-    renderDetail(container, detail);
+    renderDetail(container, detail, user);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       container.innerHTML = `<div class="error"><h1 class="error-title">Not found</h1><p class="error-body">No client with that id.</p></div>`;
@@ -388,7 +414,7 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
 
 // ── list view ───────────────────────────────────────────────────────────
 
-function renderList(container: HTMLElement, summaries: EngagementSummary[]): void {
+function renderList(container: HTMLElement, summaries: EngagementSummary[], user: AuthUser): void {
   const header = `
     <div class="engagement-list-header">
       <h2 class="engagement-list-h">Engagements</h2>
@@ -482,7 +508,7 @@ function renderList(container: HTMLElement, summaries: EngagementSummary[]): voi
           `Rotate ${summary.name}'s token? The current link will stop working immediately.`
         );
         if (!ok) return;
-        await rotateToken(container, summary.id);
+        await rotateToken(container, summary.id, user);
         return;
       }
     }
@@ -573,7 +599,7 @@ function openNewEngagementModal(container: HTMLElement): void {
   });
 }
 
-async function rotateToken(container: HTMLElement, clientId: string): Promise<void> {
+async function rotateToken(container: HTMLElement, clientId: string, user: AuthUser): Promise<void> {
   try {
     const updated = await adminApi.rotateToken(clientId);
     await navigator.clipboard.writeText(`${PROD_URL}?t=${updated.token}`);
@@ -583,7 +609,7 @@ async function rotateToken(container: HTMLElement, clientId: string): Promise<vo
     toast("Could not rotate token");
     return;
   }
-  await draw(container, { kind: "list" });
+  await draw(container, { kind: "list" }, user);
 }
 
 // ── detail view ──────────────────────────────────────────────────────────
@@ -607,7 +633,7 @@ function bucketDetail(payload: EngagementDetail): DetailViewData {
   return { client: payload.client, cards: payload.cards, responses, uploads };
 }
 
-function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
+function renderDetail(container: HTMLElement, payload: EngagementDetail, user: AuthUser): void {
   const data = bucketDetail(payload);
   const { client, cards, responses, uploads } = data;
 
@@ -617,17 +643,30 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     .map((card) => renderResponseCard(card, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides))
     .join("");
 
+  const pushDisabled = !user.clickup_connected || !client.clickup_list_id;
+  const pushTitle = !user.clickup_connected
+    ? "Connect ClickUp first (top-right)"
+    : !client.clickup_list_id
+    ? "Set a ClickUp list URL on this engagement first"
+    : "Push all cards to the configured ClickUp list";
+  const listBadge = client.clickup_list_id
+    ? `<span class="clickup-list-pill" title="ClickUp list ${escape(client.clickup_list_id)}">📋 ${escape(client.clickup_list_name ?? client.clickup_list_id)}</span>`
+    : "";
+
   container.innerHTML = `
     <button class="back-link" type="button" id="back">← All engagements</button>
     <section class="detail-header">
       <div>
         <h2>${escape(client.name)}</h2>
         <div class="org">${escape(client.org_name ?? "")} · ${escape(client.engagement_name ?? "")}</div>
+        ${listBadge}
       </div>
       <div class="detail-actions">
         <button class="btn-secondary-sm" type="button" id="download-md">Download as Markdown</button>
         <button class="btn-secondary-sm" type="button" id="copy-all">Copy all as Markdown</button>
         <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
+        <button class="btn-secondary-sm" type="button" id="set-clickup-list">${client.clickup_list_id ? "Change ClickUp list" : "Set ClickUp list"}</button>
+        <button class="btn-primary-sm" type="button" id="push-clickup" ${pushDisabled ? "disabled" : ""} title="${escape(pushTitle)}">Push to ClickUp</button>
       </div>
     </section>
     <section id="brief-slot">${renderBriefView(client)}</section>
@@ -659,6 +698,57 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       toast("Could not copy");
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  container.querySelector<HTMLButtonElement>("#set-clickup-list")?.addEventListener("click", async () => {
+    const current = client.clickup_list_id
+      ? `${client.clickup_list_id}${client.clickup_list_name ? ` (${client.clickup_list_name})` : ""}`
+      : "";
+    const input = window.prompt(
+      "Paste a ClickUp list URL or list id (leave empty to clear):",
+      current && client.clickup_list_id ? client.clickup_list_id : ""
+    );
+    if (input === null) return;
+    try {
+      const updated = await adminApi.setClickUpList(client.id, input.trim());
+      client.clickup_list_id = updated.clickup_list_id ?? null;
+      client.clickup_list_name = updated.clickup_list_name ?? null;
+      toast(client.clickup_list_id ? "ClickUp list updated" : "ClickUp list cleared");
+      // Re-render the detail panel so the badge / push enablement updates.
+      renderDetail(container, {
+        client: { ...payload.client, clickup_list_id: client.clickup_list_id, clickup_list_name: client.clickup_list_name },
+        cards: payload.cards,
+        responses: payload.responses,
+        uploads: payload.uploads,
+      }, user);
+    } catch (err) {
+      console.error("set clickup list:", err);
+      toast(err instanceof ApiError ? `Could not save: ${err.detail}` : "Could not save");
+    }
+  });
+
+  container.querySelector<HTMLButtonElement>("#push-clickup")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    if (!window.confirm(`Push ${cards.length} card${cards.length === 1 ? "" : "s"} to ClickUp?`)) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Pushing...";
+    try {
+      const result = await adminApi.pushToClickUp(client.id);
+      const msg =
+        `Pushed: ${result.created.length} created, ${result.updated.length} updated, ${result.attached} attachments` +
+        (result.errors.length ? ` · ${result.errors.length} error${result.errors.length === 1 ? "" : "s"}` : "");
+      toast(msg);
+      if (result.errors.length) {
+        console.warn("ClickUp push errors:", result.errors);
+      }
+    } catch (err) {
+      console.error("clickup push:", err);
+      toast(err instanceof ApiError ? `Push failed: ${err.detail}` : "Push failed");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
     }
   });
 
@@ -1167,6 +1257,7 @@ function renderResponseCard(
         </div>
         <div class="response-card-head-right">
           <span class="response-state ${stateClass}">${escape(stateLabel)}</span>
+          ${response?.clickup_status ? `<span class="clickup-status-pill" title="Last reflected from ClickUp">CU: ${escape(response.clickup_status)}</span>` : ""}
           <button class="btn-ghost-sm" type="button" data-action="edit-card-start" title="Edit card text">Edit</button>
           <button class="btn-ghost-sm danger" type="button" data-action="delete-card" title="Delete this card">Delete</button>
         </div>

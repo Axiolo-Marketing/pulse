@@ -65,7 +65,8 @@ async def get_by_id(session: AsyncSession, client_id: str) -> dict | None:
         result = await session.execute(
             text(
                 "select id::text, name, org_name, engagement_name, token, brief, "
-                "created_at, last_active_at from public.clients "
+                "created_at, last_active_at, clickup_list_id, clickup_list_name "
+                "from public.clients "
                 "where id = cast(:cid as uuid)"
             ),
             {"cid": client_id},
@@ -89,7 +90,7 @@ async def create_engagement(
             "insert into public.clients (name, org_name, engagement_name, token) "
             "values (:n, :o, :e, :t) "
             "returning id::text, name, org_name, engagement_name, token, brief, "
-            "created_at, last_active_at"
+            "created_at, last_active_at, clickup_list_id, clickup_list_name"
         ),
         {"n": name, "o": org_name, "e": engagement_name, "t": token},
     )
@@ -115,6 +116,27 @@ async def update_engagement(
                 f"created_at, last_active_at"
             ),
             params,
+        )
+    except Exception:
+        return None
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def set_clickup_list(
+    session: AsyncSession, client_id: str, list_id: str | None, list_name: str | None
+) -> dict | None:
+    """Update the per-engagement ClickUp list. NULL list_id disables the push
+    button for that engagement."""
+    try:
+        result = await session.execute(
+            text(
+                "update public.clients set clickup_list_id = :lid, clickup_list_name = :name "
+                "where id = cast(:cid as uuid) "
+                "returning id::text, name, org_name, engagement_name, token, brief, "
+                "created_at, last_active_at, clickup_list_id, clickup_list_name"
+            ),
+            {"lid": list_id, "name": list_name, "cid": client_id},
         )
     except Exception:
         return None

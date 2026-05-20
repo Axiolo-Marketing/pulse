@@ -110,12 +110,49 @@ def _json_dump(value: dict | None) -> str | None:
 # ── admin-mode helpers (BYPASSRLS — explicit client_id filters) ────────────
 
 
+async def set_clickup_status_by_card(
+    session: AsyncSession, card_id: str, clickup_status: str
+) -> bool:
+    """Webhook-driven update: cache the latest upstream ClickUp status on
+    the response for the given card. Returns True if a response row was
+    updated. Admin-only (BYPASSRLS — webhook has no token context)."""
+    result = await session.execute(
+        text(
+            "update public.responses "
+            "set clickup_status = :s, clickup_status_updated_at = now() "
+            "where card_id = cast(:cid as uuid) returning id"
+        ),
+        {"s": clickup_status, "cid": card_id},
+    )
+    return result.rowcount > 0
+
+
 async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
     try:
         result = await session.execute(
             text(
                 "select id::text, card_id::text, client_id::text, state, response_value, "
                 "viewed_at, answered_at, created_at, updated_at "
+                "from public.responses where client_id = cast(:cid as uuid) "
+                "order by created_at"
+            ),
+            {"cid": client_id},
+        )
+    except Exception:
+        return []
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def admin_list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
+    """Same as list_for_client but additionally returns the ClickUp
+    status fields. The pulse_anon role has no grants on those columns,
+    so this variant is only callable from the admin (BYPASSRLS) session."""
+    try:
+        result = await session.execute(
+            text(
+                "select id::text, card_id::text, client_id::text, state, response_value, "
+                "viewed_at, answered_at, created_at, updated_at, "
+                "clickup_status, clickup_status_updated_at "
                 "from public.responses where client_id = cast(:cid as uuid) "
                 "order by created_at"
             ),

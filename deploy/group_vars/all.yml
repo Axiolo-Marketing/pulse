@@ -40,6 +40,9 @@ pulse_google_redirect_uri: "https://{{ pulse_domain }}/api/auth/google/callback"
 pulse_microsoft_redirect_uri: "https://{{ pulse_domain }}/api/auth/microsoft/callback"
 pulse_microsoft_tenant_id: common
 
+# Must match the redirect URI configured in the ClickUp OAuth app.
+pulse_clickup_redirect_uri: "https://{{ pulse_domain }}/api/auth/clickup/callback"
+
 # ── SMTP ──────────────────────────────────────────────────────────────────
 pulse_smtp_host: smtp.example.com
 pulse_smtp_port: 587
