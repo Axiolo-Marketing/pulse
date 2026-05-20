@@ -1,7 +1,7 @@
-# Pulse by IGTMS Project Specification
+# Pulse by Axiolo Project Specification
 
-**Repository:** tomdigati/pulse
-**Product owner:** Tom DiGati, Client Transformation Lead, IGTMS
+**Repository:** Axiolo internal (final hosting location pending)
+**Product owner:** Tom DiGati, Client Transformation Lead, Axiolo
 **Specification version:** 2.0 (engagement-agnostic)
 **Last updated:** April 2026
 
@@ -31,7 +31,7 @@ Traditional client onboarding asks the client to produce documents, fill out for
 
 ### Brand Identity
 
-Pulse is an IGTMS product. Tom DiGati owns the codebase. End users see only IGTMS branding. The product follows the IGTMS brand system throughout.
+Pulse is an Axiolo product. Tom DiGati owns the codebase. End users see only Axiolo branding. The product follows the Axiolo brand system throughout.
 
 **Visual identity:**
 - Font: Poppins (Google Fonts), max weight SemiBold (600). Never heavier.
@@ -60,7 +60,7 @@ Pulse is built for time-starved decision-makers — founders, principals, execut
 
 ### What every client gets
 
-- One private URL (e.g. `https://tomdigati.github.io/pulse/?t=<16-hex-token>`)
+- One private URL (e.g. `https://<pulse-domain>/?t=<16-hex-token>`)
 - No password, no account, no login screen. The URL itself is identity.
 - A deck of cards that's been pre-built from existing context (transcripts, prior work, business plan, the operator's notes)
 - Auto-save on every action so they can step away and come back
@@ -187,7 +187,7 @@ If a card benefits from a visual reference (org chart, ICP one-pager, sales play
 
 The file deploys with the next push to `main`. The card's "View Active Reference" button opens it in a sandboxed iframe modal (`sandbox="allow-scripts"`).
 
-Match the IGTMS brand if you can — Poppins, the green palette, the radius/shadow tokens — so the modal feels continuous with the card. See `public/deliverables/glc-org-chart.html` for a reference implementation.
+Match the Axiolo brand if you can — Plus Jakarta Sans, the blue palette (`#2960F6` primary on `#0A0F2E` navy), the radius/shadow tokens from `src/styles/pulse.css` — so the modal feels continuous with the card. See `public/deliverables/glc-org-chart.html` for a reference implementation.
 
 ---
 
@@ -313,10 +313,10 @@ The `x-pulse-token` header propagates from supabase-js into storage's RLS contex
 ### URL Pattern
 
 ```
-https://tomdigati.github.io/pulse/?t=<16-hex-char-token>
+https://<pulse-domain>/?t=<16-hex-char-token>
 ```
 
-The Astro config has `base: "/pulse"` and `site: "https://tomdigati.github.io"` to match GitHub Pages.
+Pulse now serves from the domain root behind nginx (see `deploy/roles/nginx-site/`). `astro.config.mjs` no longer sets `site` or `base` — set `site` once the production domain is final so Astro can build absolute URLs into sitemap.xml / Open Graph tags.
 
 ### Bootstrap Flow
 
@@ -331,7 +331,7 @@ The Astro config has `base: "/pulse"` and `site: "https://tomdigati.github.io"` 
 
 ```
 +------------------------------------------+
-|  IGTMS · Pulse    [‹]  4 of 19 ▾  [›]    |
+|  Axiolo · Pulse   [‹]  4 of 19 ▾  [›]    |
 |------------------------------------------|
 |  [optional resume banner]                |
 |                                          |
@@ -481,7 +481,7 @@ File-upload responses include 7-day signed URLs.
 | Hosting | GitHub Pages |
 | CI/CD | GitHub Actions (`actions/deploy-pages@v4`) |
 | Build | `npm run build` (Vite under Astro) |
-| Domain | `tomdigati.github.io/pulse/` (custom domain deferred) |
+| Domain | Pending final selection (pulse.axiolo.com under consideration) |
 
 ### Dependencies
 
@@ -601,7 +601,7 @@ An engagement is successful if:
 4. They submit at least one substantive response (not just skips or confirms — an edit, a note, a file).
 5. Tom can see responses in the admin in real time and export them to ClickUp.
 6. The client gives positive or neutral feedback. (Negative is informative.)
-7. The product feels like an IGTMS product, not a generic survey tool.
+7. The product feels like an Axiolo product, not a generic survey tool.
 
 Each engagement file should track which of these were true at handoff.
 
@@ -617,7 +617,7 @@ Not in v1, noted for context:
 - Conditional card logic (if X then Y)
 - Drag-to-reorder cards in admin
 - Analytics on engagement completion
-- White-labeling for other consultants beyond IGTMS
+- White-labeling for other consultants beyond Axiolo
 
 ---
 
@@ -625,22 +625,19 @@ Not in v1, noted for context:
 
 ### 14.1 Production URL
 
-```
-https://tomdigati.github.io/pulse/
-```
-
-Custom domain deferred. `base: "/pulse"` Astro config for GitHub Pages.
+Not yet finalized. `pulse.axiolo.com` is under consideration. The Ansible
+deploy reads `pulse_domain` from `deploy/group_vars/all.yml` — change there
+once decided, then re-run `make deploy-apply`.
 
 ### 14.2 Admin Authentication
 
-Single shared password. Hash stored as `PUBLIC_ADMIN_PASSWORD_HASH` (SHA-256 hex), inlined into the admin chunk at build. Login flag in `sessionStorage`; tab close ends the session.
+> **STALE — see CLAUDE.md "Auth subsystems" for the current model.**
+> The old SHA-256-password-hash-in-bundle is gone; the admin now uses
+> email + password (argon2) or Google / Microsoft 365 OAuth, with signed
+> session cookies. The text below is preserved as historical reference
+> for the v1 architecture.
 
-To rotate:
-```bash
-echo -n "<new-password>" | shasum -a 256
-gh secret set PUBLIC_ADMIN_PASSWORD_HASH --repo tomdigati/pulse --body "<new-hash>"
-gh workflow run deploy.yml --repo tomdigati/pulse --ref main
-```
+Single shared password. Hash stored as `PUBLIC_ADMIN_PASSWORD_HASH` (SHA-256 hex), inlined into the admin chunk at build. Login flag in `sessionStorage`; tab close ends the session.
 
 ### 14.3 ClickUp Export Format
 
@@ -667,9 +664,9 @@ One block per card, separated by `---` rules.
 
 | Response pattern | Status |
 |---|---|
-| Confirmed without edit | IGTMS Review |
-| Edited the existing content | IGTMS Review |
-| Uploaded a file | IGTMS Review |
+| Confirmed without edit | Axiolo Review |
+| Edited the existing content | Axiolo Review |
+| Uploaded a file | Axiolo Review |
 | Skipped a card | Waiting on Good Life |
 | Said they need help (regex on "need help") | Needs Attention |
 | Indicated a blocker (regex on "blocked", "stuck", "waiting on") | Blocked |
@@ -678,7 +675,7 @@ One block per card, separated by `---` rules.
 | Empty file-upload, empty multi-select | Waiting on Good Life |
 
 Valid status values:
-`Waiting on IGTMS`, `Waiting on Good Life`, `Needs Attention`, `IGTMS Review`, `Client Review`, `Blocked`, `Approved`, `Complete`.
+`Waiting on Axiolo`, `Waiting on Good Life`, `Needs Attention`, `Axiolo Review`, `Client Review`, `Blocked`, `Approved`, `Complete`.
 
 > The "Waiting on Good Life" label is a holdover from the first engagement. For non-GLC engagements, the operator can override per-card. Future enhancement: per-engagement default-status labels.
 
@@ -692,10 +689,13 @@ No formal SLA. Tom owns the entire stack. Deploys when satisfied.
 
 ### 14.6 Hosting and Infrastructure
 
-- Repo: `tomdigati/pulse`
-- Supabase project: `yhphmutbquhgikqjypch`
-- GitHub Pages with Actions source
-- Domain: GitHub Pages default
+> **STALE.** Pulse has migrated off Supabase + GitHub Pages. The current
+> stack is FastAPI + self-hosted Postgres + RLS, deployed via Ansible to a
+> shared Debian VPS. See `deploy/README.md` for the runbook and CLAUDE.md
+> "Architecture" for the design.
+
+- Repo: Axiolo internal (final hosting location pending)
+- Domain: pending final selection (pulse.axiolo.com under consideration)
 
 ### 14.7 Token Format
 
@@ -722,4 +722,4 @@ Both `app.ts` and `admin.ts` call `import.meta.hot.decline()` so any code change
 
 Source of truth for the Pulse product as deployed. Each engagement has its own brief in the database, edited from `/admin/`.
 
-*Pulse by IGTMS. Decisions, not paperwork.*
+*Pulse by Axiolo. Decisions, not paperwork.*

@@ -1,10 +1,16 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  adminApi,
+  ApiError,
+  authApi,
+  type AuthUser,
   type Card,
   type Client,
   type ClientResponse,
-} from "../lib/supabase";
-import { getAdminClient } from "../lib/admin-supabase";
+  type EngagementDetail,
+  type EngagementSummary,
+  type ResponseType,
+  type UploadRow,
+} from "../lib/api";
 import { formatTimestamp } from "../lib/format-time";
 import {
   STATUS_VALUES,
@@ -17,31 +23,10 @@ import {
   type UploadInfo,
 } from "../lib/markdown-export";
 
-const PASSWORD_HASH = (import.meta.env.PUBLIC_ADMIN_PASSWORD_HASH ?? "") as string;
-const SESSION_KEY = "pulse_admin_session";
 const BASE_URL = (import.meta.env.BASE_URL ?? "/") as string;
-const PROD_URL = "https://tomdigati.github.io/pulse/";
-
-interface UploadRow {
-  id: string;
-  card_id: string;
-  client_id: string;
-  file_name: string;
-  file_size_bytes: number;
-  storage_path: string;
-  mime_type: string | null;
-  uploaded_at: string;
-  // Decorated at load time with a 24-hour signed URL so the admin can
-  // click to view/download. Refreshes on every reload.
-  signedUrl?: string;
-}
-
-interface EngagementSummary {
-  client: Client;
-  cardsTotal: number;
-  cardsAnswered: number;
-  cardsSkipped: number;
-}
+const PROD_URL =
+  ((import.meta.env.PUBLIC_FRONTEND_URL ?? "") as string).replace(/\/$/, "") ||
+  `${window.location.origin}${BASE_URL.replace(/\/$/, "")}`;
 
 const escape = (s: string): string =>
   s
@@ -51,84 +36,265 @@ const escape = (s: string): string =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-async function sha256(s: string): Promise<string> {
-  const buf = new TextEncoder().encode(s);
-  const hash = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 // ── boot ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const mount = document.getElementById("admin");
   if (!mount) return;
 
-  if (!PASSWORD_HASH) {
-    renderConfigError(mount);
+  // Optional first-class flows triggered by query-string tokens (the
+  // frontend served the verify-email / reset-password page from the same
+  // route as /admin/ for simplicity).
+  const params = new URLSearchParams(window.location.search);
+  const verifyToken = params.get("verify-email-token");
+  const resetToken = params.get("reset-password-token");
+
+  if (verifyToken) {
+    return renderVerifyEmail(mount, verifyToken);
+  }
+  if (resetToken) {
+    return renderResetPassword(mount, resetToken);
+  }
+
+  let me: AuthUser | null = null;
+  try {
+    me = await authApi.me();
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      renderLogin(mount);
+      return;
+    }
+    throw err;
+  }
+
+  if (!me.is_admin) {
+    renderLogin(mount, "This account doesn't have admin access.");
     return;
   }
 
-  if (sessionStorage.getItem(SESSION_KEY) === "ok") {
-    runAdmin(mount);
-    return;
-  }
-
-  renderLogin(mount);
+  void runAdmin(mount, me);
 }
 
-function renderConfigError(mount: HTMLElement): void {
-  mount.innerHTML = `
-    <div class="login-card">
-      <h1>Admin not configured</h1>
-      <p>
-        Set <code>PUBLIC_ADMIN_PASSWORD_HASH</code> in <code>.env.local</code>
-        and restart the dev server.
-      </p>
-    </div>
-  `;
-}
-
-// ── login ────────────────────────────────────────────────────────────────
+// ── login + signup + email flows ─────────────────────────────────────────
 
 function renderLogin(mount: HTMLElement, errorMsg?: string): void {
   mount.innerHTML = `
-    <form class="login-card" id="login-form">
+    <form class="login-card" id="login-form" novalidate>
       <h1>Pulse admin</h1>
-      <p>Enter the admin password.</p>
+      <p>Sign in to manage engagements.</p>
       ${errorMsg ? `<div class="login-error">${escape(errorMsg)}</div>` : ""}
-      <input
-        id="login-input"
-        class="input"
-        type="password"
-        placeholder="Password"
-        autocomplete="current-password"
-        autofocus
-      />
-      <button class="btn btn-primary" type="submit" style="margin-top:8px">
-        Sign in
-      </button>
+
+      <a class="btn btn-secondary" href="${escape(authApi.oauthAuthorizeUrl("google"))}" style="margin-top:8px;display:block;text-align:center">
+        Continue with Google
+      </a>
+      <a class="btn btn-secondary" href="${escape(authApi.oauthAuthorizeUrl("microsoft"))}" style="margin-top:8px;display:block;text-align:center">
+        Continue with Microsoft
+      </a>
+
+      <div style="margin:14px 0;text-align:center;color:var(--muted);font-size:12px">— or —</div>
+
+      <label class="edit-field">
+        <span class="edit-label">Email</span>
+        <input id="login-email" class="input" type="email" autocomplete="email" required />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">Password</span>
+        <input id="login-pw" class="input" type="password" autocomplete="current-password" required />
+      </label>
+
+      <button class="btn btn-primary" type="submit" style="margin-top:8px">Sign in</button>
+
+      <div style="margin-top:12px;font-size:13px;display:flex;justify-content:space-between">
+        <a href="#" data-action="signup">Create account</a>
+        <a href="#" data-action="forgot">Forgot password?</a>
+      </div>
     </form>
   `;
 
-  const form = mount.querySelector<HTMLFormElement>("#login-form");
-  form?.addEventListener("submit", async (e) => {
+  mount.querySelector<HTMLFormElement>("#login-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = mount.querySelector<HTMLInputElement>("#login-input");
-    const value = input?.value ?? "";
-    if (!value) return;
-    const hash = await sha256(value);
-    if (hash === PASSWORD_HASH) {
-      sessionStorage.setItem(SESSION_KEY, "ok");
-      runAdmin(mount);
-    } else {
-      renderLogin(mount, "Wrong password.");
+    const email = (mount.querySelector<HTMLInputElement>("#login-email")?.value ?? "").trim();
+    const password = mount.querySelector<HTMLInputElement>("#login-pw")?.value ?? "";
+    if (!email || !password) return;
+
+    try {
+      const user = await authApi.login(email, password);
+      if (!user.is_admin) {
+        renderLogin(mount, "This account doesn't have admin access.");
+        return;
+      }
+      void runAdmin(mount, user);
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Sign-in failed";
+      renderLogin(mount, detail);
+    }
+  });
+
+  mount.querySelector<HTMLAnchorElement>("[data-action='signup']")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    renderSignup(mount);
+  });
+  mount.querySelector<HTMLAnchorElement>("[data-action='forgot']")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    renderForgotPassword(mount);
+  });
+}
+
+function renderSignup(mount: HTMLElement, errorMsg?: string): void {
+  mount.innerHTML = `
+    <form class="login-card" id="signup-form" novalidate>
+      <h1>Create account</h1>
+      <p>Once your email is verified, an admin must grant you admin access.</p>
+      ${errorMsg ? `<div class="login-error">${escape(errorMsg)}</div>` : ""}
+      <label class="edit-field">
+        <span class="edit-label">Name (optional)</span>
+        <input id="signup-name" class="input" type="text" autocomplete="name" />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">Email</span>
+        <input id="signup-email" class="input" type="email" autocomplete="email" required />
+      </label>
+      <label class="edit-field">
+        <span class="edit-label">Password (8+ characters)</span>
+        <input id="signup-pw" class="input" type="password" autocomplete="new-password" minlength="8" required />
+      </label>
+      <button class="btn btn-primary" type="submit" style="margin-top:8px">Create account</button>
+      <div style="margin-top:12px;font-size:13px"><a href="#" data-action="back-to-login">← Back to sign in</a></div>
+    </form>
+  `;
+
+  mount.querySelector<HTMLFormElement>("#signup-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (mount.querySelector<HTMLInputElement>("#signup-name")?.value ?? "").trim();
+    const email = (mount.querySelector<HTMLInputElement>("#signup-email")?.value ?? "").trim();
+    const password = mount.querySelector<HTMLInputElement>("#signup-pw")?.value ?? "";
+
+    try {
+      await authApi.signup({ email, password, name: name || undefined });
+      mount.innerHTML = `
+        <div class="login-card">
+          <h1>Check your email</h1>
+          <p>We sent a verification link to <strong>${escape(email)}</strong>. Click it to activate the account, then sign in.</p>
+          <div style="margin-top:12px;font-size:13px"><a href="#" data-action="back-to-login">← Back to sign in</a></div>
+        </div>
+      `;
+      mount.querySelector<HTMLAnchorElement>("[data-action='back-to-login']")?.addEventListener("click", (e2) => {
+        e2.preventDefault();
+        renderLogin(mount);
+      });
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Signup failed";
+      renderSignup(mount, detail);
+    }
+  });
+
+  mount.querySelector<HTMLAnchorElement>("[data-action='back-to-login']")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    renderLogin(mount);
+  });
+}
+
+function renderForgotPassword(mount: HTMLElement): void {
+  mount.innerHTML = `
+    <form class="login-card" id="forgot-form" novalidate>
+      <h1>Reset password</h1>
+      <p>Enter your email and we'll send a reset link.</p>
+      <label class="edit-field">
+        <span class="edit-label">Email</span>
+        <input id="forgot-email" class="input" type="email" autocomplete="email" required />
+      </label>
+      <button class="btn btn-primary" type="submit" style="margin-top:8px">Send reset link</button>
+      <div style="margin-top:12px;font-size:13px"><a href="#" data-action="back-to-login">← Back to sign in</a></div>
+    </form>
+  `;
+
+  mount.querySelector<HTMLFormElement>("#forgot-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = (mount.querySelector<HTMLInputElement>("#forgot-email")?.value ?? "").trim();
+    try {
+      await authApi.forgotPassword(email);
+    } catch {
+      // Backend always returns 200 to avoid email enumeration. Show the
+      // same confirmation regardless of error.
+    }
+    mount.innerHTML = `
+      <div class="login-card">
+        <h1>Check your email</h1>
+        <p>If an account exists for <strong>${escape(email)}</strong>, you'll get a reset link shortly.</p>
+        <div style="margin-top:12px;font-size:13px"><a href="#" data-action="back-to-login">← Back to sign in</a></div>
+      </div>
+    `;
+    mount.querySelector<HTMLAnchorElement>("[data-action='back-to-login']")?.addEventListener("click", (e2) => {
+      e2.preventDefault();
+      renderLogin(mount);
+    });
+  });
+
+  mount.querySelector<HTMLAnchorElement>("[data-action='back-to-login']")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    renderLogin(mount);
+  });
+}
+
+async function renderVerifyEmail(mount: HTMLElement, token: string): Promise<void> {
+  mount.innerHTML = `<div class="login-card"><h1>Verifying email…</h1></div>`;
+  try {
+    await authApi.verifyEmail(token);
+    mount.innerHTML = `
+      <div class="login-card">
+        <h1>Email verified</h1>
+        <p>You can now sign in.</p>
+        <a class="btn btn-primary" href="${escape(BASE_URL)}admin/" style="display:block;margin-top:12px;text-align:center">Continue</a>
+      </div>
+    `;
+  } catch (err) {
+    const detail = err instanceof ApiError ? err.detail : "Verification failed";
+    mount.innerHTML = `
+      <div class="login-card">
+        <h1>Could not verify</h1>
+        <div class="login-error">${escape(detail)}</div>
+        <a class="btn btn-secondary" href="${escape(BASE_URL)}admin/" style="display:block;margin-top:12px;text-align:center">Back to sign in</a>
+      </div>
+    `;
+  }
+}
+
+function renderResetPassword(mount: HTMLElement, token: string): void {
+  mount.innerHTML = `
+    <form class="login-card" id="reset-form" novalidate>
+      <h1>Set new password</h1>
+      <label class="edit-field">
+        <span class="edit-label">New password (8+ characters)</span>
+        <input id="reset-pw" class="input" type="password" autocomplete="new-password" minlength="8" required />
+      </label>
+      <button class="btn btn-primary" type="submit" style="margin-top:8px">Set password</button>
+    </form>
+  `;
+  mount.querySelector<HTMLFormElement>("#reset-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pw = mount.querySelector<HTMLInputElement>("#reset-pw")?.value ?? "";
+    try {
+      await authApi.resetPassword(token, pw);
+      mount.innerHTML = `
+        <div class="login-card">
+          <h1>Password updated</h1>
+          <a class="btn btn-primary" href="${escape(BASE_URL)}admin/" style="display:block;margin-top:12px;text-align:center">Sign in</a>
+        </div>
+      `;
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Could not reset password";
+      mount.innerHTML = `
+        <div class="login-card">
+          <h1>Could not reset password</h1>
+          <div class="login-error">${escape(detail)}</div>
+          <a class="btn btn-secondary" href="${escape(BASE_URL)}admin/" style="display:block;margin-top:12px;text-align:center">Back to sign in</a>
+        </div>
+      `;
     }
   });
 }
 
-// ── after auth ───────────────────────────────────────────────────────────
+// ── after auth: routing ──────────────────────────────────────────────────
 
 interface RouteList {
   kind: "list";
@@ -146,28 +312,30 @@ function parseRoute(): Route {
   return { kind: "list" };
 }
 
-async function runAdmin(mount: HTMLElement): Promise<void> {
+async function runAdmin(mount: HTMLElement, _user: AuthUser): Promise<void> {
   mount.innerHTML = renderShell();
   attachShellHandlers(mount);
 
-  const supabase = getAdminClient();
   const container = mount.querySelector<HTMLElement>(".admin-container")!;
 
   let route = parseRoute();
-  await draw(supabase, container, route);
+  await draw(container, route);
 
   window.addEventListener("hashchange", async () => {
     route = parseRoute();
-    await draw(supabase, container, route);
+    await draw(container, route);
   });
 }
 
 function renderShell(): string {
+  const baseSlash = BASE_URL.endsWith("/") ? BASE_URL : `${BASE_URL}/`;
   return `
     <div class="admin-page">
       <header class="admin-header">
         <span class="brand">
-          <span class="brand-tag">IGTMS</span>· Pulse
+          <img src="${escape(baseSlash)}axiolo-logo.svg" alt="Axiolo" class="brand-logo" width="84" height="23" />
+          <span class="brand-sep" aria-hidden="true">·</span>
+          Pulse
           <span class="admin-title" style="margin-left:8px">Admin</span>
         </span>
         <button class="admin-logout" type="button" id="logout">Sign out</button>
@@ -180,82 +348,47 @@ function renderShell(): string {
 }
 
 function attachShellHandlers(mount: HTMLElement): void {
-  mount.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", () => {
-    sessionStorage.removeItem(SESSION_KEY);
+  mount.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // ignore — best-effort
+    }
     window.location.hash = "";
     renderLogin(mount);
   });
 }
 
-async function draw(
-  supabase: SupabaseClient,
-  container: HTMLElement,
-  route: Route
-): Promise<void> {
+async function draw(container: HTMLElement, route: Route): Promise<void> {
   if (route.kind === "list") {
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
-    const summaries = await loadEngagements(supabase);
-    renderList(supabase, container, summaries);
+    try {
+      const summaries = await adminApi.listClients();
+      renderList(container, summaries);
+    } catch (err) {
+      console.error("load engagements:", err);
+      container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
+    }
     return;
   }
 
   container.innerHTML = `<div class="loading">Loading responses...</div>`;
-  const detail = await loadDetail(supabase, route.clientId);
-  if (!detail) {
-    container.innerHTML = `<div class="error"><h1 class="error-title">Not found</h1><p class="error-body">No client with that id.</p></div>`;
-    return;
+  try {
+    const detail = await adminApi.getClient(route.clientId);
+    renderDetail(container, detail);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      container.innerHTML = `<div class="error"><h1 class="error-title">Not found</h1><p class="error-body">No client with that id.</p></div>`;
+      return;
+    }
+    console.error("load detail:", err);
+    container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
   }
-  renderDetail(supabase, container, detail);
 }
 
-// ── list ─────────────────────────────────────────────────────────────────
+// ── list view ───────────────────────────────────────────────────────────
 
-async function loadEngagements(
-  supabase: SupabaseClient
-): Promise<EngagementSummary[]> {
-  const { data: clients, error } = await supabase
-    .from("clients")
-    .select("id, name, org_name, engagement_name, token, brief, created_at, last_active_at")
-    .order("created_at", { ascending: false });
-  if (error || !clients) {
-    console.error("load clients:", error);
-    return [];
-  }
-
-  const summaries: EngagementSummary[] = [];
-  for (const client of clients as Client[]) {
-    const [{ count: total }, { count: answered }, { count: skipped }] =
-      await Promise.all([
-        supabase
-          .from("cards")
-          .select("id", { count: "exact", head: true })
-          .eq("client_id", client.id),
-        supabase
-          .from("responses")
-          .select("id", { count: "exact", head: true })
-          .eq("client_id", client.id)
-          .eq("state", "answered"),
-        supabase
-          .from("responses")
-          .select("id", { count: "exact", head: true })
-          .eq("client_id", client.id)
-          .eq("state", "skipped"),
-      ]);
-    summaries.push({
-      client,
-      cardsTotal: total ?? 0,
-      cardsAnswered: answered ?? 0,
-      cardsSkipped: skipped ?? 0,
-    });
-  }
-  return summaries;
-}
-
-function renderList(
-  supabase: SupabaseClient,
-  container: HTMLElement,
-  summaries: EngagementSummary[]
-): void {
+function renderList(container: HTMLElement, summaries: EngagementSummary[]): void {
   const header = `
     <div class="engagement-list-header">
       <h2 class="engagement-list-h">Engagements</h2>
@@ -272,24 +405,24 @@ function renderList(
     `;
     container
       .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
-      ?.addEventListener("click", () => openNewEngagementModal(supabase, container));
+      ?.addEventListener("click", () => openNewEngagementModal(container));
     return;
   }
 
   const rows = summaries
     .map((s) => {
-      const completed = s.cardsAnswered + s.cardsSkipped;
+      const completed = s.answered_count + s.skipped_count;
       return `
-      <tr data-client-id="${escape(s.client.id)}">
+      <tr data-client-id="${escape(s.id)}">
         <td>
-          <div class="client-name">${escape(s.client.name)}</div>
-          <div class="org-name">${escape(s.client.org_name ?? "")}</div>
+          <div class="client-name">${escape(s.name)}</div>
+          <div class="org-name">${escape(s.org_name ?? "")}</div>
         </td>
-        <td>${escape(s.client.engagement_name ?? "")}</td>
+        <td>${escape(s.engagement_name ?? "")}</td>
         <td>
-          <span class="progress-pill">${completed} / ${s.cardsTotal}</span>
+          <span class="progress-pill">${completed} / ${s.total_cards}</span>
         </td>
-        <td class="last-active">${escape(formatTimestamp(s.client.last_active_at))}</td>
+        <td class="last-active">${escape(formatTimestamp(s.last_active_at))}</td>
         <td class="actions">
           <button class="action-link" type="button" data-action="view">View responses</button>
           <button class="action-link" type="button" data-action="copy-link">Copy link</button>
@@ -317,11 +450,9 @@ function renderList(
     </div>
   `;
 
-  // The header's New engagement button lives outside the table, so handle
-  // it before the table-row branch below tries to find a parent tr.
   container
     .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
-    ?.addEventListener("click", () => openNewEngagementModal(supabase, container));
+    ?.addEventListener("click", () => openNewEngagementModal(container));
 
   container.addEventListener("click", async (e) => {
     const target = e.target;
@@ -335,7 +466,7 @@ function renderList(
     if (!row) return;
     const clientId = row.dataset.clientId!;
 
-    const summary = summaries.find((s) => s.client.id === clientId);
+    const summary = summaries.find((s) => s.id === clientId);
     if (!summary) return;
 
     switch (action) {
@@ -343,27 +474,24 @@ function renderList(
         window.location.hash = `client/${clientId}`;
         return;
       case "copy-link":
-        await navigator.clipboard.writeText(`${PROD_URL}?t=${summary.client.token}`);
+        await navigator.clipboard.writeText(`${PROD_URL}?t=${summary.token}`);
         toast("Link copied to clipboard");
         return;
       case "rotate": {
         const ok = window.confirm(
-          `Rotate ${summary.client.name}'s token? The current link will stop working immediately.`
+          `Rotate ${summary.name}'s token? The current link will stop working immediately.`
         );
         if (!ok) return;
-        await rotateToken(summary.client.id);
+        await rotateToken(container, summary.id);
         return;
       }
     }
   });
 }
 
-// ── new engagement modal ─────────────────────────────────────────────────
+// ── new engagement modal ────────────────────────────────────────────────
 
-function openNewEngagementModal(
-  supabase: SupabaseClient,
-  container: HTMLElement
-): void {
+function openNewEngagementModal(container: HTMLElement): void {
   const modalEl = document.createElement("div");
   modalEl.className = "modal";
   modalEl.innerHTML = `
@@ -408,8 +536,7 @@ function openNewEngagementModal(
     el.addEventListener("click", close);
   }
 
-  const form = modalEl.querySelector<HTMLFormElement>("#new-eng-form")!;
-  form.addEventListener("submit", async (e) => {
+  modalEl.querySelector<HTMLFormElement>("#new-eng-form")!.addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = (modalEl.querySelector<HTMLInputElement>("#ne-name")?.value ?? "").trim();
     const org = (modalEl.querySelector<HTMLInputElement>("#ne-org")?.value ?? "").trim();
@@ -425,151 +552,65 @@ function openNewEngagementModal(
       submitBtn.textContent = "Creating...";
     }
 
-    const token = Array.from(crypto.getRandomValues(new Uint8Array(8)))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-
-    const { data, error } = await supabase
-      .from("clients")
-      .insert({
+    try {
+      const created = await adminApi.createClient({
         name,
         org_name: org || null,
         engagement_name: eng || null,
-        token,
-      })
-      .select()
-      .single<Client>();
-
-    if (error || !data) {
-      console.error("create engagement:", error);
+      });
+      close();
+      toast(`Engagement created for ${created.name}`);
+      window.location.hash = `client/${created.id}`;
+      void container;
+    } catch (err) {
+      console.error("create engagement:", err);
       toast("Could not create engagement");
       if (submitBtn) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Create engagement";
       }
-      return;
     }
-
-    close();
-    toast(`Engagement created for ${data.name}`);
-    // Hop straight to the new client's detail view so Tom can start
-    // adding cards.
-    window.location.hash = `client/${data.id}`;
-    void container; // keeps closure alive even if router doesn't fire
   });
 }
 
-async function rotateToken(clientId: string): Promise<void> {
-  const supabase = getAdminClient();
-  // 8 random bytes → 16 hex chars, matching the seed-time token format.
-  // 64 bits of entropy is plenty for a private invite link.
-  const newToken = Array.from(crypto.getRandomValues(new Uint8Array(8)))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const { error } = await supabase
-    .from("clients")
-    .update({ token: newToken })
-    .eq("id", clientId);
-  if (error) {
-    console.error("rotate token:", error);
+async function rotateToken(container: HTMLElement, clientId: string): Promise<void> {
+  try {
+    const updated = await adminApi.rotateToken(clientId);
+    await navigator.clipboard.writeText(`${PROD_URL}?t=${updated.token}`);
+    toast("New token copied to clipboard");
+  } catch (err) {
+    console.error("rotate token:", err);
     toast("Could not rotate token");
     return;
   }
-  await navigator.clipboard.writeText(`${PROD_URL}?t=${newToken}`);
-  toast("New token copied to clipboard");
-  // Refresh the list to pick up the new token.
-  const mount = document.getElementById("admin")!;
-  const container = mount.querySelector<HTMLElement>(".admin-container")!;
-  await draw(supabase, container, { kind: "list" });
+  await draw(container, { kind: "list" });
 }
 
-// ── detail ───────────────────────────────────────────────────────────────
+// ── detail view ──────────────────────────────────────────────────────────
 
-interface DetailData {
-  client: Client;
+interface DetailViewData {
+  client: Client & { token: string };
   cards: Card[];
   responses: Map<string, ClientResponse>;
-  uploads: Map<string, UploadRow[]>; // keyed by card_id
+  uploads: Map<string, UploadRow[]>;
 }
 
-async function loadDetail(
-  supabase: SupabaseClient,
-  clientId: string
-): Promise<DetailData | null> {
-  const { data: client, error: clientErr } = await supabase
-    .from("clients")
-    .select("id, name, org_name, engagement_name, token, brief, created_at, last_active_at")
-    .eq("id", clientId)
-    .single<Client>();
-  if (clientErr || !client) return null;
-
-  const [cardsResult, responsesResult, uploadsResult] = await Promise.all([
-    supabase
-      .from("cards")
-      .select(
-        "id, client_id, order_index, category, title, context, question, response_type, options, default_value, skip_allowed, attachment_path, created_at"
-      )
-      .eq("client_id", clientId)
-      .order("order_index", { ascending: true }),
-    supabase
-      .from("responses")
-      .select(
-        "id, card_id, client_id, state, response_value, viewed_at, answered_at, created_at, updated_at"
-      )
-      .eq("client_id", clientId),
-    supabase
-      .from("uploads")
-      .select(
-        "id, card_id, client_id, file_name, file_size_bytes, storage_path, mime_type, uploaded_at"
-      )
-      .eq("client_id", clientId)
-      .order("uploaded_at", { ascending: true }),
-  ]);
-
-  if (cardsResult.error || !cardsResult.data) return null;
-
-  const responses = new Map<string, ClientResponse>(
-    (responsesResult.data ?? []).map((r) => {
-      const cr = r as ClientResponse;
-      return [cr.card_id, cr];
-    })
-  );
-
-  // Generate 24-hour signed URLs for every upload so the admin can
-  // click filenames to view or download. Done in parallel for speed.
-  const allUploads = (uploadsResult.data ?? []) as UploadRow[];
-  await Promise.all(
-    allUploads.map(async (row) => {
-      const { data } = await supabase.storage
-        .from("pulse-uploads")
-        .createSignedUrl(row.storage_path, 60 * 60 * 24);
-      row.signedUrl = data?.signedUrl;
-    })
-  );
-
+function bucketDetail(payload: EngagementDetail): DetailViewData {
+  const responses = new Map<string, ClientResponse>();
+  for (const r of payload.responses) responses.set(r.card_id, r);
   const uploads = new Map<string, UploadRow[]>();
-  for (const row of allUploads) {
-    const list = uploads.get(row.card_id) ?? [];
-    list.push(row);
-    uploads.set(row.card_id, list);
+  for (const u of payload.uploads) {
+    const list = uploads.get(u.card_id) ?? [];
+    list.push(u);
+    uploads.set(u.card_id, list);
   }
-
-  return {
-    client,
-    cards: cardsResult.data as Card[],
-    responses,
-    uploads,
-  };
+  return { client: payload.client, cards: payload.cards, responses, uploads };
 }
 
-function renderDetail(
-  supabase: SupabaseClient,
-  container: HTMLElement,
-  data: DetailData
-): void {
+function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
+  const data = bucketDetail(payload);
   const { client, cards, responses, uploads } = data;
 
-  // Per-card status overrides keyed by card id.
   const statusOverrides = new Map<string, Status>();
 
   const cardsHtml = cards
@@ -600,65 +641,53 @@ function renderDetail(
     window.location.hash = "";
   });
 
-  container
-    .querySelector<HTMLButtonElement>("#copy-link")
-    ?.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(`${PROD_URL}?t=${client.token}`);
-      toast("Link copied to clipboard");
-    });
+  container.querySelector<HTMLButtonElement>("#copy-link")?.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(`${PROD_URL}?t=${client.token}`);
+    toast("Link copied to clipboard");
+  });
 
-  container
-    .querySelector<HTMLButtonElement>("#copy-all")
-    ?.addEventListener("click", async (e) => {
-      const btn = e.currentTarget as HTMLButtonElement;
-      btn.disabled = true;
-      try {
-        const md = buildEngagementMarkdown(data, statusOverrides);
-        await navigator.clipboard.writeText(md);
-        flashCopied(btn, "Copied!");
-        toast("All cards copied as Markdown");
-      } catch (err) {
-        console.error("copy all:", err);
-        toast("Could not copy");
-      } finally {
-        btn.disabled = false;
-      }
-    });
+  container.querySelector<HTMLButtonElement>("#copy-all")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    try {
+      const md = buildEngagementMarkdown(data, statusOverrides);
+      await navigator.clipboard.writeText(md);
+      flashCopied(btn, "Copied!");
+      toast("All cards copied as Markdown");
+    } catch (err) {
+      console.error("copy all:", err);
+      toast("Could not copy");
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
-  container
-    .querySelector<HTMLButtonElement>("#download-md")
-    ?.addEventListener("click", (e) => {
-      const btn = e.currentTarget as HTMLButtonElement;
-      try {
-        const md = buildEngagementMarkdown(data, statusOverrides);
-        triggerDownload(md, downloadFilename(client));
-        flashCopied(btn, "Downloaded");
-        toast(`Saved ${downloadFilename(client)}`);
-      } catch (err) {
-        console.error("download:", err);
-        toast("Could not download");
-      }
-    });
+  container.querySelector<HTMLButtonElement>("#download-md")?.addEventListener("click", (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    try {
+      const md = buildEngagementMarkdown(data, statusOverrides);
+      triggerDownload(md, downloadFilename(client));
+      flashCopied(btn, "Downloaded");
+      toast(`Saved ${downloadFilename(client)}`);
+    } catch (err) {
+      console.error("download:", err);
+      toast("Could not download");
+    }
+  });
 
-  // ── Brief (engagement narrative) ─────────────────────────────────────
+  // ── Brief ────────────────────────────────────────────────────────────
   const briefSlot = container.querySelector<HTMLElement>("#brief-slot")!;
 
   const showBriefView = (): void => {
     briefSlot.innerHTML = renderBriefView(client);
-    briefSlot
-      .querySelector<HTMLButtonElement>("[data-action='brief-edit']")
-      ?.addEventListener("click", showBriefEdit);
-    briefSlot
-      .querySelector<HTMLButtonElement>("[data-action='brief-add']")
-      ?.addEventListener("click", showBriefEdit);
-    briefSlot
-      .querySelector<HTMLButtonElement>("[data-action='brief-copy']")
-      ?.addEventListener("click", async (e) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        await navigator.clipboard.writeText(client.brief ?? "");
-        flashCopied(btn, "Copied!");
-        toast("Brief copied as Markdown");
-      });
+    briefSlot.querySelector<HTMLButtonElement>("[data-action='brief-edit']")?.addEventListener("click", showBriefEdit);
+    briefSlot.querySelector<HTMLButtonElement>("[data-action='brief-add']")?.addEventListener("click", showBriefEdit);
+    briefSlot.querySelector<HTMLButtonElement>("[data-action='brief-copy']")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      await navigator.clipboard.writeText(client.brief ?? "");
+      flashCopied(btn, "Copied!");
+      toast("Brief copied as Markdown");
+    });
   };
 
   const showBriefEdit = (): void => {
@@ -667,42 +696,31 @@ function renderDetail(
     ta.focus();
     ta.setSelectionRange(0, 0);
 
-    briefSlot
-      .querySelector<HTMLButtonElement>("[data-action='brief-cancel']")
-      ?.addEventListener("click", showBriefView);
-
-    briefSlot
-      .querySelector<HTMLButtonElement>("[data-action='brief-save']")
-      ?.addEventListener("click", async (e) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        const next = ta.value;
-        btn.disabled = true;
-        const orig = btn.textContent;
-        btn.textContent = "Saving...";
-        try {
-          const { error } = await supabase
-            .from("clients")
-            .update({ brief: next || null })
-            .eq("id", client.id);
-          if (error) {
-            console.error("brief save:", error);
-            toast("Could not save brief");
-            return;
-          }
-          client.brief = next || null;
-          toast("Brief saved");
-          showBriefView();
-        } finally {
-          btn.disabled = false;
-          btn.textContent = orig;
-        }
-      });
+    briefSlot.querySelector<HTMLButtonElement>("[data-action='brief-cancel']")?.addEventListener("click", showBriefView);
+    briefSlot.querySelector<HTMLButtonElement>("[data-action='brief-save']")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      const next = ta.value;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = "Saving...";
+      try {
+        await adminApi.updateClient(client.id, { brief: next || null });
+        client.brief = next || null;
+        toast("Brief saved");
+        showBriefView();
+      } catch (err) {
+        console.error("brief save:", err);
+        toast("Could not save brief");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    });
   };
 
-  showBriefView(); // attach initial handlers (the HTML was rendered inline above)
+  showBriefView();
 
-  // Per-card handlers. Re-bound after each card-level re-render via
-  // attachCardHandlers so edit/save/cancel keep working after a swap.
+  // ── Per-card handlers ────────────────────────────────────────────────
   const attachCardHandlers = (articleEl: HTMLElement): void => {
     const cardId = articleEl.dataset.cardId!;
     const card = cards.find((c) => c.id === cardId);
@@ -713,120 +731,93 @@ function renderDetail(
       statusOverrides.set(cardId, select.value as Status);
     });
 
-    articleEl
-      .querySelector<HTMLButtonElement>("[data-action='copy-card']")
-      ?.addEventListener("click", async (e) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        btn.disabled = true;
-        try {
-          const md = buildSingleCardMarkdown(
-            client,
-            card,
-            responses.get(card.id),
-            uploads.get(card.id) ?? [],
-            statusOverrides.get(card.id)
-          );
-          await navigator.clipboard.writeText(md);
-          flashCopied(btn, "Copied!");
-        } catch (err) {
-          console.error("copy card:", err);
-          toast("Could not copy");
-        } finally {
-          btn.disabled = false;
-        }
-      });
+    articleEl.querySelector<HTMLButtonElement>("[data-action='copy-card']")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      try {
+        const md = buildSingleCardMarkdown(
+          client,
+          card,
+          responses.get(card.id),
+          uploads.get(card.id) ?? [],
+          statusOverrides.get(card.id)
+        );
+        await navigator.clipboard.writeText(md);
+        flashCopied(btn, "Copied!");
+      } catch (err) {
+        console.error("copy card:", err);
+        toast("Could not copy");
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
-    articleEl
-      .querySelector<HTMLButtonElement>("[data-action='edit-card-start']")
-      ?.addEventListener("click", () => {
-        swapCardHtml(articleEl, renderEditCardForm(card));
-      });
+    articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-start']")?.addEventListener("click", () => {
+      swapCardHtml(articleEl, renderEditCardForm(card));
+    });
 
-    articleEl
-      .querySelector<HTMLButtonElement>("[data-action='edit-card-cancel']")
-      ?.addEventListener("click", () => {
+    articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-cancel']")?.addEventListener("click", () => {
+      swapCardHtml(
+        articleEl,
+        renderResponseCard(card, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides)
+      );
+    });
+
+    articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-save']")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      const patch = readEditForm(articleEl, card);
+      if (!patch) return;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Saving...";
+      try {
+        const updated = await adminApi.updateCard(card.id, patch);
+        const idx = cards.findIndex((c) => c.id === card.id);
+        if (idx >= 0) cards[idx] = updated;
         swapCardHtml(
           articleEl,
-          renderResponseCard(card, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides)
+          renderResponseCard(updated, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides)
         );
-      });
+        toast("Card saved");
+      } catch (err) {
+        console.error("card update:", err);
+        toast("Could not save");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
 
-    articleEl
-      .querySelector<HTMLButtonElement>("[data-action='edit-card-save']")
-      ?.addEventListener("click", async (e) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        const patch = readEditForm(articleEl, card);
-        if (!patch) return;
-        btn.disabled = true;
-        const original = btn.textContent;
-        btn.textContent = "Saving...";
-        try {
-          const { data: updated, error } = await supabase
-            .from("cards")
-            .update(patch)
-            .eq("id", card.id)
-            .select()
-            .single<Card>();
-          if (error || !updated) {
-            console.error("card update:", error);
-            toast("Could not save");
-            return;
-          }
-          // Replace in the local cards array so re-renders pick up the
-          // new text without a full reload.
-          const idx = cards.findIndex((c) => c.id === card.id);
-          if (idx >= 0) cards[idx] = updated;
-          swapCardHtml(
-            articleEl,
-            renderResponseCard(updated, responses.get(card.id), uploads.get(card.id) ?? [], statusOverrides)
-          );
-          toast("Card saved");
-        } finally {
-          btn.disabled = false;
-          btn.textContent = original;
-        }
-      });
+    articleEl.querySelector<HTMLButtonElement>("[data-action='delete-card']")?.addEventListener("click", async () => {
+      const responseCount =
+        responses.get(card.id) && responses.get(card.id)!.state !== "viewed" ? "an existing response" : null;
+      const uploadList = uploads.get(card.id) ?? [];
+      const warningParts: string[] = [];
+      if (responseCount) warningParts.push("the response on file");
+      if (uploadList.length) warningParts.push(`${uploadList.length} uploaded file${uploadList.length === 1 ? "" : "s"}`);
+      const warning = warningParts.length
+        ? `\n\nThis will also remove ${warningParts.join(" and ")}. This cannot be undone.`
+        : "\n\nThis cannot be undone.";
+      const ok = window.confirm(`Delete card ${card.order_index}: "${card.title}"?${warning}`);
+      if (!ok) return;
 
-    articleEl
-      .querySelector<HTMLButtonElement>("[data-action='delete-card']")
-      ?.addEventListener("click", async () => {
-        const responseCount =
-          responses.get(card.id) && responses.get(card.id)!.state !== "viewed"
-            ? "an existing response"
-            : null;
-        const uploadList = uploads.get(card.id) ?? [];
-        const warningParts: string[] = [];
-        if (responseCount) warningParts.push("the response on file");
-        if (uploadList.length) warningParts.push(`${uploadList.length} uploaded file${uploadList.length === 1 ? "" : "s"}`);
-        const warning = warningParts.length
-          ? `\n\nThis will also remove ${warningParts.join(" and ")}. This cannot be undone.`
-          : "\n\nThis cannot be undone.";
-        const ok = window.confirm(`Delete card ${card.order_index}: "${card.title}"?${warning}`);
-        if (!ok) return;
+      try {
+        await adminApi.deleteCard(card.id);
+      } catch (err) {
+        console.error("delete card:", err);
+        toast("Could not delete");
+        return;
+      }
 
-        const { error } = await supabase.from("cards").delete().eq("id", card.id);
-        if (error) {
-          console.error("delete card:", error);
-          toast("Could not delete");
-          return;
-        }
-        // FK on delete cascade clears responses/uploads rows. Also purge
-        // any storage objects we know about so the bucket doesn't leak.
-        for (const u of uploadList) {
-          void supabase.storage.from("pulse-uploads").remove([u.storage_path]);
-        }
-
-        const idx = cards.findIndex((c) => c.id === card.id);
-        if (idx >= 0) cards.splice(idx, 1);
-        responses.delete(card.id);
-        uploads.delete(card.id);
-        articleEl.remove();
-        toast("Card deleted");
-      });
+      const idx = cards.findIndex((c) => c.id === card.id);
+      if (idx >= 0) cards.splice(idx, 1);
+      responses.delete(card.id);
+      uploads.delete(card.id);
+      articleEl.remove();
+      toast("Card deleted");
+    });
   };
 
-  // swapCardHtml replaces an article's contents and rebinds handlers
-  // against the freshly rendered DOM nodes.
   const swapCardHtml = (articleEl: HTMLElement, newHtml: string): void => {
     const tmp = document.createElement("div");
     tmp.innerHTML = newHtml.trim();
@@ -836,13 +827,11 @@ function renderDetail(
     attachCardHandlers(next);
   };
 
-  for (const articleEl of container.querySelectorAll<HTMLElement>(
-    ".response-card[data-card-id]"
-  )) {
+  for (const articleEl of container.querySelectorAll<HTMLElement>(".response-card[data-card-id]")) {
     attachCardHandlers(articleEl);
   }
 
-  // ── Add card flow ─────────────────────────────────────────────────────
+  // ── Add card flow ────────────────────────────────────────────────────
   const addCardSlot = container.querySelector<HTMLElement>("#add-card-slot")!;
   const cardsList = container.querySelector<HTMLElement>("#cards-list")!;
 
@@ -850,9 +839,7 @@ function renderDetail(
     addCardSlot.innerHTML = `
       <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
     `;
-    addCardSlot
-      .querySelector<HTMLButtonElement>("#add-card-trigger")
-      ?.addEventListener("click", showAddCardForm);
+    addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", showAddCardForm);
   };
 
   const showAddCardForm = (): void => {
@@ -862,79 +849,63 @@ function renderDetail(
     const optionsField = formEl.querySelector<HTMLElement>(".add-options-field")!;
     const showOrHideOptions = (): void => {
       const t = typeSelect.value;
-      optionsField.style.display =
-        t === "single-select" || t === "multi-select" ? "" : "none";
+      optionsField.style.display = t === "single-select" || t === "multi-select" ? "" : "none";
     };
     typeSelect.addEventListener("change", showOrHideOptions);
     showOrHideOptions();
 
-    formEl
-      .querySelector<HTMLButtonElement>("[data-action='add-card-cancel']")
-      ?.addEventListener("click", showAddCardTrigger);
-
-    formEl
-      .querySelector<HTMLButtonElement>("[data-action='add-card-save']")
-      ?.addEventListener("click", async (e) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        const newCard = readAddForm(formEl);
-        if (!newCard) return;
-        btn.disabled = true;
-        const original = btn.textContent;
-        btn.textContent = "Saving...";
-        try {
-          const nextOrder =
-            cards.length > 0 ? Math.max(...cards.map((c) => c.order_index)) + 1 : 1;
-          const { data: created, error } = await supabase
-            .from("cards")
-            .insert({
-              client_id: client.id,
-              order_index: nextOrder,
-              ...newCard,
-            })
-            .select()
-            .single<Card>();
-          if (error || !created) {
-            console.error("create card:", error);
-            toast("Could not create card");
-            return;
-          }
-          cards.push(created);
-          // Append rendered article to the cards list and bind handlers.
-          const tmp = document.createElement("div");
-          tmp.innerHTML = renderResponseCard(
-            created,
-            undefined,
-            [],
-            statusOverrides
-          ).trim();
-          const next = tmp.firstElementChild as HTMLElement | null;
-          if (next) {
-            cardsList.appendChild(next);
-            attachCardHandlers(next);
-          }
-          showAddCardTrigger();
-          toast("Card added");
-        } finally {
-          btn.disabled = false;
-          btn.textContent = original;
+    formEl.querySelector<HTMLButtonElement>("[data-action='add-card-cancel']")?.addEventListener("click", showAddCardTrigger);
+    formEl.querySelector<HTMLButtonElement>("[data-action='add-card-save']")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      const newCard = readAddForm(formEl);
+      if (!newCard) return;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Saving...";
+      try {
+        const created = await adminApi.createCard(client.id, newCard);
+        cards.push(created);
+        const tmp = document.createElement("div");
+        tmp.innerHTML = renderResponseCard(created, undefined, [], statusOverrides).trim();
+        const next = tmp.firstElementChild as HTMLElement | null;
+        if (next) {
+          cardsList.appendChild(next);
+          attachCardHandlers(next);
         }
-      });
+        showAddCardTrigger();
+        toast("Card added");
+      } catch (err) {
+        console.error("create card:", err);
+        toast("Could not create card");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
   };
 
-  addCardSlot
-    .querySelector<HTMLButtonElement>("#add-card-trigger")
-    ?.addEventListener("click", showAddCardForm);
+  addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", showAddCardForm);
 }
 
-// Reads a new-card payload from the inline form. Returns null if any
-// required field is empty (focuses the offender + toasts).
-function readAddForm(formEl: HTMLElement): Partial<Card> | null {
+interface AddCardPayload {
+  category: string;
+  title: string;
+  context: string;
+  question: string;
+  response_type: ResponseType;
+  options: string[] | null;
+  default_value: string | null;
+  skip_allowed: boolean;
+  attachment_path: string | null;
+}
+
+function readAddForm(formEl: HTMLElement): AddCardPayload | null {
   const title = (formEl.querySelector<HTMLInputElement>(".add-title")?.value ?? "").trim();
   const category = (formEl.querySelector<HTMLInputElement>(".add-category")?.value ?? "").trim();
   const context = (formEl.querySelector<HTMLTextAreaElement>(".add-context")?.value ?? "").trim();
   const question = (formEl.querySelector<HTMLTextAreaElement>(".add-question")?.value ?? "").trim();
-  const responseType = formEl.querySelector<HTMLSelectElement>(".add-type")?.value ?? "";
-  const optionsRaw = (formEl.querySelector<HTMLTextAreaElement>(".add-options")?.value ?? "");
+  const responseType = (formEl.querySelector<HTMLSelectElement>(".add-type")?.value ?? "") as ResponseType;
+  const optionsRaw = formEl.querySelector<HTMLTextAreaElement>(".add-options")?.value ?? "";
   const defaultValue = (formEl.querySelector<HTMLTextAreaElement>(".add-default")?.value ?? "").trim();
   const attachment = (formEl.querySelector<HTMLInputElement>(".add-attachment")?.value ?? "").trim();
   const skipAllowed = formEl.querySelector<HTMLInputElement>(".add-skip")?.checked ?? true;
@@ -955,10 +926,7 @@ function readAddForm(formEl: HTMLElement): Partial<Card> | null {
   const isSelect = responseType === "single-select" || responseType === "multi-select";
   let options: string[] | null = null;
   if (isSelect) {
-    options = optionsRaw
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    options = optionsRaw.split("\n").map((s) => s.trim()).filter(Boolean);
     if (options.length === 0) {
       formEl.querySelector<HTMLElement>(".add-options")?.focus();
       toast("At least one option is required");
@@ -971,7 +939,7 @@ function readAddForm(formEl: HTMLElement): Partial<Card> | null {
     category,
     context,
     question,
-    response_type: responseType as Card["response_type"],
+    response_type: responseType,
     options,
     default_value: defaultValue || null,
     attachment_path: attachment || null,
@@ -1046,14 +1014,14 @@ function renderAddCardForm(): string {
       </div>
 
       <div class="edit-actions">
-        <button class="btn-primary-sm" type="button" data-action="add-card-save">Add card</button>
+        <button class="btn-primary-sm" type="button" data-action="add-card-save">Save card</button>
         <button class="btn-ghost-sm" type="button" data-action="add-card-cancel">Cancel</button>
       </div>
     </article>
   `;
 }
 
-// ── Brief (engagement narrative) ───────────────────────────────────────
+// ── Brief templates ─────────────────────────────────────────────────────
 
 const BRIEF_TEMPLATE = `# <Client name> · <Engagement name>
 
@@ -1157,9 +1125,7 @@ function renderBriefView(client: Client): string {
 }
 
 function renderBriefEdit(client: Client): string {
-  const value = client.brief && client.brief.trim().length > 0
-    ? client.brief
-    : BRIEF_TEMPLATE;
+  const value = client.brief && client.brief.trim().length > 0 ? client.brief : BRIEF_TEMPLATE;
   return `
     <div class="brief-card brief-editing">
       <div class="brief-head">
@@ -1174,6 +1140,8 @@ function renderBriefEdit(client: Client): string {
   `;
 }
 
+// ── Card rendering helpers ──────────────────────────────────────────────
+
 function renderResponseCard(
   card: Card,
   response: ClientResponse | undefined,
@@ -1187,8 +1155,7 @@ function renderResponseCard(
   const stateClass = stateClassFor(response);
 
   const optionsHtml = STATUS_VALUES.map(
-    (s) =>
-      `<option value="${escape(s)}"${s === suggested ? " selected" : ""}>${escape(s)}</option>`
+    (s) => `<option value="${escape(s)}"${s === suggested ? " selected" : ""}>${escape(s)}</option>`
   ).join("");
 
   return `
@@ -1219,13 +1186,7 @@ function renderResponseCard(
   `;
 }
 
-// readEditForm pulls a partial patch out of the inline edit form. Returns
-// null when a required field is empty (the offending input is focused so
-// the operator can fix it).
-function readEditForm(
-  articleEl: HTMLElement,
-  card: Card
-): Partial<Card> | null {
+function readEditForm(articleEl: HTMLElement, card: Card): Partial<Card> | null {
   const titleEl = articleEl.querySelector<HTMLInputElement>(".edit-title");
   const categoryEl = articleEl.querySelector<HTMLInputElement>(".edit-category");
   const contextEl = articleEl.querySelector<HTMLTextAreaElement>(".edit-context");
@@ -1253,14 +1214,10 @@ function readEditForm(
     }
   }
 
-  const isSelect =
-    card.response_type === "single-select" || card.response_type === "multi-select";
+  const isSelect = card.response_type === "single-select" || card.response_type === "multi-select";
   let options: string[] | null | undefined;
   if (isSelect && optionsEl) {
-    options = optionsEl.value
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    options = optionsEl.value.split("\n").map((s) => s.trim()).filter(Boolean);
     if (options.length === 0) {
       optionsEl.focus();
       toast("At least one option is required");
@@ -1281,11 +1238,8 @@ function readEditForm(
 }
 
 function renderEditCardForm(card: Card): string {
-  const isSelect =
-    card.response_type === "single-select" || card.response_type === "multi-select";
-  const optionsText = isSelect && card.options
-    ? card.options.join("\n")
-    : "";
+  const isSelect = card.response_type === "single-select" || card.response_type === "multi-select";
+  const optionsText = isSelect && card.options ? card.options.join("\n") : "";
   return `
     <article class="response-card is-editing" data-card-id="${escape(card.id)}">
       <div class="response-card-head">
@@ -1347,39 +1301,28 @@ function renderEditCardForm(card: Card): string {
 function labelFor(response: ClientResponse | undefined): string {
   if (!response) return "Not viewed";
   switch (response.state) {
-    case "answered":
-      return "Answered";
-    case "skipped":
-      return "Skipped";
-    case "viewed":
-      return "Viewed";
-    case "needs_edit":
-      return "Editing";
+    case "answered": return "Answered";
+    case "skipped": return "Skipped";
+    case "viewed": return "Viewed";
+    case "needs_edit": return "Editing";
     case "not_started":
-    default:
-      return "Not viewed";
+    default: return "Not viewed";
   }
 }
 
 function stateClassFor(response: ClientResponse | undefined): string {
   if (!response) return "state-pending";
   switch (response.state) {
-    case "answered":
-      return "state-answered";
-    case "skipped":
-      return "state-skipped";
-    case "viewed":
-      return "state-viewed";
-    default:
-      return "state-pending";
+    case "answered": return "state-answered";
+    case "skipped": return "state-skipped";
+    case "viewed": return "state-viewed";
+    default: return "state-pending";
   }
 }
 
 function responseBodyMutedClass(response: ClientResponse | undefined): string {
   if (!response) return " muted";
-  if (response.state === "viewed" || response.state === "skipped" || response.state === "not_started") {
-    return " muted";
-  }
+  if (response.state === "viewed" || response.state === "skipped" || response.state === "not_started") return " muted";
   return "";
 }
 
@@ -1396,37 +1339,26 @@ interface ResponseValueShape {
   note?: string;
 }
 
-function renderResponseBodyHtml(
-  card: Card,
-  response: ClientResponse | undefined,
-  uploads: UploadRow[]
-): string {
+function renderResponseBodyHtml(card: Card, response: ClientResponse | undefined, uploads: UploadRow[]): string {
   if (!response || response.state === "not_started") return "Not yet viewed.";
   if (response.state === "viewed") return "Card opened, no response yet.";
 
   const v = (response.response_value ?? {}) as ResponseValueShape;
-  const noteHtml = v.note
-    ? `<div class="response-note"><strong>Note:</strong> ${escape(v.note)}</div>`
-    : "";
+  const noteHtml = v.note ? `<div class="response-note"><strong>Note:</strong> ${escape(v.note)}</div>` : "";
 
   if (response.state === "skipped") return `Skipped.${noteHtml}`;
 
   let body: string;
   switch (card.response_type) {
     case "confirm-edit":
-      body = v.confirmed
-        ? "Confirmed as written."
-        : `Edited:\n${v.correction ?? ""}`;
+      body = v.confirmed ? "Confirmed as written." : `Edited:\n${v.correction ?? ""}`;
       break;
     case "single-select":
       body = escape(String(v.selected ?? ""));
       break;
     case "multi-select": {
       const arr = Array.isArray(v.selected) ? v.selected : [];
-      body =
-        arr.length === 0
-          ? "None selected."
-          : `<ul>${arr.map((s) => `<li>${escape(s)}</li>`).join("")}</ul>`;
+      body = arr.length === 0 ? "None selected." : `<ul>${arr.map((s) => `<li>${escape(s)}</li>`).join("")}</ul>`;
       break;
     }
     case "short-text":
@@ -1434,9 +1366,7 @@ function renderResponseBodyHtml(
       body = escape(v.text ?? "");
       break;
     case "document-link":
-      body = v.url
-        ? `<a href="${escape(v.url)}" target="_blank" rel="noreferrer noopener">${escape(v.url)}</a>`
-        : "";
+      body = v.url ? `<a href="${escape(v.url)}" target="_blank" rel="noreferrer noopener">${escape(v.url)}</a>` : "";
       break;
     case "contact-share":
       body = [
@@ -1451,11 +1381,9 @@ function renderResponseBodyHtml(
           ? "No files uploaded."
           : `<ul class="uploads-list">${uploads
               .map((u) => {
+                const url = adminApi.uploadDownloadUrl(u.id);
                 const label = `${escape(u.file_name)} <span class="upload-size">(${formatBytes(u.file_size_bytes)})</span>`;
-                if (u.signedUrl) {
-                  return `<li><a href="${escape(u.signedUrl)}" target="_blank" rel="noreferrer noopener" class="upload-link">${label}</a></li>`;
-                }
-                return `<li>${label} <span class="upload-error">(download unavailable, refresh)</span></li>`;
+                return `<li><a href="${escape(url)}" target="_blank" rel="noreferrer noopener" class="upload-link">${label}</a></li>`;
               })
               .join("")}</ul>`;
       break;
@@ -1473,15 +1401,8 @@ function formatBytes(bytes: number): string {
 
 // ── markdown export plumbing ─────────────────────────────────────────────
 
-// Map upload rows to the markdown export's lightweight shape. No storage
-// round trip — files are referenced by name in the markdown so they can
-// be located by directory search; download happens in the admin UI.
 function summarizeUploads(uploads: UploadRow[]): UploadInfo[] {
-  return uploads.map((u) => ({
-    id: u.id,
-    name: u.file_name,
-    sizeBytes: u.file_size_bytes,
-  }));
+  return uploads.map((u) => ({ id: u.id, name: u.file_name, sizeBytes: u.file_size_bytes }));
 }
 
 function buildSingleCardMarkdown(
@@ -1492,19 +1413,10 @@ function buildSingleCardMarkdown(
   statusOverride: Status | undefined
 ): string {
   const status = statusOverride ?? suggestStatus(card, response);
-  return renderCardMarkdown({
-    card,
-    client,
-    response,
-    status,
-    uploads: summarizeUploads(uploads),
-  });
+  return renderCardMarkdown({ card, client, response, status, uploads: summarizeUploads(uploads) });
 }
 
-function buildEngagementMarkdown(
-  data: DetailData,
-  overrides: Map<string, Status>
-): string {
+function buildEngagementMarkdown(data: DetailViewData, overrides: Map<string, Status>): string {
   const blocks: string[] = [];
   for (const card of data.cards) {
     const response = data.responses.get(card.id);
@@ -1522,7 +1434,6 @@ function buildEngagementMarkdown(
   return renderEngagementMarkdown(blocks);
 }
 
-// Slugify a value for filename usage (kebab-case, alpha-num + dashes only).
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -1588,5 +1499,4 @@ main().catch((err) => {
   console.error("Pulse admin failed:", err);
 });
 
-// Suppress unused-import warning for BASE_URL (kept for potential future routing).
 void BASE_URL;

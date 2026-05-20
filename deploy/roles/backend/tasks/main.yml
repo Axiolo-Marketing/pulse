@@ -1,0 +1,112 @@
+# Backend role: install + run the FastAPI app under /opt/pulse/api.
+#
+# Order:
+#   1. Sync the api/ source from the operator's machine to the VPS.
+#   2. Create a venv with the system Python (asserted by preflight).
+#   3. uv sync --frozen into the venv.
+#   4. Template /etc/pulse/pulse.env from group_vars + vault.
+#   5. Run alembic upgrade head.
+#   6. Seed the initial admin user (idempotent — ON CONFLICT DO NOTHING).
+#   7. Drop the systemd unit, daemon-reload, enable + restart.
+
+# ── 1. Source sync ────────────────────────────────────────────────────────
+- name: Rsync api/ source to {{ pulse_api_dir }}
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir }}/../api/"
+    dest: "{{ pulse_api_dir }}/"
+    delete: true
+    rsync_opts:
+      - "--exclude=.venv"
+      - "--exclude=__pycache__"
+      - "--exclude=.pytest_cache"
+      - "--exclude=tests"            # tests don't ship to prod
+      - "--exclude=.coverage"
+      - "--exclude=htmlcov"
+      - "--exclude=db-init"          # dev-only init scripts
+      - "--chown={{ pulse_user }}:{{ pulse_group }}"
+
+- name: Ensure venv exists at {{ pulse_venv_dir }}
+  ansible.builtin.command: "{{ pulse_python }} -m venv {{ pulse_venv_dir }}"
+  args:
+    creates: "{{ pulse_venv_dir }}/bin/python"
+  become_user: "{{ pulse_user }}"
+
+- name: Install uv into the venv
+  ansible.builtin.pip:
+    name: uv
+    state: present
+    virtualenv: "{{ pulse_venv_dir }}"
+  become_user: "{{ pulse_user }}"
+
+- name: Sync Python dependencies via uv (--frozen against uv.lock)
+  ansible.builtin.command: "{{ pulse_venv_dir }}/bin/uv sync --frozen --no-dev"
+  args:
+    chdir: "{{ pulse_api_dir }}"
+  become_user: "{{ pulse_user }}"
+  register: uv_sync
+  changed_when: "'No changes detected' not in (uv_sync.stderr | default(''))"
+
+# ── 2. Environment file (mode 0640 so only pulse user + group reads it) ──
+- name: Template /etc/pulse/pulse.env
+  ansible.builtin.template:
+    src: pulse.env.j2
+    dest: "{{ pulse_env_file }}"
+    owner: "{{ pulse_user }}"
+    group: "{{ pulse_group }}"
+    mode: "0640"
+  notify: Restart pulse-api
+
+# ── 3. Migrations ─────────────────────────────────────────────────────────
+- name: Run alembic upgrade head
+  ansible.builtin.command: "{{ pulse_venv_dir }}/bin/alembic upgrade head"
+  args:
+    chdir: "{{ pulse_api_dir }}"
+  environment:
+    DATABASE_URL: "postgresql+asyncpg://{{ pulse_db_owner }}:{{ vault_pulse_db_owner_password }}@/{{ pulse_db_name }}?host=/var/run/postgresql"
+  become_user: "{{ pulse_user }}"
+  register: alembic_result
+  changed_when: "'Running upgrade' in alembic_result.stdout"
+
+# ── 4. Seed the first admin user (idempotent). The operator then uses
+# "Forgot password?" or OAuth (matched by email) to set their credentials.
+- name: Seed initial admin user
+  community.postgresql.postgresql_query:
+    db: "{{ pulse_db_name }}"
+    login_user: "{{ pulse_db_owner }}"
+    login_password: "{{ vault_pulse_db_owner_password }}"
+    login_unix_socket: /var/run/postgresql
+    query: >
+      insert into public.users (email, is_admin, email_verified_at)
+      values (%s, true, now())
+      on conflict (email) do nothing
+    positional_args:
+      - "{{ pulse_initial_admin_email }}"
+  changed_when: false  # idempotent insert; reporting "changed" every run is noisy
+
+# ── 5. Systemd unit ───────────────────────────────────────────────────────
+- name: Drop pulse-api.service
+  ansible.builtin.template:
+    src: pulse-api.service.j2
+    dest: /etc/systemd/system/pulse-api.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart pulse-api
+
+- name: Enable + start pulse-api.service
+  ansible.builtin.systemd:
+    name: pulse-api
+    enabled: true
+    state: started
+
+# ── 6. Backup cron (Pulse-scoped — separate file in /etc/cron.d so it
+# never collides with other apps' crontabs)
+- name: Drop /etc/cron.d/pulse-backup
+  ansible.builtin.copy:
+    src: pulse-backup.cron
+    dest: /etc/cron.d/pulse-backup
+    owner: root
+    group: root
+    mode: "0644"

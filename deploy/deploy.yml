@@ -1,0 +1,29 @@
+# Pulse deploy playbook.
+#
+# Runs on a SHARED Debian VPS that already hosts other apps. Every role is
+# scoped to the paths/units listed in roles/preflight — nothing outside
+# Pulse's slice is touched. First run should always include `--check --diff`
+# so the operator can read every diff before applying for real.
+#
+# Usage:
+#   ansible-playbook deploy.yml --ask-vault-pass --check --diff   # preview
+#   ansible-playbook deploy.yml --ask-vault-pass                  # apply
+#
+# Bootstrap (one-time, by hand on the VPS) — see deploy/README.md for the
+# exact commands.
+
+- name: Deploy Pulse
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - vault.yml
+
+  roles:
+    - role: preflight        # asserts shared services exist; never installs them
+    - role: postgres-pulse   # creates pulse DB + roles inside the existing Postgres
+    - role: backend          # /opt/pulse/api venv + systemd unit + .env
+    - role: frontend         # rsync local dist/ to /var/www/pulse
+    - role: nginx-site       # drops one site config, reloads (never restarts)
+    - role: tls              # requests cert via the existing certbot install

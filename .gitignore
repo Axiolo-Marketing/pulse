@@ -5,6 +5,17 @@ node_modules/
 dist/
 .astro/
 
+# python
+api/.venv/
+api/__pycache__/
+api/**/__pycache__/
+api/**/*.pyc
+api/.pytest_cache/
+api/.coverage
+api/htmlcov/
+api/.mypy_cache/
+api/.ruff_cache/
+
 # environment
 .env
 .env.local
@@ -19,3 +30,12 @@ npm-debug.log*
 Icon?
 .vscode/
 .idea/
+
+# ansible
+deploy/*.retry
+# deploy/vault.yml is ansible-vault encrypted and SAFE to commit.
+# An unencrypted vault.yml is NOT — refuse it.
+# Detect with: git diff --cached | grep -E '^\+(vault_|password)'
+
+# playwright session snapshots
+.playwright-mcp/

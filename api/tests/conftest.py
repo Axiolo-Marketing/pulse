@@ -1,0 +1,325 @@
+"""Test scaffolding.
+
+Strategy:
+- One Postgres test database (`pulse_test`) created by the db-init script.
+  Alembic migrations run against it once per pytest session.
+- Each test gets a single connection wrapped in a transaction that rolls
+  back at teardown — fast, isolated, no cross-test leakage.
+- The connection opens as the schema owner (superuser in compose, owner
+  role in prod). Tests that need to exercise RLS call `become_anon(conn,
+  token=...)` to switch the effective role to `pulse_anon` mid-transaction
+  via `SET LOCAL ROLE`. Seed data flushed by the superuser is visible
+  inside the same transaction after the role switch.
+- The FastAPI app under test gets a dependency override pointing at the
+  same connection, so endpoint tests share state with the seed fixtures.
+"""
+from __future__ import annotations
+
+import secrets
+from collections.abc import AsyncIterator
+from pathlib import Path  # noqa: F401  (used by tmp_uploads_dir fixture)
+
+import pytest
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from fastapi import Header, HTTPException
+
+from pulse_api import email as email_module
+from pulse_api.auth.session import encode_session
+from pulse_api.config import settings
+from pulse_api.db import get_admin_session, get_anon_session, get_session
+from pulse_api.email import OutboundEmail
+from pulse_api.main import app
+from pulse_api.observability import limiter
+
+API_DIR = Path(__file__).resolve().parents[1]
+
+
+# ── session-scoped: one engine + one Alembic upgrade ──────────────────────
+
+
+@pytest.fixture(scope="session")
+def alembic_config() -> AlembicConfig:
+    cfg = AlembicConfig(str(API_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(API_DIR / "migrations"))
+    if settings.test_database_url:
+        cfg.set_main_option("sqlalchemy.url", settings.test_database_url)
+    return cfg
+
+
+@pytest.fixture(scope="session")
+def _migrate(alembic_config: AlembicConfig) -> None:
+    """Run alembic upgrade head once against pulse_test, then leave it alone."""
+    original = settings.database_url
+    if settings.test_database_url:
+        settings.database_url = settings.test_database_url
+    try:
+        alembic_command.upgrade(alembic_config, "head")
+    finally:
+        settings.database_url = original
+
+
+@pytest.fixture(scope="session")
+async def engine(_migrate: None) -> AsyncIterator[AsyncEngine]:
+    url = settings.test_database_url or settings.database_url
+    eng = create_async_engine(url, pool_pre_ping=True)
+    yield eng
+    await eng.dispose()
+
+
+# ── per-test: transaction-rollback connection + session ───────────────────
+
+
+@pytest.fixture
+async def db_conn(engine: AsyncEngine) -> AsyncIterator[AsyncConnection]:
+    async with engine.connect() as conn:
+        trans = await conn.begin()
+        try:
+            yield conn
+        finally:
+            await trans.rollback()
+
+
+@pytest.fixture
+async def db(db_conn: AsyncConnection) -> AsyncIterator[AsyncSession]:
+    factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
+    async with factory() as session:
+        yield session
+
+
+async def become_anon(conn: AsyncConnection, *, token: str | None = None) -> None:
+    """Flip the open transaction's effective role to `pulse_anon`.
+
+    After this call, RLS policies fire as if the request came in on a
+    pulse_anon connection — the production pattern. If `token` is given,
+    set the session-local GUC that `pulse_request_token()` reads.
+
+    The role switch is bound to the current transaction (SET LOCAL); it
+    rolls back automatically when the test's outer transaction rolls back.
+    Note: once switched, you can't seed more rows in this transaction — do
+    all seeding before calling this.
+    """
+    await conn.execute(text("set local role pulse_anon"))
+    if token is not None:
+        # set_config(name, value, is_local=true) is the parameter-binding
+        # equivalent of SET LOCAL. SET LOCAL itself does not accept $-params.
+        await conn.execute(
+            text("select set_config('pulse.token', :t, true)"),
+            {"t": token},
+        )
+
+
+# ── HTTP client wired so the app shares db_conn's transaction ─────────────
+
+
+@pytest.fixture
+async def client(db_conn: AsyncConnection) -> AsyncIterator[AsyncClient]:
+    # Reset the global rate limiter at the start of each test so a fresh
+    # budget is available. slowapi keeps in-process state, which would
+    # otherwise carry across tests in the same session.
+    limiter.reset()
+    """Async HTTP client whose app routes use db_conn's transaction.
+
+    Both `get_session` and `get_admin_session` are overridden to bind to
+    `db_conn`. Sessions joined to a connection with an active transaction
+    do NOT commit that transaction when `session.commit()` is called —
+    they only end the session's own work — so route handlers can commit
+    freely and the outer rollback at teardown still wipes everything out.
+    """
+    async def _override_session() -> AsyncIterator[AsyncSession]:
+        # If a prior request in the same test flipped to pulse_anon,
+        # RESET ROLE brings us back to the connection's session_user
+        # (the owner role in dev). Harmless if no flip happened.
+        await db_conn.execute(text("reset role"))
+        factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
+        async with factory() as session:
+            yield session
+
+    async def _override_anon_session(
+        x_pulse_token: str | None = Header(default=None, alias="X-Pulse-Token"),
+    ) -> AsyncIterator[AsyncSession]:
+        if not x_pulse_token:
+            raise HTTPException(status_code=401, detail="missing token")
+        # Flip db_conn's effective role to pulse_anon and set the GUC that
+        # the helper functions read. Both are SET LOCAL — they roll back
+        # with the outer transaction at teardown. This matches the
+        # production `get_anon_session` shape exactly.
+        await db_conn.execute(text("set local role pulse_anon"))
+        await db_conn.execute(
+            text("select set_config('pulse.token', :t, true)"),
+            {"t": x_pulse_token},
+        )
+        factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_session
+    app.dependency_overrides[get_admin_session] = _override_session
+    app.dependency_overrides[get_anon_session] = _override_anon_session
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.pop(get_session, None)
+    app.dependency_overrides.pop(get_admin_session, None)
+    app.dependency_overrides.pop(get_anon_session, None)
+
+
+# ── seed fixtures ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def seed_client(db: AsyncSession) -> dict[str, str]:
+    token = secrets.token_hex(8)
+    row = (
+        await db.execute(
+            text(
+                "insert into public.clients (name, token) values (:n, :t) "
+                "returning id::text, token, name"
+            ),
+            {"n": "Renee", "t": token},
+        )
+    ).mappings().one()
+    return dict(row)
+
+
+@pytest.fixture
+async def other_seeded_client(db: AsyncSession) -> dict[str, str]:
+    token = secrets.token_hex(8)
+    row = (
+        await db.execute(
+            text(
+                "insert into public.clients (name, token) values (:n, :t) "
+                "returning id::text, token, name"
+            ),
+            {"n": "Josh", "t": token},
+        )
+    ).mappings().one()
+    return dict(row)
+
+
+@pytest.fixture
+async def seed_cards(db: AsyncSession, seed_client: dict[str, str]) -> list[dict[str, str]]:
+    """One card per response_type for seed_client. Useful for parametrized tests."""
+    types = [
+        "confirm-edit", "single-select", "multi-select", "short-text",
+        "long-text", "file-upload", "document-link", "contact-share",
+    ]
+    cards: list[dict[str, str]] = []
+    for i, rt in enumerate(types, start=1):
+        row = (
+            await db.execute(
+                text(
+                    "insert into public.cards "
+                    "(client_id, order_index, category, title, context, question, response_type) "
+                    "values (cast(:cid as uuid), :idx, 'Test', :t, 'ctx', 'q?', :rt) "
+                    "returning id::text, response_type, title"
+                ),
+                {"cid": seed_client["id"], "idx": i, "t": f"Card {rt}", "rt": rt},
+            )
+        ).mappings().one()
+        cards.append(dict(row))
+    return cards
+
+
+@pytest.fixture
+async def client_authed(client: AsyncClient, seed_client: dict[str, str]) -> AsyncClient:
+    client.headers["X-Pulse-Token"] = seed_client["token"]
+    return client
+
+
+@pytest.fixture
+async def seed_user(db: AsyncSession) -> dict[str, str]:
+    """Insert a verified non-admin operator user. password_hash matches
+    `password`. Returned dict has id, email, password (plaintext for login
+    tests)."""
+    from pulse_api.auth.password import hash_password
+
+    pw = "correct-horse-battery-staple"
+    row = (
+        await db.execute(
+            text(
+                "insert into public.users (email, password_hash, name, is_admin, email_verified_at) "
+                "values (:e, :h, :n, false, now()) "
+                "returning id::text, email"
+            ),
+            {"e": "operator@example.com", "h": hash_password(pw), "n": "Operator"},
+        )
+    ).mappings().one()
+    return {**dict(row), "password": pw}
+
+
+@pytest.fixture
+async def seed_admin_user(db: AsyncSession) -> dict[str, str]:
+    """Insert a verified admin user."""
+    from pulse_api.auth.password import hash_password
+
+    pw = "admin-pass-12345678"
+    row = (
+        await db.execute(
+            text(
+                "insert into public.users (email, password_hash, name, is_admin, email_verified_at) "
+                "values (:e, :h, :n, true, now()) "
+                "returning id::text, email"
+            ),
+            {"e": "admin@example.com", "h": hash_password(pw), "n": "Admin"},
+        )
+    ).mappings().one()
+    return {**dict(row), "password": pw}
+
+
+@pytest.fixture
+def admin_session_cookie(seed_admin_user: dict[str, str]) -> str:
+    """A signed session cookie value for the seeded admin. Fast path that
+    bypasses /login — use this when the test isn't about the login flow
+    itself."""
+    return encode_session(seed_admin_user["id"])
+
+
+@pytest.fixture
+async def admin_authed(
+    client: AsyncClient, admin_session_cookie: str
+) -> AsyncClient:
+    client.cookies.set(settings.session_cookie_name, admin_session_cookie)
+    return client
+
+
+@pytest.fixture(autouse=True)
+def tmp_uploads_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Point `settings.upload_dir` at a per-test tempdir so file writes
+    can't leak across tests or pollute the production volume. Autouse so
+    every test gets the isolation by default; tests that don't touch
+    uploads pay nothing for it."""
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    return upload_dir
+
+
+@pytest.fixture
+def captured_emails(monkeypatch: pytest.MonkeyPatch) -> list[OutboundEmail]:
+    """Replace email_module.send_email with an in-memory capture.
+
+    Tests assert against this list to verify what would have been sent —
+    no SMTP, no flakiness. Includes the verification + password-reset
+    routes' calls automatically because they import send_email from
+    `pulse_api.email`.
+    """
+    captured: list[OutboundEmail] = []
+
+    async def _capture(to: str, subject: str, body: str) -> None:
+        captured.append(OutboundEmail(to=to, subject=subject, body=body))
+
+    monkeypatch.setattr(email_module, "send_email", _capture)
+    return captured

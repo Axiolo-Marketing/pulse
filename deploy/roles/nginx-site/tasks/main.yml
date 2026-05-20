@@ -1,0 +1,29 @@
+# Nginx-site: ONE site config under sites-available + a symlink. Never
+# touches nginx.conf, the conf.d directory, the default site, or any other
+# app's vhost. Reloads (not restarts) so other apps don't blip.
+
+- name: Template the Pulse site config
+  ansible.builtin.template:
+    src: pulse-site.conf.j2
+    dest: /etc/nginx/sites-available/pulse
+    owner: root
+    group: root
+    mode: "0644"
+  register: site_file
+
+- name: Symlink into sites-enabled
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/pulse
+    dest: /etc/nginx/sites-enabled/pulse
+    state: link
+  register: site_link
+
+- name: Validate nginx config (fails the play before any reload)
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Reload nginx (NOT restart — keeps other vhosts up)
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when: site_file.changed or site_link.changed

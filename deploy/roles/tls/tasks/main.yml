@@ -1,0 +1,36 @@
+# TLS: request a Let's Encrypt cert for the Pulse domain through the
+# already-installed certbot. The system's existing renewal timer picks up
+# the new cert automatically — we do NOT install or modify that timer.
+
+- name: Check whether a cert for {{ pulse_domain }} already exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ pulse_domain }}/fullchain.pem"
+  register: cert_check
+
+- name: Ensure the webroot for ACME challenges exists
+  ansible.builtin.file:
+    path: /var/www/letsencrypt
+    state: directory
+    owner: root
+    group: www-data
+    mode: "0755"
+
+- name: Request cert via certbot (--webroot)
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --webroot
+        --webroot-path /var/www/letsencrypt
+        --domain {{ pulse_domain }}
+        --non-interactive
+        --agree-tos
+        --email {{ pulse_admin_email }}
+        --keep-until-expiring
+  when: not cert_check.stat.exists
+  register: certbot_run
+  changed_when: "'Successfully received certificate' in certbot_run.stdout"
+
+- name: Reload nginx so the new cert is loaded
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when: certbot_run.changed | default(false)

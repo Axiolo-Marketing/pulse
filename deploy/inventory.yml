@@ -1,0 +1,10 @@
+all:
+  hosts:
+    # Replace with your VPS hostname or IP. The host MUST already have:
+    #   - Postgres 14+ installed
+    #   - nginx with sites-available/sites-enabled layout
+    #   - certbot installed (the preflight role asserts these and fails fast otherwise)
+    pulse-prod:
+      ansible_host: pulse.axiolo.com         # tentative — change to your VPS hostname or IP
+      ansible_user: deploy            # SSH user with sudo for the scoped tasks
+      ansible_python_interpreter: /usr/bin/python3

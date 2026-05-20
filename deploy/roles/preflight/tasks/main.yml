@@ -1,0 +1,70 @@
+# Preflight: assert the shared services Pulse depends on are ALREADY present.
+# Never installs anything. If a check fails, the operator must install the
+# missing piece by hand (and this is intentional — apt installs on a shared
+# box can break other apps).
+
+- name: Verify Postgres 14+ is installed
+  ansible.builtin.command: psql --version
+  register: pg_version_check
+  changed_when: false
+  failed_when:
+    - pg_version_check.rc != 0
+    - "'psql (PostgreSQL)' not in pg_version_check.stdout"
+
+- name: Verify nginx is installed
+  ansible.builtin.command: nginx -v
+  register: nginx_check
+  changed_when: false
+  failed_when: nginx_check.rc != 0
+
+- name: Verify the sites-available / sites-enabled layout exists
+  ansible.builtin.stat:
+    path: /etc/nginx/sites-enabled
+  register: sites_enabled
+  failed_when: not sites_enabled.stat.exists or not sites_enabled.stat.isdir
+
+- name: Verify certbot is installed
+  ansible.builtin.command: certbot --version
+  register: certbot_check
+  changed_when: false
+  failed_when: certbot_check.rc != 0
+
+- name: Verify {{ pulse_python }} is installed
+  ansible.builtin.command: "{{ pulse_python }} --version"
+  register: python_check
+  changed_when: false
+  failed_when: python_check.rc != 0
+
+- name: Verify rsync is installed
+  ansible.builtin.command: rsync --version
+  register: rsync_check
+  changed_when: false
+  failed_when: rsync_check.rc != 0
+
+# ── From here on, the preflight CREATES Pulse-owned directories and the
+# unprivileged service user. These are all Pulse's own resources — nothing
+# else on the box can collide.
+
+- name: Create pulse system user
+  ansible.builtin.user:
+    name: "{{ pulse_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present
+
+- name: Create Pulse-owned directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ pulse_app_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
+    - { path: "{{ pulse_api_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
+    - { path: "{{ pulse_uploads_dir }}", owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0750" }
+    - { path: "{{ pulse_env_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0750" }
+    - { path: "{{ pulse_log_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
+    - { path: "{{ pulse_backup_dir }}",  owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0750" }
+    - { path: "{{ pulse_web_root }}",    owner: "www-data",         group: "www-data",          mode: "0755" }

@@ -1,4 +1,4 @@
-import type { Card, ClientResponse } from "./supabase";
+import type { Card, ClientResponse } from "./api";
 
 // Tiny escape helper so we can build cards via template strings without
 // pulling in a framework. Card text comes from our own database, but we
@@ -163,9 +163,16 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
   const backDisabled = position === 1 ? "disabled" : "";
   const forwardDisabled = position === total ? "disabled" : "";
 
+  // baseUrl may or may not end with `/` depending on Astro's `base` config.
+  const baseSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+
   mount.innerHTML = `
     <header class="topbar">
-      <span class="brand"><span class="brand-mark">IGTMS</span> · Pulse</span>
+      <span class="brand">
+        <img src="${baseSlash}axiolo-logo.svg" alt="Axiolo" class="brand-logo" width="84" height="23" />
+        <span class="brand-sep" aria-hidden="true">·</span>
+        Pulse
+      </span>
       <nav class="nav-controls" aria-label="Card navigation">
         <button class="nav-arrow" type="button" data-action="nav-back" ${backDisabled} aria-label="Previous card">‹</button>
         <button class="progress-btn" type="button" data-action="picker-open" aria-haspopup="dialog">

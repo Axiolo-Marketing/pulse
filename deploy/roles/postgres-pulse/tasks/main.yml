@@ -1,0 +1,49 @@
+# Postgres-pulse: uses the system's existing Postgres install. Creates the
+# `pulse` database + 3 roles. Never touches postgresql.conf, never modifies
+# any other database, never installs Postgres.
+
+- name: Ensure community.postgresql collection is available
+  ansible.builtin.command: ansible-galaxy collection list community.postgresql
+  register: pg_collection
+  changed_when: false
+  failed_when:
+    - pg_collection.rc != 0
+    - "'community.postgresql' not in pg_collection.stdout"
+
+- name: Create database roles (no-login if password is unset)
+  community.postgresql.postgresql_user:
+    name: "{{ item.name }}"
+    password: "{{ item.password }}"
+    role_attr_flags: "{{ item.flags }}"
+    login_user: postgres
+  become_user: postgres
+  loop:
+    - { name: "{{ pulse_db_owner }}", password: "{{ vault_pulse_db_owner_password }}", flags: "LOGIN,CREATEDB" }
+    - { name: "{{ pulse_db_anon }}",  password: "{{ vault_pulse_db_anon_password }}",  flags: "LOGIN,NOSUPERUSER,NOBYPASSRLS" }
+    - { name: "{{ pulse_db_admin }}", password: "{{ vault_pulse_db_admin_password }}", flags: "LOGIN,NOSUPERUSER,BYPASSRLS" }
+  no_log: true
+
+- name: Create pulse database (owned by pulse_owner)
+  community.postgresql.postgresql_db:
+    name: "{{ pulse_db_name }}"
+    owner: "{{ pulse_db_owner }}"
+    encoding: UTF-8
+    state: present
+    login_user: postgres
+  become_user: postgres
+
+- name: Grant CONNECT on pulse database to anon + admin roles
+  community.postgresql.postgresql_privs:
+    database: "{{ pulse_db_name }}"
+    type: database
+    privs: CONNECT
+    roles: "{{ pulse_db_anon }},{{ pulse_db_admin }}"
+    login_user: postgres
+  become_user: postgres
+
+- name: Ensure pgcrypto extension is enabled in the pulse database
+  community.postgresql.postgresql_ext:
+    name: pgcrypto
+    db: "{{ pulse_db_name }}"
+    login_user: postgres
+  become_user: postgres

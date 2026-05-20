@@ -1,10 +1,11 @@
 import {
-  createPulseClient,
+  clientApi,
+  ApiError,
   type Card,
   type Client,
   type ClientResponse,
   type ResponseState,
-} from "../lib/supabase";
+} from "../lib/api";
 import {
   renderCard,
   renderComplete,
@@ -15,24 +16,12 @@ import {
   type CompletedUpload,
   type PendingUpload,
 } from "../lib/render";
-import type { SupabaseClient } from "@supabase/supabase-js";
 
 interface BootData {
   client: Client;
   cards: Card[];
   responses: Map<string, ClientResponse>;
   uploads: Map<string, CompletedUpload[]>; // keyed by card_id
-}
-
-interface UploadRow {
-  id: string;
-  card_id: string;
-  client_id: string;
-  file_name: string;
-  file_size_bytes: number;
-  storage_path: string;
-  mime_type: string | null;
-  uploaded_at: string;
 }
 
 const BASE_URL = (import.meta.env.BASE_URL ?? "/") as string;
@@ -57,9 +46,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const supabase = createPulseClient(token);
-
-  const boot = await loadBootData(supabase);
+  const boot = await loadBootData(token);
   if (!boot) {
     renderError(
       mount,
@@ -69,58 +56,36 @@ async function main(): Promise<void> {
     return;
   }
 
-  runApp({ mount, supabase, ...boot });
+  runApp({ mount, token, ...boot });
 }
 
-async function loadBootData(
-  supabase: SupabaseClient
-): Promise<BootData | null> {
-  const { data: client, error: clientErr } = await supabase
-    .from("clients")
-    .select(
-      "id, name, org_name, engagement_name, token, created_at, last_active_at"
-    )
-    .single<Client>();
+async function loadBootData(token: string): Promise<BootData | null> {
+  let client: Client;
+  try {
+    client = await clientApi.me(token);
+  } catch (err) {
+    if (err instanceof ApiError) return null;
+    throw err;
+  }
 
-  if (clientErr || !client) return null;
-
-  const [cardsResult, responsesResult, uploadsResult] = await Promise.all([
-    supabase
-      .from("cards")
-      .select(
-        "id, client_id, order_index, category, title, context, question, response_type, options, default_value, skip_allowed, attachment_path, created_at"
-      )
-      .eq("client_id", client.id)
-      .order("order_index", { ascending: true }),
-    supabase
-      .from("responses")
-      .select(
-        "id, card_id, client_id, state, response_value, viewed_at, answered_at, created_at, updated_at"
-      )
-      .eq("client_id", client.id),
-    supabase
-      .from("uploads")
-      .select(
-        "id, card_id, client_id, file_name, file_size_bytes, storage_path, mime_type, uploaded_at"
-      )
-      .eq("client_id", client.id)
-      .order("uploaded_at", { ascending: true }),
+  const [cards, responsesList, uploadsList] = await Promise.all([
+    clientApi.cards(token),
+    clientApi.responses(token),
+    clientApi.uploads(token),
   ]);
 
-  if (cardsResult.error || !cardsResult.data) return null;
-
-  const cards = cardsResult.data as Card[];
   const responses = new Map<string, ClientResponse>(
-    (responsesResult.data ?? []).map((r) => {
-      const cr = r as ClientResponse;
-      return [cr.card_id, cr];
-    })
+    responsesList.map((r) => [r.card_id, r])
   );
 
   const uploads = new Map<string, CompletedUpload[]>();
-  for (const row of (uploadsResult.data ?? []) as UploadRow[]) {
+  for (const row of uploadsList) {
     const list = uploads.get(row.card_id) ?? [];
-    list.push({ id: row.id, name: row.file_name, sizeBytes: row.file_size_bytes });
+    list.push({
+      id: row.id,
+      name: row.file_name,
+      sizeBytes: row.file_size_bytes,
+    });
     uploads.set(row.card_id, list);
   }
 
@@ -129,11 +94,11 @@ async function loadBootData(
 
 interface RunCtx extends BootData {
   mount: HTMLElement;
-  supabase: SupabaseClient;
+  token: string;
 }
 
 function runApp(ctx: RunCtx): void {
-  const { mount, supabase, client, cards, responses, uploads } = ctx;
+  const { mount, token, client, cards, responses, uploads } = ctx;
 
   const bootIndex = firstUnansweredIndex(cards, responses);
   let index = bootIndex;
@@ -200,29 +165,15 @@ function runApp(ctx: RunCtx): void {
       }
     | { kind: "files-continue"; note?: string };
 
-  // markViewed inserts a viewed row for this card if and only if no row
-  // already exists. ignoreDuplicates makes the operation idempotent and
-  // safe to fire on every card render.
+  // markViewed inserts a viewed row for this card if no row exists yet.
+  // The backend's POST /api/responses/view is idempotent via the
+  // (card_id, client_id) unique constraint — safe to fire on every render.
   const markViewed = (cardId: string): void => {
     if (responses.has(cardId)) return;
-    const row = {
-      card_id: cardId,
-      client_id: client.id,
-      state: "viewed" as ResponseState,
-      viewed_at: new Date().toISOString(),
-    };
-    supabase
-      .from("responses")
-      .upsert(row, { onConflict: "card_id,client_id", ignoreDuplicates: true })
-      .select()
-      .maybeSingle<ClientResponse>()
-      .then(({ data, error }) => {
-        if (error) {
-          console.warn("mark viewed failed:", error);
-          return;
-        }
-        if (data) responses.set(cardId, data);
-      });
+    clientApi
+      .markViewed(token, cardId)
+      .then((data) => responses.set(cardId, data))
+      .catch((err) => console.warn("mark viewed failed:", err));
   };
 
   const draw = (): void => {
@@ -293,7 +244,6 @@ function runApp(ctx: RunCtx): void {
 
     let state: ResponseState;
     let value: unknown;
-    let answeredAt: string | null;
 
     // withNote folds an optional free-form note into the structured value.
     // null is preserved (skip with no note); objects get a note field.
@@ -304,41 +254,37 @@ function runApp(ctx: RunCtx): void {
       return v;
     };
 
+    // The backend derives `client_id` from the request's token and sets
+    // `answered_at`/`viewed_at` server-side based on `state`, so we only
+    // ship `{card_id, state, response_value}`.
     switch (action.kind) {
       case "confirm":
         state = "answered";
         value = { confirmed: true };
-        answeredAt = new Date().toISOString();
         break;
       case "edit":
         state = "answered";
         value = { confirmed: false, correction: action.correction };
-        answeredAt = new Date().toISOString();
         break;
       case "skip":
         state = "skipped";
         value = withNote(null, action.note);
-        answeredAt = null;
         break;
       case "single-select":
         state = "answered";
         value = withNote({ selected: action.option }, action.note);
-        answeredAt = new Date().toISOString();
         break;
       case "multi-select":
         state = "answered";
         value = withNote({ selected: action.options }, action.note);
-        answeredAt = new Date().toISOString();
         break;
       case "text":
         state = "answered";
         value = withNote({ text: action.text }, action.note);
-        answeredAt = new Date().toISOString();
         break;
       case "link":
         state = "answered";
         value = withNote({ url: action.url }, action.note);
-        answeredAt = new Date().toISOString();
         break;
       case "contact":
         state = "answered";
@@ -346,7 +292,6 @@ function runApp(ctx: RunCtx): void {
           { name: action.name, email: action.email, role: action.role },
           action.note
         );
-        answeredAt = new Date().toISOString();
         break;
       case "files-continue": {
         const list = uploads.get(card.id) ?? [];
@@ -355,28 +300,19 @@ function runApp(ctx: RunCtx): void {
         state = hasFiles || hasNote ? "answered" : "skipped";
         const base = hasFiles ? { file_ids: list.map((u) => u.id) } : null;
         value = withNote(base, action.note);
-        answeredAt = state === "answered" ? new Date().toISOString() : null;
         break;
       }
     }
 
-    const { data, error } = await supabase
-      .from("responses")
-      .upsert(
-        {
-          card_id: card.id,
-          client_id: client.id,
-          state,
-          response_value: value,
-          answered_at: answeredAt,
-        },
-        { onConflict: "card_id,client_id" }
-      )
-      .select()
-      .single<ClientResponse>();
-
-    if (error || !data) {
-      console.error("Save failed:", error);
+    let saved: ClientResponse;
+    try {
+      saved = await clientApi.saveResponse(token, {
+        card_id: card.id,
+        state,
+        response_value: value,
+      });
+    } catch (err) {
+      console.error("Save failed:", err);
       saveError = "Could not save just now. We will retry automatically.";
       mode = "view";
       clearRetryTimer();
@@ -389,15 +325,12 @@ function runApp(ctx: RunCtx): void {
     }
 
     clearRetryTimer();
-    responses.set(card.id, data);
+    responses.set(card.id, saved);
 
-    supabase
-      .from("clients")
-      .update({ last_active_at: new Date().toISOString() })
-      .eq("id", client.id)
-      .then(({ error: touchErr }) => {
-        if (touchErr) console.warn("last_active_at touch failed:", touchErr);
-      });
+    // Best-effort heartbeat — errors are non-fatal.
+    clientApi
+      .heartbeat(token)
+      .catch((err) => console.warn("last_active_at touch failed:", err));
 
     advance();
   };
@@ -432,43 +365,17 @@ function runApp(ctx: RunCtx): void {
       ];
       draw();
 
-      const path = `${client.id}/${card.id}/${tempId}-${sanitizeName(file.name)}`;
-
-      const { error: uploadErr } = await supabase.storage
-        .from("pulse-uploads")
-        .upload(path, file, {
-          contentType: file.type || "application/octet-stream",
-          upsert: false,
-        });
-
-      if (uploadErr) {
-        console.error("Storage upload failed:", uploadErr);
+      // Single multipart POST replaces the old storage.upload + row.insert
+      // pair — the backend handles disk write + row insert atomically.
+      let row;
+      try {
+        row = await clientApi.upload(token, card.id, file);
+      } catch (err) {
+        console.error("Upload failed:", err);
+        const detail =
+          err instanceof ApiError ? err.detail : "Upload failed";
         pendingUploads = pendingUploads.map((p) =>
-          p.tempId === tempId ? { ...p, error: "Upload failed" } : p
-        );
-        draw();
-        continue;
-      }
-
-      const { data: row, error: insertErr } = await supabase
-        .from("uploads")
-        .insert({
-          card_id: card.id,
-          client_id: client.id,
-          file_name: file.name,
-          file_size_bytes: file.size,
-          storage_path: path,
-          mime_type: file.type || null,
-        })
-        .select()
-        .single<UploadRow>();
-
-      if (insertErr || !row) {
-        console.error("Uploads insert failed:", insertErr);
-        pendingUploads = pendingUploads.map((p) =>
-          p.tempId === tempId
-            ? { ...p, error: "Could not register upload" }
-            : p
+          p.tempId === tempId ? { ...p, error: detail } : p
         );
         draw();
         continue;
@@ -492,12 +399,11 @@ function runApp(ctx: RunCtx): void {
     const target = list.find((u) => u.id === uploadId);
     if (!target) return;
 
-    const { error: rowErr } = await supabase
-      .from("uploads")
-      .delete()
-      .eq("id", uploadId);
-    if (rowErr) {
-      console.error("Upload row delete failed:", rowErr);
+    try {
+      // Backend removes both the DB row and the on-disk file in one call.
+      await clientApi.deleteUpload(token, uploadId);
+    } catch (err) {
+      console.error("Upload delete failed:", err);
       return;
     }
 
@@ -506,12 +412,6 @@ function runApp(ctx: RunCtx): void {
       list.filter((u) => u.id !== uploadId)
     );
     draw();
-
-    // Best-effort storage cleanup. The row is gone either way, so a stray
-    // object is harmless.
-    void supabase.storage
-      .from("pulse-uploads")
-      .remove([`${client.id}/${card.id}/${target.id}`]);
   };
 
   const handlers: CardHandlers = {
@@ -602,12 +502,6 @@ function firstUnansweredIndex(
     }
   }
   return cards.length;
-}
-
-function sanitizeName(name: string): string {
-  // Storage keys must be safe for URLs. Replace anything that would need
-  // encoding with '_', and collapse runs.
-  return name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/_+/g, "_");
 }
 
 if (import.meta.hot) {

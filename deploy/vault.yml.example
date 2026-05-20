@@ -1,0 +1,24 @@
+# Copy to deploy/vault.yml and run:
+#   ansible-vault encrypt deploy/vault.yml
+# Then commit the encrypted file. NEVER commit the plaintext version.
+# Decrypt later with:
+#   ansible-vault edit deploy/vault.yml
+
+# ── Database passwords (per role) ─────────────────────────────────────────
+vault_pulse_db_owner_password: "REPLACE-ME-owner"
+vault_pulse_db_anon_password:  "REPLACE-ME-anon"
+vault_pulse_db_admin_password: "REPLACE-ME-admin"
+
+# ── Session signing key (32+ random bytes hex) ───────────────────────────
+# Generate with: openssl rand -hex 32
+vault_pulse_session_secret: "REPLACE-ME-with-openssl-rand-hex-32"
+
+# ── OAuth client secrets ──────────────────────────────────────────────────
+vault_pulse_google_client_id:     ""
+vault_pulse_google_client_secret: ""
+vault_pulse_microsoft_client_id:     ""
+vault_pulse_microsoft_client_secret: ""
+
+# ── SMTP credentials ──────────────────────────────────────────────────────
+vault_pulse_smtp_user: ""
+vault_pulse_smtp_password: ""

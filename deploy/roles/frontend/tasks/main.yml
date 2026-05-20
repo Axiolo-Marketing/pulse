@@ -1,0 +1,21 @@
+# Frontend role: build Astro on the operator's machine and rsync the static
+# output to the VPS. Node is intentionally NOT installed on the VPS — the
+# shared box doesn't need it.
+
+- name: Verify a local Astro build exists at {{ pulse_local_dist }}
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/{{ pulse_local_dist }}"
+  delegate_to: localhost
+  become: false
+  register: dist_check
+  failed_when: not dist_check.stat.exists or not dist_check.stat.isdir
+  changed_when: false
+
+- name: Rsync dist/ → {{ pulse_web_root }}
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir }}/{{ pulse_local_dist }}"
+    dest: "{{ pulse_web_root }}/"
+    delete: true
+    rsync_opts:
+      - "--chown=www-data:www-data"
+      - "--chmod=D755,F644"

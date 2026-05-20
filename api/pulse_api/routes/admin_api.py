@@ -1,0 +1,236 @@
+"""Admin-only endpoints. Every route is gated by `Depends(get_current_admin)`
+which requires a valid session cookie AND `users.is_admin = true`.
+
+The DB session here is the BYPASSRLS one (`get_admin_session`) — admin
+operations need to read and write across all clients, which RLS would
+otherwise block.
+"""
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from pulse_api import storage
+from pulse_api.auth.middleware import get_current_admin
+from pulse_api.db import get_admin_session
+from pulse_api.models import User
+from pulse_api.repos import cards as cards_repo
+from pulse_api.repos import clients as clients_repo
+from pulse_api.repos import responses as responses_repo
+from pulse_api.repos import uploads as uploads_repo
+
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
+
+
+# ── Request/response models ────────────────────────────────────────────────
+
+
+class CreateClientRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    org_name: str | None = None
+    engagement_name: str | None = None
+
+
+class UpdateClientRequest(BaseModel):
+    """Partial update. Fields omitted from the request body stay as-is.
+    `token` is intentionally not accepted here — rotation goes through
+    its own POST endpoint so it's an explicit action."""
+
+    name: str | None = None
+    org_name: str | None = None
+    engagement_name: str | None = None
+    brief: str | None = None
+
+
+RESPONSE_TYPES = (
+    "confirm-edit", "single-select", "multi-select", "short-text",
+    "long-text", "file-upload", "document-link", "contact-share",
+)
+
+
+class CreateCardRequest(BaseModel):
+    category: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=300)
+    context: str
+    question: str
+    response_type: str = Field(
+        pattern=r"^(confirm-edit|single-select|multi-select|short-text|"
+                r"long-text|file-upload|document-link|contact-share)$"
+    )
+    options: list[str] | None = None
+    default_value: str | None = None
+    skip_allowed: bool = True
+    attachment_path: str | None = None
+
+
+class UpdateCardRequest(BaseModel):
+    """response_type is intentionally not accepted — changing it would
+    invalidate existing responses whose `response_value` shape depends on it."""
+
+    category: str | None = None
+    title: str | None = None
+    context: str | None = None
+    question: str | None = None
+    options: list[str] | None = None
+    default_value: str | None = None
+    skip_allowed: bool | None = None
+    attachment_path: str | None = None
+
+
+# ── Engagement (clients table) ─────────────────────────────────────────────
+
+
+@router.get("/clients")
+async def list_engagements(
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> list[dict[str, Any]]:
+    return await clients_repo.list_all_with_counts(session)
+
+
+@router.get("/clients/{client_id}")
+async def get_engagement(
+    client_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    client = await clients_repo.get_by_id(session, client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    return {
+        "client": client,
+        "cards": await cards_repo.list_for_client(session, client_id),
+        "responses": await responses_repo.list_for_client(session, client_id),
+        "uploads": await uploads_repo.list_for_client(session, client_id),
+    }
+
+
+@router.post("/clients", status_code=201)
+async def create_engagement(
+    req: CreateClientRequest,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    row = await clients_repo.create_engagement(
+        session,
+        name=req.name,
+        org_name=req.org_name,
+        engagement_name=req.engagement_name,
+    )
+    await session.commit()
+    return row
+
+
+@router.patch("/clients/{client_id}")
+async def update_engagement(
+    client_id: str,
+    req: UpdateClientRequest,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    fields = req.model_dump(exclude_unset=True)
+    row = await clients_repo.update_engagement(session, client_id, fields)
+    if row is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    await session.commit()
+    return row
+
+
+@router.post("/clients/{client_id}/rotate-token")
+async def rotate_token(
+    client_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    row = await clients_repo.rotate_token(session, client_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    await session.commit()
+    return row
+
+
+# ── Cards ──────────────────────────────────────────────────────────────────
+
+
+@router.post("/clients/{client_id}/cards", status_code=201)
+async def add_card(
+    client_id: str,
+    req: CreateCardRequest,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    # Verify the engagement exists; cleaner 404 than a FK violation
+    if (await clients_repo.get_by_id(session, client_id)) is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+
+    row = await cards_repo.create_card(
+        session,
+        client_id=client_id,
+        category=req.category,
+        title=req.title,
+        context=req.context,
+        question=req.question,
+        response_type=req.response_type,
+        options=req.options,
+        default_value=req.default_value,
+        skip_allowed=req.skip_allowed,
+        attachment_path=req.attachment_path,
+    )
+    if row is None:
+        raise HTTPException(status_code=500, detail="card creation failed")
+    await session.commit()
+    return row
+
+
+@router.patch("/cards/{card_id}")
+async def update_card(
+    card_id: str,
+    req: UpdateCardRequest,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    fields = req.model_dump(exclude_unset=True)
+    row = await cards_repo.update_card(session, card_id, fields)
+    if row is None:
+        raise HTTPException(status_code=404, detail="card not found")
+    await session.commit()
+    return row
+
+
+@router.delete("/cards/{card_id}", status_code=204)
+async def delete_card(
+    card_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> None:
+    deleted = await cards_repo.delete_card(session, card_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="card not found")
+    await session.commit()
+
+
+# ── Admin downloads (BYPASSRLS — admin can fetch any client's file) ────────
+
+
+@router.get("/uploads/{upload_id}/download")
+async def admin_download_upload(
+    upload_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> FileResponse:
+    row = await uploads_repo.admin_get_by_id(session, upload_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="upload not found")
+    try:
+        path = storage.resolve_within_upload_dir(row["storage_path"])
+    except storage.StoragePathError:
+        raise HTTPException(status_code=500, detail="invalid storage path") from None
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="file missing on disk")
+    return FileResponse(
+        path=path,
+        media_type=row["mime_type"] or "application/octet-stream",
+        filename=row["file_name"],
+    )

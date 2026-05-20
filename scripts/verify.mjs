@@ -81,7 +81,8 @@ console.log(
 );
 if (!pulseBucket) process.exit(1);
 
-// 4. Renee's URL
-const base = "https://tomdigati.github.io/pulse/";
-console.log(`\nRenee's URL:\n  ${base}?t=${client.token}\n`);
+// 4. Client URL (this script + the supabase/ dir are obsolete — kept for
+// reference only. Production URL is set via deploy/group_vars/all.yml.)
+const base = process.env.PUBLIC_FRONTEND_URL ?? "https://pulse.example.com/";
+console.log(`\nClient URL:\n  ${base}?t=${client.token}\n`);
 console.log("Milestone 1 verified.");

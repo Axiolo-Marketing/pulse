@@ -1,0 +1,34 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Pulse API (FastAPI / uvicorn)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=exec
+User={{ pulse_user }}
+Group={{ pulse_group }}
+WorkingDirectory={{ pulse_api_dir }}
+EnvironmentFile={{ pulse_env_file }}
+ExecStart={{ pulse_venv_dir }}/bin/uvicorn pulse_api.main:app \
+    --host 127.0.0.1 \
+    --port {{ pulse_api_port }} \
+    --workers {{ pulse_uvicorn_workers }} \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=2
+
+# Hardening — these only constrain pulse-api itself; nothing else on the box.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths={{ pulse_uploads_dir }} {{ pulse_log_dir }}
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pulse-api
+
+[Install]
+WantedBy=multi-user.target

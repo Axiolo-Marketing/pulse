@@ -13,7 +13,7 @@ description: |
   open items, make it into cards", "Pulse Q&A for <client>".
 
   The skill loads the canonical authoring format (markdown shape Pulse expects),
-  the response-type decision tree, the IGTMS voice rules, the sequencing pattern,
+  the response-type decision tree, the Axiolo voice rules, the sequencing pattern,
   and a worked example. The output should be a single markdown document ready to
   hand to the operator (Tom) for direct apply to the database.
 ---
@@ -23,7 +23,7 @@ description: |
 ## What Pulse is (one paragraph)
 
 Pulse is a mobile-first review tool for time-starved decision-makers. The operator
-(Tom DiGati at IGTMS) sends a single private URL to a client. The client taps
+(Tom DiGati at Axiolo) sends a single private URL to a client. The client taps
 through a deck of pre-populated cards confirming, correcting, or skipping each
 one. The deck shifts the cognitive load from production to confirmation: Tom
 has already done the work; the client just validates it. Cards cover what we
@@ -73,11 +73,11 @@ The deck order matters. Pulse clients are time-starved and engaged in bursts. Se
 
 Required cards (`skip: required`) are the ones that block downstream work. Use sparingly: ideally 30-50% of the deck. The rest can be skipped and circled back in the first weekly session. A deck where every card is required reads as homework, not a review.
 
-## Voice and tone (IGTMS brand)
+## Voice and tone (Axiolo brand)
 
 - **Direct but warm.** "We have rebuilt..." > "Please verify that we have rebuilt..."
 - **Use "you" and "your"**, not "the client" or the recipient's name in the question.
-- **No em-dashes anywhere.** Use commas, parentheses, periods, or pipe characters. This is a hard rule across IGTMS deliverables.
+- **No em-dashes anywhere.** Use commas, parentheses, periods, or pipe characters. This is a hard rule across Axiolo deliverables.
 - **Avoid "audit", "accountability", "compliance"** — these read transactional and pressuring. Use "review", "calibration", "validation" instead.
 - **Mirror the client's language** when known. If they said "lane 2" on a transcript, use "lane 2" in the card.
 - **Numbers plain and large.** Don't bury figures in dense paragraphs. "$600K" not "approximately six hundred thousand dollars". (Some clients have dyscalculia; even those who don't appreciate clarity.)
@@ -110,7 +110,7 @@ Output your deck as a single markdown document with this shape. The operator (To
 **Engagement:** <exact engagement_name as it appears in the admin>
 **Client:** <client full name>
 **Recipient:** <who taps the link, e.g. CEO's name. Same as Client most of the time.>
-**Operator:** Tom DiGati, IGTMS Client Transformation Lead
+**Operator:** Tom DiGati, Axiolo Client Transformation Lead
 **Card count:** <N>
 **Categories:** <Category 1> (<n>), <Category 2> (<n>), <Category 3> (<n>)
 **Source material:** <transcript names, dates, prior artifacts>
@@ -219,9 +219,9 @@ Pending items extracted:
 Resulting deck (abbreviated):
 
 ```markdown
-# Acme Co · IGTMS x Acme, GTM Calibration
+# Acme Co · Axiolo x Acme, GTM Calibration
 
-**Engagement:** IGTMS x Acme, GTM Calibration
+**Engagement:** Axiolo x Acme, GTM Calibration
 **Client:** <Acme contact name>
 **Card count:** 8
 **Categories:** Confirm What We Know (4), Documents and Access (2), Decisions for Acme (2)

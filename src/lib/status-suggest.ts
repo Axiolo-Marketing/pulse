@@ -1,11 +1,11 @@
-import type { Card, ClientResponse } from "./supabase";
+import type { Card, ClientResponse } from "./api";
 
 // ClickUp status values per spec §14.3.
 export const STATUS_VALUES = [
-  "Waiting on IGTMS",
+  "Waiting on Axiolo",
   "Waiting on Good Life",
   "Needs Attention",
-  "IGTMS Review",
+  "Axiolo Review",
   "Client Review",
   "Blocked",
   "Approved",
@@ -46,15 +46,15 @@ export function suggestStatus(
 
   switch (card.response_type) {
     case "confirm-edit":
-      // Confirmed verbatim or edited — both go to IGTMS Review.
-      return "IGTMS Review";
+      // Confirmed verbatim or edited — both go to Axiolo Review.
+      return "Axiolo Review";
 
     case "single-select": {
       const sel = (v.selected as string | undefined) ?? "";
       if (NEEDS_HELP.test(sel)) return "Needs Attention";
       if (BLOCKED.test(sel)) return "Blocked";
       if (DONE_OPTION.test(sel)) return "Approved";
-      return "IGTMS Review";
+      return "Axiolo Review";
     }
 
     case "multi-select": {
@@ -62,7 +62,7 @@ export function suggestStatus(
       if (arr.length === 0) return "Waiting on Good Life";
       if (arr.some((s) => NEEDS_HELP.test(s))) return "Needs Attention";
       if (arr.some((s) => BLOCKED.test(s))) return "Blocked";
-      return "IGTMS Review";
+      return "Axiolo Review";
     }
 
     case "short-text":
@@ -70,21 +70,21 @@ export function suggestStatus(
       const text = (v.text as string | undefined) ?? "";
       if (NEEDS_HELP.test(text)) return "Needs Attention";
       if (BLOCKED.test(text)) return "Blocked";
-      return "IGTMS Review";
+      return "Axiolo Review";
     }
 
     case "document-link":
-      return v.url ? "IGTMS Review" : "Waiting on Good Life";
+      return v.url ? "Axiolo Review" : "Waiting on Good Life";
 
     case "contact-share":
-      return v.email ? "IGTMS Review" : "Waiting on Good Life";
+      return v.email ? "Axiolo Review" : "Waiting on Good Life";
 
     case "file-upload": {
       const ids = v.file_ids ?? [];
-      return ids.length > 0 ? "IGTMS Review" : "Waiting on Good Life";
+      return ids.length > 0 ? "Axiolo Review" : "Waiting on Good Life";
     }
 
     default:
-      return "IGTMS Review";
+      return "Axiolo Review";
   }
 }

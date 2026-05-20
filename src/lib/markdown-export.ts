@@ -1,4 +1,4 @@
-import type { Card, Client, ClientResponse } from "./supabase";
+import type { Card, Client, ClientResponse } from "./api";
 import type { Status } from "./status-suggest";
 
 export interface UploadInfo {

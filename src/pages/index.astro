@@ -1,5 +1,7 @@
 ---
 import "../styles/pulse.css";
+const base = import.meta.env.BASE_URL ?? "/";
+const baseSlash = base.endsWith("/") ? base : `${base}/`;
 ---
 
 <!doctype html>
@@ -7,13 +9,14 @@ import "../styles/pulse.css";
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#07926B" />
+    <meta name="theme-color" content="#2960F6" />
+    <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />
     <title>Pulse</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
     />
   </head>
   <body>

@@ -1,19 +1,20 @@
 :root {
-  --green:        #07926B;
-  --green-dark:   #065A47;
-  --green-light:  #ECF6F3;
-  --charcoal:     #3B373B;
-  --gray-light:   #F7F7F7;
-  --border:       #C8CDCC;
-  --muted:        #777777;
-  --amber:        #E07B00;
-  --white:        #FFFFFF;
+  --primary:       #2960F6;
+  --primary-dark:  #020F82;
+  --primary-soft:  #E8EEFE;
+  --ink:           #0A0F2E;
+  --surface-muted: #F4F4F6;
+  --border:        #E2E2E2;
+  --muted:         #717171;
+  --warning:       #F59E0B;
+  --warning-soft:  #FEF3C7;
+  --white:         #FFFFFF;
 
   --radius:       12px;
   --radius-sm:    8px;
   --shadow-card:  0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
 
-  --font-sans:    "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI",
+  --font-sans:    "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
                   Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -27,8 +28,8 @@ html, body {
 body {
   font-family: var(--font-sans);
   font-weight: 400;
-  background: var(--gray-light);
-  color: var(--charcoal);
+  background: var(--surface-muted);
+  color: var(--ink);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -42,7 +43,7 @@ button:focus-visible,
 .dropzone:focus-within,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
@@ -73,20 +74,34 @@ button:focus-visible {
 }
 
 .brand {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
   letter-spacing: 0.5px;
-  color: var(--charcoal);
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1 1 auto;
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-logo {
+  display: inline-block;
+  height: 20px;
+  width: auto;
+  vertical-align: middle;
+}
+
+.brand-sep {
+  color: var(--muted);
 }
 
 .brand-mark {
-  color: var(--green);
-  font-weight: 600;
+  color: var(--primary);
+  font-weight: 700;
 }
 
 .progress {
@@ -107,7 +122,7 @@ button:focus-visible {
   line-height: 1;
   font-weight: 500;
   background: var(--white);
-  color: var(--charcoal);
+  color: var(--ink);
   border: 1.5px solid var(--border);
   border-radius: 8px;
   width: 44px;
@@ -120,9 +135,9 @@ button:focus-visible {
 }
 
 .nav-arrow:hover:not(:disabled) {
-  background: var(--green-light);
-  border-color: var(--green);
-  color: var(--green-dark);
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-dark);
 }
 
 .nav-arrow:disabled {
@@ -148,9 +163,9 @@ button:focus-visible {
 }
 
 .progress-btn:hover {
-  background: var(--green-light);
-  border-color: var(--green);
-  color: var(--green-dark);
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-dark);
 }
 
 .progress-caret {
@@ -159,9 +174,9 @@ button:focus-visible {
 }
 
 .prior-hint {
-  background: var(--green-light);
-  color: var(--green-dark);
-  border-left: 3px solid var(--green);
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  border-left: 3px solid var(--primary);
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
@@ -177,7 +192,7 @@ button:focus-visible {
 .note-label {
   display: block;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--muted);
   margin-bottom: 6px;
@@ -225,12 +240,12 @@ button:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: var(--charcoal);
+  background: var(--ink);
   color: var(--white);
 }
 
 .picker-heading {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.5px;
 }
@@ -271,17 +286,17 @@ button:focus-visible {
   text-align: left;
   font-family: var(--font-sans);
   font-size: 14px;
-  color: var(--charcoal);
+  color: var(--ink);
   cursor: pointer;
   min-height: 48px;
 }
 
-.picker-item:hover { background: var(--gray-light); }
+.picker-item:hover { background: var(--surface-muted); }
 
 .picker-item.is-current {
-  background: var(--green-light);
-  color: var(--green-dark);
-  font-weight: 600;
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-weight: 700;
 }
 
 .picker-num {
@@ -291,7 +306,7 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-.picker-item.is-current .picker-num { color: var(--green-dark); }
+.picker-item.is-current .picker-num { color: var(--primary-dark); }
 
 .picker-title {
   overflow: hidden;
@@ -301,17 +316,17 @@ button:focus-visible {
 
 .picker-state {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.4px;
   padding: 3px 8px;
   border-radius: 999px;
   white-space: nowrap;
 }
 
-.picker-state.is-answered { background: var(--green-light); color: var(--green-dark); }
-.picker-state.is-skipped  { background: #FFF4E5; color: var(--amber); }
-.picker-state.is-viewed   { background: var(--gray-light); color: var(--muted); }
-.picker-state.is-pending  { background: var(--gray-light); color: var(--muted); }
+.picker-state.is-answered { background: var(--primary-soft); color: var(--primary-dark); }
+.picker-state.is-skipped  { background: var(--warning-soft); color: var(--warning); }
+.picker-state.is-viewed   { background: var(--surface-muted); color: var(--muted); }
+.picker-state.is-pending  { background: var(--surface-muted); color: var(--muted); }
 
 .picker-item.is-current .picker-state.is-viewed,
 .picker-item.is-current .picker-state.is-pending {
@@ -346,19 +361,20 @@ button:focus-visible {
 }
 
 .category {
-  font-weight: 500;
+  font-weight: 600;
   font-size: 11px;
-  letter-spacing: 1px;
+  letter-spacing: 1.4px;
   text-transform: uppercase;
-  color: var(--green);
+  color: var(--primary);
   margin-bottom: 12px;
 }
 
 .card-title {
-  font-weight: 600;
+  font-weight: 800;
   font-size: 22px;
   line-height: 1.25;
-  color: var(--charcoal);
+  letter-spacing: -0.01em;
+  color: var(--ink);
   margin: 0 0 16px 0;
 }
 
@@ -375,15 +391,15 @@ button:focus-visible {
 .context {
   font-size: 15px;
   line-height: 1.6;
-  color: var(--charcoal);
+  color: var(--ink);
   margin: 0 0 24px 0;
 }
 
 .question {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 17px;
   line-height: 1.4;
-  color: var(--charcoal);
+  color: var(--ink);
   margin: 0 0 20px 0;
 }
 
@@ -396,7 +412,7 @@ button:focus-visible {
 
 .btn {
   font-family: var(--font-sans);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 16px;
   line-height: 1;
   border-radius: var(--radius-sm);
@@ -406,24 +422,29 @@ button:focus-visible {
   cursor: pointer;
   width: 100%;
   text-align: center;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .btn-primary {
-  background: var(--green);
+  background: var(--primary);
   color: var(--white);
-  border-color: var(--green);
+  border-color: var(--primary);
 }
 
-.btn-primary:hover { background: var(--green-dark); border-color: var(--green-dark); }
+.btn-primary:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+  box-shadow: 0 0 24px rgba(41, 96, 246, 0.3);
+  transform: translateY(-1px);
+}
 
 .btn-secondary {
   background: var(--white);
-  color: var(--green);
-  border-color: var(--green);
+  color: var(--primary);
+  border-color: var(--primary);
 }
 
-.btn-secondary:hover { background: var(--green-light); }
+.btn-secondary:hover { background: var(--primary-soft); }
 
 .btn-tertiary {
   background: transparent;
@@ -435,7 +456,7 @@ button:focus-visible {
   padding: 10px 24px;
 }
 
-.btn-tertiary:hover { color: var(--charcoal); }
+.btn-tertiary:hover { color: var(--ink); }
 
 .btn:disabled {
   opacity: 0.6;
@@ -457,19 +478,19 @@ button:focus-visible {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: #FFF4E5;
-  color: var(--amber);
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: 28px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 48px;
   margin: 0 auto 16px;
   font-family: ui-serif, Georgia, "Times New Roman", serif;
 }
 
 .error-title {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 20px;
-  color: var(--charcoal);
+  color: var(--ink);
   margin: 0 0 8px 0;
 }
 
@@ -505,7 +526,7 @@ button:focus-visible {
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.5;
-  color: var(--charcoal);
+  color: var(--ink);
   background: var(--white);
   border: 1.5px solid var(--border);
   border-radius: var(--radius-sm);
@@ -513,20 +534,21 @@ button:focus-visible {
   width: 100%;
   resize: vertical;
   min-height: 120px;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .textarea:focus {
   outline: none;
-  border-color: var(--green);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(41, 96, 246, 0.12);
 }
 
 .save-banner {
   width: 100%;
   max-width: 480px;
-  background: #FFF4E5;
-  border: 1px solid var(--amber);
-  color: var(--charcoal);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  color: var(--ink);
   border-radius: var(--radius-sm);
   padding: 10px 14px;
   margin-bottom: 12px;
@@ -540,14 +562,14 @@ button:focus-visible {
 .resume-banner {
   width: 100%;
   max-width: 480px;
-  background: var(--green-light);
-  border: 1px solid var(--green);
-  color: var(--green-dark);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary);
+  color: var(--primary-dark);
   border-radius: var(--radius-sm);
   padding: 10px 14px;
   margin-bottom: 12px;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   text-align: center;
   animation: resume-fade-in 0.3s ease;
 }
@@ -559,11 +581,11 @@ button:focus-visible {
 
 .banner-retry {
   font-family: var(--font-sans);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
   background: transparent;
-  border: 1.5px solid var(--amber);
-  color: var(--amber);
+  border: 1.5px solid var(--warning);
+  color: var(--warning);
   border-radius: 6px;
   padding: 8px 14px;
   min-height: 36px;
@@ -572,7 +594,7 @@ button:focus-visible {
 }
 
 .banner-retry:hover {
-  background: var(--amber);
+  background: var(--warning);
   color: var(--white);
 }
 
@@ -585,18 +607,18 @@ button:focus-visible {
 }
 
 .card.complete .card-title {
-  color: var(--green-dark);
+  color: var(--primary-dark);
 }
 
 /* ── View Active Reference ──────────────────────────────────────────── */
 
 .btn-link {
   font-family: var(--font-sans);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
-  background: var(--green-light);
-  color: var(--green-dark);
-  border: 1.5px solid var(--green);
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  border: 1.5px solid var(--primary);
   border-radius: var(--radius-sm);
   padding: 10px 16px;
   cursor: pointer;
@@ -604,11 +626,11 @@ button:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .btn-link:hover {
-  background: var(--green);
+  background: var(--primary);
   color: var(--white);
 }
 
@@ -634,7 +656,7 @@ button:focus-visible {
   line-height: 1.4;
   text-align: left;
   background: var(--white);
-  color: var(--charcoal);
+  color: var(--ink);
   border: 1.5px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 14px 16px;
@@ -647,14 +669,14 @@ button:focus-visible {
 }
 
 .option:hover {
-  border-color: var(--green);
+  border-color: var(--primary);
 }
 
 .option.selected {
-  background: var(--green-light);
-  border-color: var(--green);
-  color: var(--green-dark);
-  font-weight: 600;
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-dark);
+  font-weight: 700;
 }
 
 .option-mark {
@@ -666,15 +688,15 @@ button:focus-visible {
   align-items: center;
   justify-content: center;
   font-size: 14px;
-  color: var(--green);
+  color: var(--primary);
   flex-shrink: 0;
   background: var(--white);
 }
 
 .option.selected .option-mark {
-  background: var(--green);
+  background: var(--primary);
   color: var(--white);
-  border-color: var(--green);
+  border-color: var(--primary);
 }
 
 .option-text {
@@ -692,19 +714,20 @@ button:focus-visible {
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.4;
-  color: var(--charcoal);
+  color: var(--ink);
   background: var(--white);
   border: 1.5px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
   width: 100%;
   margin: 0 0 16px 0;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--green);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(41, 96, 246, 0.12);
 }
 
 .contact-fields {
@@ -725,8 +748,8 @@ button:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  background: var(--green-light);
-  border: 1.5px dashed var(--green);
+  background: var(--primary-soft);
+  border: 1.5px dashed var(--primary);
   border-radius: var(--radius-sm);
   padding: 24px 16px;
   min-height: 120px;
@@ -737,7 +760,7 @@ button:focus-visible {
 }
 
 .dropzone:hover {
-  background: #DEF1EA;
+  background: #D9E3FD;
 }
 
 .dropzone input[type="file"] {
@@ -750,7 +773,7 @@ button:focus-visible {
 }
 
 .dropzone.is-full {
-  background: var(--gray-light);
+  background: var(--surface-muted);
   border-color: var(--border);
   cursor: default;
   color: var(--muted);
@@ -758,9 +781,9 @@ button:focus-visible {
 }
 
 .dropzone-label {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 15px;
-  color: var(--green-dark);
+  color: var(--primary-dark);
 }
 
 .dropzone-hint {
@@ -799,13 +822,13 @@ button:focus-visible {
 }
 
 .file-chip.is-pending {
-  border-color: var(--green);
-  background: var(--green-light);
+  border-color: var(--primary);
+  background: var(--primary-soft);
 }
 
 .file-chip .file-error {
-  color: var(--amber);
-  font-weight: 600;
+  color: var(--warning);
+  font-weight: 700;
 }
 
 .file-remove {
@@ -825,8 +848,8 @@ button:focus-visible {
 }
 
 .file-remove:hover {
-  color: var(--amber);
-  background: var(--gray-light);
+  color: var(--warning);
+  background: var(--surface-muted);
 }
 
 /* ── Reference modal ─────────────────────────────────────────────────── */
@@ -864,12 +887,12 @@ button:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: var(--charcoal);
+  background: var(--ink);
   color: var(--white);
 }
 
 .modal-title {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.5px;
 }
@@ -898,7 +921,7 @@ button:focus-visible {
   flex: 1;
   width: 100%;
   border: 0;
-  background: var(--gray-light);
+  background: var(--surface-muted);
   min-height: 0;
 }
 

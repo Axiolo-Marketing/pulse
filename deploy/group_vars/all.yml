@@ -1,0 +1,51 @@
+# Non-secret deploy configuration. Secrets live in vault.yml (gitignored,
+# ansible-vault encrypted) — see vault.yml.example for the template.
+
+# ── Identity ──────────────────────────────────────────────────────────────
+pulse_domain: pulse.axiolo.com               # tentative — confirm before first deploy
+pulse_admin_email: ops@axiolo.com            # Let's Encrypt registration only
+
+# ── Paths Pulse owns (Ansible never touches anything outside these) ──────
+pulse_user: pulse
+pulse_group: pulse
+pulse_app_dir: /opt/pulse
+pulse_api_dir: "{{ pulse_app_dir }}/api"
+pulse_venv_dir: "{{ pulse_api_dir }}/.venv"
+pulse_web_root: /var/www/pulse
+pulse_uploads_dir: /var/lib/pulse/uploads
+pulse_env_dir: /etc/pulse
+pulse_env_file: "{{ pulse_env_dir }}/pulse.env"
+pulse_log_dir: /var/log/pulse
+pulse_backup_dir: /var/backups/pulse
+
+# ── Backend process ───────────────────────────────────────────────────────
+pulse_python: /usr/bin/python3.13            # preflight asserts this exists
+pulse_api_port: 8421                         # 127.0.0.1-only; nginx fronts it
+pulse_uvicorn_workers: 2
+
+# ── Database ──────────────────────────────────────────────────────────────
+pulse_db_name: pulse
+pulse_db_owner: pulse_owner
+pulse_db_anon: pulse_anon
+pulse_db_admin: pulse_admin
+
+# ── Frontend ──────────────────────────────────────────────────────────────
+# Where the local Astro build lives, relative to deploy/. The frontend role
+# does `rsync -a {{ pulse_local_dist }} {{ pulse_web_root }}` so the build
+# happens on the operator's machine, never on the shared VPS.
+pulse_local_dist: ../dist/
+
+# ── OAuth redirect URIs (must match what's configured in Google/Microsoft) ─
+pulse_google_redirect_uri: "https://{{ pulse_domain }}/api/auth/google/callback"
+pulse_microsoft_redirect_uri: "https://{{ pulse_domain }}/api/auth/microsoft/callback"
+pulse_microsoft_tenant_id: common
+
+# ── SMTP ──────────────────────────────────────────────────────────────────
+pulse_smtp_host: smtp.example.com
+pulse_smtp_port: 587
+pulse_smtp_from: "noreply@{{ pulse_domain }}"
+
+# ── App config ────────────────────────────────────────────────────────────
+pulse_initial_admin_email: ops@axiolo.com    # seeded as is_admin=true on first deploy
+pulse_max_upload_bytes: 26214400             # 25 MB
+pulse_session_max_age_seconds: 2592000       # 30 days

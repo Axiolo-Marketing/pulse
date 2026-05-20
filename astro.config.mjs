@@ -1,10 +1,12 @@
 import { defineConfig } from "astro/config";
 
-// GitHub Pages deploys at https://tomdigati.github.io/pulse/
-// site + base must match for asset paths to resolve correctly.
+// No `site` or `base` configured. The production deploy serves Pulse from
+// the domain root behind nginx (see deploy/roles/nginx-site/), and the local
+// dev server runs at http://localhost:4321/. If a canonical production URL
+// is finalized later (pulse.axiolo.com is under consideration), set
+// `site: "https://<the-domain>"` here so Astro can build absolute URLs into
+// sitemap.xml and Open Graph tags.
 export default defineConfig({
-  site: "https://tomdigati.github.io",
-  base: "/pulse",
   output: "static",
   trailingSlash: "ignore",
 });

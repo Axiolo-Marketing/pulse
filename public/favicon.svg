@@ -1,0 +1,16 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <style>
+        #arrows { fill: #2960F8; }
+        @media (prefers-color-scheme: dark) {
+        #arrows { fill: #fff; }
+    }
+    </style>
+<g clip-path="url(#clip0_1382_70)">
+<path id="arrows" d="M100 80.7764L80.8574 100V69.2207H49.999L69.1416 50.0029H100V80.7764ZM49.999 69.2207L30.8584 88.4424V57.665H0L19.1406 38.4473H49.999V69.2207ZM88.2861 30.7725L69.1436 49.9971V19.2168H38.2852L57.4258 0H88.2861V30.7725Z" />
+</g>
+<defs>
+<clipPath id="clip0_1382_70">
+<rect width="100" height="100" fill="#fff"/>
+</clipPath>
+</defs>
+</svg>
