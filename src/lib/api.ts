@@ -96,6 +96,8 @@ export interface Client {
   brief: string | null;
   created_at: string;
   last_active_at: string | null;
+  clickup_list_id?: string | null;
+  clickup_list_name?: string | null;
 }
 
 export interface Card {
@@ -124,6 +126,8 @@ export interface ClientResponse {
   answered_at: string | null;
   created_at: string;
   updated_at: string;
+  clickup_status?: string | null;
+  clickup_status_updated_at?: string | null;
 }
 
 export interface UploadRow {
@@ -197,6 +201,19 @@ export interface AuthUser {
   name: string | null;
   is_admin: boolean;
   email_verified_at: string | null;
+  clickup_connected?: boolean;
+}
+
+export interface ClickUpPushResult {
+  created: string[];
+  updated: string[];
+  attached: number;
+  errors: Array<{ card_id: string; error: string }>;
+}
+
+export interface ClickUpListBinding {
+  clickup_list_id: string | null;
+  clickup_list_name: string | null;
 }
 
 export interface EngagementSummary {
@@ -284,6 +301,11 @@ export const authApi = {
   // Google/Microsoft with the right state cookie set.
   oauthAuthorizeUrl: (provider: "google" | "microsoft"): string =>
     `${API_BASE}/api/auth/${provider}/authorize`,
+
+  connectClickUpUrl: (): string => `${API_BASE}/api/auth/clickup/authorize`,
+
+  disconnectClickUp: (): Promise<{ status: string }> =>
+    request("/api/auth/clickup/disconnect", { method: "POST" }),
 };
 
 export const adminApi = {
@@ -328,4 +350,13 @@ export const adminApi = {
   // for same-site requests.
   uploadDownloadUrl: (uploadId: string): string =>
     `${API_BASE}/api/admin/uploads/${uploadId}/download`,
+
+  setClickUpList: (id: string, url_or_id: string): Promise<EngagementSummary & ClickUpListBinding> =>
+    request(`/api/admin/clients/${id}/clickup-list`, {
+      method: "PATCH",
+      body: JSON.stringify({ url_or_id }),
+    }),
+
+  pushToClickUp: (id: string): Promise<ClickUpPushResult> =>
+    request(`/api/admin/clients/${id}/push-clickup`, { method: "POST" }),
 };

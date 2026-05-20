@@ -56,6 +56,7 @@ class UserResponse(BaseModel):
     name: str | None
     is_admin: bool
     email_verified_at: datetime | None
+    clickup_connected: bool = False
 
     @classmethod
     def from_model(cls, u: User) -> "UserResponse":
@@ -65,6 +66,7 @@ class UserResponse(BaseModel):
             name=u.name,
             is_admin=u.is_admin,
             email_verified_at=u.email_verified_at,
+            clickup_connected=u.clickup_access_token_enc is not None,
         )
 
 

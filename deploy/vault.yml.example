@@ -19,6 +19,22 @@ vault_pulse_google_client_secret: ""
 vault_pulse_microsoft_client_id:     ""
 vault_pulse_microsoft_client_secret: ""
 
+# ── ClickUp OAuth (created at https://app.clickup.com/settings/team/apps) ─
+vault_pulse_clickup_client_id:     ""
+vault_pulse_clickup_client_secret: ""
+
+# ── Column-level encryption keys (Fernet) ────────────────────────────────
+# Comma-separated list of Fernet keys. The first key is primary (used for
+# new encryption); decryption tries each in order — allows rotation. Used
+# to protect in-DB secrets like ClickUp tokens and webhook secrets.
+#
+# Generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+#
+# WARNING: losing every key in this list means every encrypted column
+# becomes permanently unrecoverable. Back up alongside the session secret.
+vault_pulse_encryption_keys: ""
+
 # ── SMTP credentials ──────────────────────────────────────────────────────
 vault_pulse_smtp_user: ""
 vault_pulse_smtp_password: ""

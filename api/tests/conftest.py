@@ -222,7 +222,7 @@ async def seed_cards(db: AsyncSession, seed_client: dict[str, str]) -> list[dict
                     "insert into public.cards "
                     "(client_id, order_index, category, title, context, question, response_type) "
                     "values (cast(:cid as uuid), :idx, 'Test', :t, 'ctx', 'q?', :rt) "
-                    "returning id::text, response_type, title"
+                    "returning id::text, response_type, title, order_index"
                 ),
                 {"cid": seed_client["id"], "idx": i, "t": f"Card {rt}", "rt": rt},
             )

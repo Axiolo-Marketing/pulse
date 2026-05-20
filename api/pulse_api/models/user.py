@@ -16,3 +16,7 @@ class User(SQLModel, table=True):
     email_verified_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
     last_login_at: datetime | None = None
+    # Fernet ciphertext of the user's ClickUp OAuth access token. Decrypt
+    # via pulse_api.crypto.decrypt at the moment of API call.
+    clickup_access_token_enc: str | None = None
+    clickup_user_id: str | None = None

@@ -16,3 +16,6 @@ class Client(SQLModel, table=True):
     brief: str | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
     last_active_at: datetime | None = None
+    # Per-engagement ClickUp target. NULL = ClickUp push button disabled.
+    clickup_list_id: str | None = None
+    clickup_list_name: str | None = None

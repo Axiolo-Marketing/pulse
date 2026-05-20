@@ -115,6 +115,69 @@ ansible-playbook deploy.yml --ask-vault-pass
    check their service status. If anything regressed, `ansible-playbook
    deploy.yml --check --diff` will help you see what was applied.
 
+## ClickUp integration setup
+
+The ClickUp integration is optional — Pulse works without it; the
+"Connect ClickUp" + "Push to ClickUp" buttons just stay hidden until
+the operator wires it up. To enable it:
+
+1. **Create the OAuth app** at <https://app.clickup.com/settings/team/apps>.
+   Set the redirect URI to `https://<pulse-domain>/api/auth/clickup/callback`.
+   ClickUp gives you a client id and a client secret.
+
+2. **Generate a Fernet encryption key**:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+   This key encrypts every secret Pulse stores in Postgres (ClickUp
+   tokens, ClickUp webhook secrets). **Losing it means every encrypted
+   column becomes permanently unrecoverable** — back it up wherever you
+   keep `vault_pulse_session_secret`.
+
+3. **Paste both** into `deploy/vault.yml`:
+   ```yaml
+   vault_pulse_clickup_client_id:     "..."
+   vault_pulse_clickup_client_secret: "..."
+   vault_pulse_encryption_keys:       "<fernet-key>"   # comma-separated for rotation
+   ```
+   Re-encrypt the vault and re-run the playbook so `/etc/pulse/pulse.env`
+   picks up the new values, then `systemctl restart pulse-api`.
+
+4. **In Pulse admin**, click **Connect ClickUp** in the top-right. You'll
+   be sent to ClickUp's consent screen; on return, Pulse stores the
+   OAuth access token (encrypted) and registers a webhook on each
+   workspace you have access to.
+
+5. **For each engagement**, click into the detail view, then **Set
+   ClickUp list** — paste the URL of the ClickUp list that should
+   receive the engagement's cards (e.g.
+   `https://app.clickup.com/12345/v/li/901234567`). Pulse extracts the
+   numeric id and looks up the list name for display.
+
+6. **Click Push to ClickUp**. Pulse pushes one task per card (idempotent
+   — re-pushes update rather than duplicate). File-upload cards push
+   their files as ClickUp attachments. The summary toast shows
+   `N created / M updated / K attachments / errors`.
+
+The push uses Pulse's 8 status names — your ClickUp list must have
+matching statuses for the API to accept them (see
+`src/lib/status-suggest.ts` for the canonical list). If a status doesn't
+match, the per-card error from ClickUp is collected and surfaced in the
+push summary; other cards still push.
+
+### Key rotation
+
+To rotate the Fernet encryption key:
+1. Generate a new key.
+2. Prepend it to `vault_pulse_encryption_keys` (comma-separated, new key
+   first). Re-deploy. The app now encrypts new writes with the new key,
+   but still decrypts old ciphertext using the old key.
+3. Run a one-off data migration (TODO: not built for v1) that
+   re-encrypts every `*_enc` column using the current primary key.
+4. Drop the old key from the list. Re-deploy.
+
+For v1, just hold the key permanent and back it up offsite.
+
 ## Subsequent deploys
 
 ```bash
