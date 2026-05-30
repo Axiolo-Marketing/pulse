@@ -1,0 +1,11 @@
+# /etc/cron.d/pulse-backup — daily pg_dump + uploads rsync.
+# Self-contained — separate from other apps' cron entries.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# 03:15 daily — pg_dump the pulse DB, gzip, prune dumps older than 30 days.
+15 3 * * * pulse PGPASSFILE={{ pulse_env_dir }}/pgpass pg_dump --host={{ pulse_db_host }} --port={{ pulse_db_port }} --username={{ pulse_db_owner }} --dbname={{ pulse_db_name }} | gzip > {{ pulse_backup_dir }}/db-$(date +\%F).sql.gz && find {{ pulse_backup_dir }} -maxdepth 1 -name 'db-*.sql.gz' -mtime +30 -delete
+
+# 03:30 daily — mirror uploads. rsync is fine; files are immutable once
+# written (only delete removes them, and we tolerate stale snapshots).
+30 3 * * * pulse rsync -a --delete {{ pulse_uploads_dir }}/ {{ pulse_backup_dir }}/uploads/

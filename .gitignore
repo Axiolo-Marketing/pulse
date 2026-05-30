@@ -33,9 +33,11 @@ Icon?
 
 # ansible
 deploy/*.retry
-# deploy/vault.yml is ansible-vault encrypted and SAFE to commit.
-# An unencrypted vault.yml is NOT — refuse it.
-# Detect with: git diff --cached | grep -E '^\+(vault_|password)'
+deploy/vault_secret
+# Secrets are inline ansible-vault !vault blocks in group_vars/all.yml — safe to
+# commit (encrypted). NEVER commit a plaintext secret value next to a vault_ key.
+# Sanity check before committing all.yml:
+#   ansible-vault view <(git show :deploy/group_vars/all.yml) --vault-password-file deploy/vault_secret >/dev/null
 
 # playwright session snapshots
 .playwright-mcp/

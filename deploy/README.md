@@ -2,9 +2,9 @@
 
 This playbook deploys Pulse onto a Debian VPS that **already hosts other
 applications**. Every role is scoped to Pulse's own paths, systemd units,
-and database; nothing globally shared is touched. The `preflight` role
-asserts the box already has Postgres, nginx, certbot, and a recent
-Python — it never installs system packages.
+and database. The `preflight` role installs missing apt prerequisites with
+`state: present` only, starts/enables Postgres and nginx, and then leaves
+shared configuration alone.
 
 ## Resources Pulse owns (and nothing else)
 
@@ -14,6 +14,7 @@ Python — it never installs system packages.
 | Static frontend | `/var/www/pulse/` |
 | Uploads | `/var/lib/pulse/uploads/` |
 | Backend env | `/etc/pulse/pulse.env` (mode 0640) |
+| Backup DB auth | `/etc/pulse/pgpass` (mode 0600) |
 | Systemd unit | `pulse-api.service` |
 | Backup cron | `/etc/cron.d/pulse-backup` |
 | Backups | `/var/backups/pulse/` |
@@ -23,32 +24,27 @@ Python — it never installs system packages.
 | nginx site | `/etc/nginx/sites-available/pulse` + symlink |
 | TLS cert | `/etc/letsencrypt/live/<domain>/` |
 
-Everything else is **off-limits** — the playbook does not modify
-`postgresql.conf`, `pg_hba.conf` (beyond the auth lines for the pulse
-roles, which `community.postgresql` adds), `nginx.conf`, `conf.d/`, other
-vhosts, certbot's renewal timer, system Python, ssh config, firewall
-rules, or any other application's files.
+Everything else is **off-limits** — the playbook does not upgrade system
+packages, add apt repositories, modify `postgresql.conf`, `pg_hba.conf`,
+`nginx.conf`, `conf.d/`, other vhosts, certbot's renewal timer, ssh config,
+firewall rules, or any other application's files.
 
-## One-time bootstrap (by hand on the VPS)
+## One-time bootstrap
 
-The playbook can't bootstrap things that would require global config
-changes. Do these once, as root or with `sudo`:
+The playbook installs normal Debian apt packages if they are missing. Do
+only the pieces that require credentials, DNS, or intentional global config:
 
 ```bash
-# 1. Install Python 3.13 if not already present (use the host's package
-#    manager of choice — backports, deadsnakes, pyenv, whatever fits).
+# 1. Point DNS before the first TLS run.
+#    pulse.axiolo.com -> 198.27.127.130
+
+# 2. If Python 3.13 is not available from the host's configured apt repos,
+#    install it deliberately before running the playbook. The playbook will
+#    not add third-party apt repositories by itself.
 python3.13 --version
 
-# 2. Make sure Postgres, nginx, certbot, rsync are installed.
-psql --version && nginx -v && certbot --version && rsync --version
-
-# 3. If your Postgres uses md5 auth, add a pg_hba line for the pulse
-#    roles via the Unix socket so the playbook can connect:
-#    local  pulse  pulse_owner,pulse_anon,pulse_admin  md5
-#    (and reload Postgres: systemctl reload postgresql)
-
-# 4. Create a 'deploy' user with passwordless sudo for the commands the
-#    playbook runs (or just run Ansible as root over SSH — your call).
+# 3. Ensure the SSH user in inventory can sudo. For the shared VPS this is
+#    currently ansible_user=gabriel at 198.27.127.130.
 ```
 
 ## Configuring
@@ -62,10 +58,10 @@ ansible-galaxy collection install community.postgresql ansible.posix
 # Edit non-secrets:
 $EDITOR group_vars/all.yml           # domain, paths, port, etc.
 
-# Copy + populate the vault:
-cp vault.yml.example vault.yml
-$EDITOR vault.yml                    # paste DB passwords, OAuth secrets, etc.
-ansible-vault encrypt vault.yml      # encrypts in place
+# Secrets live as inline ansible-vault strings at the bottom of
+# group_vars/all.yml. To set or rotate one:
+ansible-vault encrypt_string --vault-password-file vault_secret 'VALUE' --name vault_pulse_smtp_password
+# ...then paste the !vault block over the existing one in group_vars/all.yml.
 
 # Set your host:
 $EDITOR inventory.yml                # ansible_host, ansible_user
@@ -78,7 +74,8 @@ OAuth client setup (one-time, in the provider consoles):
 - **Azure AD** → App registrations → Web platform → redirect URI = same
   shape. API permissions: `openid`, `email`, `profile`.
 
-Paste the resulting client ids + secrets into `vault.yml`.
+Encrypt the resulting client ids + secrets with `ansible-vault encrypt_string`
+(as above) and paste each `!vault` block into `group_vars/all.yml`.
 
 ## Build + deploy
 
@@ -120,12 +117,15 @@ ansible-playbook deploy.yml --ask-vault-pass
 ```bash
 git pull
 npm run build
-ansible-playbook deploy/deploy.yml --ask-vault-pass
+cd deploy/
+ansible-playbook deploy.yml --ask-vault-pass
 ```
 
 The `backend` role syncs source, runs `uv sync --frozen`, runs
 `alembic upgrade head`, and restarts `pulse-api`. The `frontend` role
-rsyncs `dist/`. nginx isn't reloaded unless the site config changed.
+rsyncs `dist/`. nginx is deployed once in HTTP bootstrap mode if the cert
+does not exist, certbot obtains the cert via webroot, then nginx is deployed
+again with HTTPS enabled.
 
 ## Backups
 
@@ -142,7 +142,7 @@ add a Pulse-only cron that runs after the local backup cron.
 
 Intentionally. These would all be destructive on a shared box:
 
-- Install or update system packages
+- Upgrade system packages or add package repositories
 - Modify `postgresql.conf`, `nginx.conf`, the certbot renewal timer
 - Configure firewalls, ssh, or system-wide log rotation
 - Touch other vhosts, other systemd units, other databases

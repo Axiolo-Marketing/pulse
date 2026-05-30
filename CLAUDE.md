@@ -101,9 +101,9 @@ Fixtures of note: `client_authed` (token-authed httpx client), `admin_authed` (a
 
 Production runs on a **shared Debian VPS** (other apps coexist on the same host). Ansible playbook in `deploy/`. See `deploy/README.md` for the full runbook.
 
-**Critical constraint, baked into every role:** Ansible never touches globally shared system state. The `preflight` role asserts Postgres, nginx, certbot, and Python 3.13 are already installed — it does not install them. The other roles (`postgres-pulse`, `backend`, `frontend`, `nginx-site`, `tls`) are scoped to their own paths/units/DB/roles only. First-run command is always `ansible-playbook deploy.yml --check --diff` so the operator can read every diff before applying.
+**Critical constraint, baked into every role:** Ansible only performs narrow shared-host setup: install missing apt packages with `state: present` (no upgrades, no third-party repositories), and start/enable Postgres + nginx. The other roles (`postgres-pulse`, `backend`, `frontend`, `nginx-site`, `tls`) are scoped to their own paths/units/DB/roles only. First-run command is always `ansible-playbook deploy.yml --check --diff` so the operator can read every diff before applying.
 
-If you're editing Ansible: anything outside Pulse's owned paths (`/opt/pulse/`, `/etc/pulse/`, `/var/www/pulse/`, `/var/lib/pulse/`, `/etc/nginx/sites-available/pulse`, `pulse-api.service`, `pulse_*` DB roles, the `pulse` database) is a bug — even if the playbook syntax-checks clean. Pre-existing other apps depend on the rest of the box being untouched.
+If you're editing Ansible: anything outside prerequisite package installation/service start and Pulse's owned paths (`/opt/pulse/`, `/etc/pulse/`, `/var/www/pulse/`, `/var/lib/pulse/`, `/etc/nginx/sites-available/pulse`, `pulse-api.service`, `pulse_*` DB roles, the `pulse` database) is a bug — even if the playbook syntax-checks clean. Pre-existing other apps depend on the rest of the box being untouched.
 
 ## Obsolete files still in the tree
 

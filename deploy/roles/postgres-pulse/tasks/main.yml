@@ -1,14 +1,17 @@
 # Postgres-pulse: uses the system's existing Postgres install. Creates the
 # `pulse` database + 3 roles. Never touches postgresql.conf, never modifies
-# any other database, never installs Postgres.
+# any other database.
 
 - name: Ensure community.postgresql collection is available
   ansible.builtin.command: ansible-galaxy collection list community.postgresql
+  delegate_to: localhost
+  become: false
+  run_once: true
   register: pg_collection
   changed_when: false
-  failed_when:
-    - pg_collection.rc != 0
-    - "'community.postgresql' not in pg_collection.stdout"
+  failed_when: >
+    pg_collection.rc != 0
+    or 'community.postgresql' not in pg_collection.stdout
 
 - name: Create database roles (no-login if password is unset)
   community.postgresql.postgresql_user:

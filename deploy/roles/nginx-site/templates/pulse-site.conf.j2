@@ -2,50 +2,123 @@
 # Pulse vhost only. Other sites under /etc/nginx/sites-available/ are
 # untouched.
 
+{% macro pulse_api_proxy() %}
+proxy_pass http://127.0.0.1:{{ pulse_api_port }};
+proxy_set_header Host              $host;
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_http_version 1.1;
+
+# Streaming downloads from /api/files/* and /api/admin/uploads/*/download
+proxy_buffering off;
+proxy_request_buffering off;
+proxy_read_timeout 120s;
+{% endmacro %}
+
 server {
     listen 80;
     listen [::]:80;
     server_name {{ pulse_domain }};
 
-    # ACME challenge for certbot renewals (uses the system's existing
-    # /var/www/letsencrypt webroot if it exists; falls through to the
-    # default location otherwise).
-    location /.well-known/acme-challenge/ {
+    # ACME challenge for certbot issuance and renewals.
+    location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
     }
 
+{% if pulse_tls_enabled | default(false) | bool %}
     location / {
         return 301 https://$host$request_uri;
     }
+{% else %}
+    # HTTP-only bootstrap mode. Once certbot succeeds, the playbook re-runs
+    # this role and promotes the vhost to HTTPS.
+    client_max_body_size {{ (pulse_max_upload_bytes / (1024 * 1024)) | round(0, 'ceil') | int }}m;
+
+    root {{ pulse_web_root }};
+    index index.html;
+
+    location /api/ {
+{{ pulse_api_proxy() | trim | indent(8, true) }}
+    }
+
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    location ~ ~$ {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+{% endif %}
 }
 
+{% if pulse_tls_enabled | default(false) | bool %}
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name {{ pulse_domain }};
 
     ssl_certificate     /etc/letsencrypt/live/{{ pulse_domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ pulse_domain }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL_pulse:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 
     # The body of POST /api/uploads has to fit through nginx before the
     # backend's MAX_UPLOAD_BYTES check fires.
     client_max_body_size {{ (pulse_max_upload_bytes / (1024 * 1024)) | round(0, 'ceil') | int }}m;
+    client_body_timeout 120s;
+    client_header_timeout 60s;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 6;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/json
+        application/javascript
+        application/xml+rss
+        application/atom+xml
+        image/svg+xml;
 
     root {{ pulse_web_root }};
     index index.html;
 
     # API → uvicorn on 127.0.0.1
     location /api/ {
-        proxy_pass http://127.0.0.1:{{ pulse_api_port }};
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+{{ pulse_api_proxy() | trim | indent(8, true) }}
+    }
 
-        # Streaming downloads from /api/files/* and /api/admin/uploads/*/download
-        proxy_buffering off;
-        proxy_request_buffering off;
-        proxy_read_timeout 120s;
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    location ~ ~$ {
+        deny all;
+        access_log off;
+        log_not_found off;
     }
 
     # Static Astro site
@@ -53,3 +126,4 @@ server {
         try_files $uri $uri/ /index.html;
     }
 }
+{% endif %}

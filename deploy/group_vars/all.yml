@@ -1,8 +1,10 @@
-# Non-secret deploy configuration. Secrets live in vault.yml (gitignored,
-# ansible-vault encrypted) — see vault.yml.example for the template.
+# Deploy configuration. Non-secret values are plain; secrets are inline
+# ansible-vault encrypted strings at the bottom of this file (decrypted at
+# runtime via --vault-password-file). Run the playbook with deploy.sh, which
+# passes the vault password file automatically.
 
 # ── Identity ──────────────────────────────────────────────────────────────
-pulse_domain: pulse.axiolo.com               # tentative — confirm before first deploy
+pulse_domain: pulse.axiolo.com
 pulse_admin_email: ops@axiolo.com            # Let's Encrypt registration only
 
 # ── Paths Pulse owns (Ansible never touches anything outside these) ──────
@@ -28,6 +30,8 @@ pulse_db_name: pulse
 pulse_db_owner: pulse_owner
 pulse_db_anon: pulse_anon
 pulse_db_admin: pulse_admin
+pulse_db_host: 127.0.0.1
+pulse_db_port: 5432
 
 # ── Frontend ──────────────────────────────────────────────────────────────
 # Where the local Astro build lives, relative to deploy/. The frontend role
@@ -49,3 +53,45 @@ pulse_smtp_from: "noreply@{{ pulse_domain }}"
 pulse_initial_admin_email: ops@axiolo.com    # seeded as is_admin=true on first deploy
 pulse_max_upload_bytes: 26214400             # 25 MB
 pulse_session_max_age_seconds: 2592000       # 30 days
+
+# ── Secrets (inline ansible-vault encrypted; decrypted at runtime) ─────────
+# Re-encrypt a value with:
+#   ansible-vault encrypt_string --vault-password-file vault_secret 'NEWVALUE' --name VARNAME
+# then paste the !vault block over the existing one.
+vault_pulse_db_owner_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          35653937653534333433366437633635663366386436663161373963656161643638346163383030
+          3231633432626239636431356637633632363331626136660a376664346633383530313462313830
+          35373163316133663739633664363137613463613035613161336264373061663130376635626631
+          3134663665656630620a343763346335316264623239643337336333616639366133643234366332
+          66346430383330353935393933363361623366643663303365353732636261616565
+vault_pulse_db_anon_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          37353365353835333434366564303731303666326164643264363232613234383133373761396339
+          6331396436623934373736383832303066623261323261630a626462313062663334613461653439
+          30613537363831363635646239386431346439383464333838353765313838383036663564373537
+          3634623733333939380a346165333237663162373838313931663161643663663164333139373061
+          34653463353863393264316239316533373434356438663738346366313764653364
+vault_pulse_db_admin_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          37656631663535623631613763363736626232633134383933666661666663326232373564666138
+          3538653962373531336531306330356662633534343264640a363861343464663762333431666362
+          39393138306630396634353035653764633235336661633731383633336433386437343131303066
+          3532616338383234650a613131313535616136313461366634333234303162353364626261313433
+          36643162623738396461356262396239383834323265393264306430376163303137
+vault_pulse_session_secret: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          38343264383964656337303265326562666565366636316236306331373634623737376639326165
+          3161623531383330336165396631366638646639633866380a626363643231373163366435626462
+          66363238393032643237343164343065363464383730626236626138353136386630346331633435
+          6338666436616535610a316638373064326666623434393434643232356462626266663164363535
+          33663238306164333433363938623032356634303064383165333934373135376130
+
+# OAuth + SMTP: empty until provisioned. When you have real values, replace
+# each "" with an encrypt_string !vault block (same as the DB secrets above).
+vault_pulse_google_client_id: ""
+vault_pulse_google_client_secret: ""
+vault_pulse_microsoft_client_id: ""
+vault_pulse_microsoft_client_secret: ""
+vault_pulse_smtp_user: ""
+vault_pulse_smtp_password: ""

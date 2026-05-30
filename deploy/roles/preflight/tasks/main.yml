@@ -1,21 +1,60 @@
-# Preflight: assert the shared services Pulse depends on are ALREADY present.
-# Never installs anything. If a check fails, the operator must install the
-# missing piece by hand (and this is intentional — apt installs on a shared
-# box can break other apps).
+# Preflight: install missing host prerequisites, then create only Pulse-owned
+# users and directories. Packages use apt state=present only: no upgrades, no
+# third-party repositories, and no edits to shared nginx/Postgres config.
+
+- name: Install shared host prerequisites if missing
+  ansible.builtin.apt:
+    name:
+      - postgresql
+      - postgresql-contrib
+      - nginx
+      - certbot
+      - rsync
+      - acl
+      - python3-psycopg2
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install Python 3.13 runtime prerequisites if available
+  block:
+    - name: Install Python 3.13 and venv support
+      ansible.builtin.apt:
+        name:
+          - python3.13
+          - python3.13-venv
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+  rescue:
+    - name: Explain missing Python 3.13 apt packages
+      ansible.builtin.fail:
+        msg: >
+          Python 3.13 packages are not available from this VPS apt
+          configuration. Install {{ pulse_python }} and its venv support
+          manually, or configure the host's package sources intentionally,
+          then rerun the Pulse playbook.
+
+- name: Ensure Postgres is running
+  ansible.builtin.systemd:
+    name: postgresql
+    state: started
+    enabled: true
+
+- name: Ensure nginx is running
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: true
 
 - name: Verify Postgres 14+ is installed
   ansible.builtin.command: psql --version
   register: pg_version_check
   changed_when: false
-  failed_when:
-    - pg_version_check.rc != 0
-    - "'psql (PostgreSQL)' not in pg_version_check.stdout"
-
-- name: Verify nginx is installed
-  ansible.builtin.command: nginx -v
-  register: nginx_check
-  changed_when: false
-  failed_when: nginx_check.rc != 0
+  failed_when: >
+    pg_version_check.rc != 0
+    or 'psql (PostgreSQL)' not in pg_version_check.stdout
+    or (pg_version_check.stdout | regex_search('[0-9]+') | int) < 14
 
 - name: Verify the sites-available / sites-enabled layout exists
   ansible.builtin.stat:

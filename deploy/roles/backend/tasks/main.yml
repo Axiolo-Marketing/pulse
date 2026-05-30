@@ -62,7 +62,7 @@
   args:
     chdir: "{{ pulse_api_dir }}"
   environment:
-    DATABASE_URL: "postgresql+asyncpg://{{ pulse_db_owner }}:{{ vault_pulse_db_owner_password }}@/{{ pulse_db_name }}?host=/var/run/postgresql"
+    DATABASE_URL: "postgresql+asyncpg://{{ pulse_db_owner }}:{{ vault_pulse_db_owner_password | urlencode | replace('/', '%2F') }}@{{ pulse_db_host }}:{{ pulse_db_port }}/{{ pulse_db_name }}"
   become_user: "{{ pulse_user }}"
   register: alembic_result
   changed_when: "'Running upgrade' in alembic_result.stdout"
@@ -74,7 +74,8 @@
     db: "{{ pulse_db_name }}"
     login_user: "{{ pulse_db_owner }}"
     login_password: "{{ vault_pulse_db_owner_password }}"
-    login_unix_socket: /var/run/postgresql
+    login_host: "{{ pulse_db_host }}"
+    login_port: "{{ pulse_db_port }}"
     query: >
       insert into public.users (email, is_admin, email_verified_at)
       values (%s, true, now())
@@ -103,9 +104,17 @@
 
 # ── 6. Backup cron (Pulse-scoped — separate file in /etc/cron.d so it
 # never collides with other apps' crontabs)
+- name: Drop pgpass for Pulse backup cron
+  ansible.builtin.template:
+    src: pulse.pgpass.j2
+    dest: "{{ pulse_env_dir }}/pgpass"
+    owner: "{{ pulse_user }}"
+    group: "{{ pulse_group }}"
+    mode: "0600"
+
 - name: Drop /etc/cron.d/pulse-backup
-  ansible.builtin.copy:
-    src: pulse-backup.cron
+  ansible.builtin.template:
+    src: pulse-backup.cron.j2
     dest: /etc/cron.d/pulse-backup
     owner: root
     group: root

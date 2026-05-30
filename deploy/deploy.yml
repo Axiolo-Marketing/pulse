@@ -1,29 +1,27 @@
 # Pulse deploy playbook.
 #
-# Runs on a SHARED Debian VPS that already hosts other apps. Every role is
-# scoped to the paths/units listed in roles/preflight — nothing outside
-# Pulse's slice is touched. First run should always include `--check --diff`
-# so the operator can read every diff before applying for real.
+# Runs on a SHARED Debian VPS that already hosts other apps. The preflight
+# role installs missing prerequisites without upgrades; all app changes stay
+# inside Pulse's slice. First run should always include `--check --diff` so
+# the operator can read every diff before applying for real.
 #
 # Usage:
 #   ansible-playbook deploy.yml --ask-vault-pass --check --diff   # preview
 #   ansible-playbook deploy.yml --ask-vault-pass                  # apply
 #
-# Bootstrap (one-time, by hand on the VPS) — see deploy/README.md for the
-# exact commands.
+# Bootstrap notes for DNS, sudo, and intentional global config live in
+# deploy/README.md.
 
 - name: Deploy Pulse
   hosts: all
   become: true
   gather_facts: true
 
-  vars_files:
-    - vault.yml
-
   roles:
-    - role: preflight        # asserts shared services exist; never installs them
+    - role: preflight        # installs/validates host prerequisites, then creates Pulse-owned paths
     - role: postgres-pulse   # creates pulse DB + roles inside the existing Postgres
     - role: backend          # /opt/pulse/api venv + systemd unit + .env
     - role: frontend         # rsync local dist/ to /var/www/pulse
-    - role: nginx-site       # drops one site config, reloads (never restarts)
-    - role: tls              # requests cert via the existing certbot install
+    - role: nginx-site       # first pass: HTTP-only if the TLS cert does not exist yet
+    - role: tls              # requests cert via webroot; nginx stays online for other apps
+    - role: nginx-site       # second pass: promotes to HTTPS once the cert exists

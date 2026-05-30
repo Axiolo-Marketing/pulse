@@ -2,6 +2,15 @@
 # touches nginx.conf, the conf.d directory, the default site, or any other
 # app's vhost. Reloads (not restarts) so other apps don't blip.
 
+- name: Check whether the Pulse TLS certificate exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ pulse_domain }}/fullchain.pem"
+  register: pulse_tls_cert
+
+- name: Set Pulse nginx TLS mode
+  ansible.builtin.set_fact:
+    pulse_tls_enabled: "{{ pulse_tls_cert.stat.exists | bool }}"
+
 - name: Template the Pulse site config
   ansible.builtin.template:
     src: pulse-site.conf.j2

@@ -1,6 +1,6 @@
-# TLS: request a Let's Encrypt cert for the Pulse domain through the
-# already-installed certbot. The system's existing renewal timer picks up
-# the new cert automatically — we do NOT install or modify that timer.
+# TLS: request a Let's Encrypt cert for the Pulse domain through certbot
+# webroot. nginx stays online, and the system's existing renewal timer picks
+# up the new cert automatically.
 
 - name: Check whether a cert for {{ pulse_domain }} already exists
   ansible.builtin.stat:
@@ -10,6 +10,14 @@
 - name: Ensure the webroot for ACME challenges exists
   ansible.builtin.file:
     path: /var/www/letsencrypt
+    state: directory
+    owner: root
+    group: www-data
+    mode: "0755"
+
+- name: Ensure the ACME challenge directory exists
+  ansible.builtin.file:
+    path: /var/www/letsencrypt/.well-known/acme-challenge
     state: directory
     owner: root
     group: www-data
