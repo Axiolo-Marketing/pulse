@@ -1,0 +1,229 @@
+---
+import "../styles/legal.css";
+const base = import.meta.env.BASE_URL ?? "/";
+const baseSlash = base.endsWith("/") ? base : `${base}/`;
+const effectiveDate = "May 29, 2026";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2960F6" />
+    <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />
+    <title>Privacy Policy — Pulse by Axiolo</title>
+    <meta name="description" content="Privacy Policy for Pulse, a decision-validation tool by Axiolo LLC." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+    />
+  </head>
+  <body>
+    <div class="legal-shell">
+      <div class="legal-header">
+        <a href={baseSlash} class="home-link">← Pulse by Axiolo</a>
+      </div>
+
+      <h1>Privacy Policy</h1>
+      <p class="effective">Effective date: {effectiveDate}</p>
+
+      <p>
+        This Privacy Policy describes how <strong>Axiolo LLC</strong> ("Axiolo,"
+        "we," "us," or "our") collects, uses, and discloses information when you
+        use Pulse (the "Service"), our decision-validation tool for
+        consultants and their clients.
+      </p>
+
+      <h2>1. Who this policy applies to</h2>
+      <p>Pulse has two kinds of users:</p>
+      <ul>
+        <li>
+          <strong>Operators</strong> — consultants and team members who sign in
+          to the Pulse admin console to create engagements and review responses.
+        </li>
+        <li>
+          <strong>Clients</strong> — the consultant's customers, who interact
+          with Pulse only through a single-use magic link sent by the operator
+          and do not create an account.
+        </li>
+      </ul>
+
+      <h2>2. Information we collect</h2>
+
+      <h3>2.1 Operator account information</h3>
+      <p>
+        When you sign up or sign in as an operator, we collect information you
+        provide directly, including:
+      </p>
+      <ul>
+        <li>Your email address and display name.</li>
+        <li>
+          A salted password hash (we never store your password in plaintext) if
+          you sign in with email and password.
+        </li>
+        <li>
+          If you sign in with Google or Microsoft, we receive your
+          <strong>email address, basic profile information, and a unique
+          provider identifier</strong> — limited to the
+          <code>openid</code>, <code>email</code>, and <code>profile</code>
+          OAuth scopes. We do <strong>not</strong> request access to your
+          mailbox, calendar, contacts, files, or any other Google or Microsoft
+          data.
+        </li>
+      </ul>
+
+      <h3>2.2 Engagement and response content</h3>
+      <p>
+        Operators create engagements consisting of decision cards (questions and
+        pre-populated answers). When a client opens their magic link, we
+        collect the responses, confirmations, corrections, comments, and any
+        files the client uploads in connection with that engagement.
+      </p>
+
+      <h3>2.3 Authentication and session data</h3>
+      <p>
+        We use signed cookies to keep operators logged in. Magic links contain a
+        random 16-character token that identifies a client to a specific
+        engagement. We log basic authentication events (sign-in, sign-out, token
+        creation) for security purposes.
+      </p>
+
+      <h3>2.4 Technical information</h3>
+      <p>
+        Our servers automatically receive standard information from your browser
+        such as IP address, user-agent, and request timestamps. This information
+        is used for security, abuse prevention, and operational diagnostics.
+      </p>
+
+      <h2>3. How we use information</h2>
+      <p>We use the information we collect to:</p>
+      <ul>
+        <li>Provide, operate, and maintain the Service.</li>
+        <li>Authenticate operators and authorize clients to specific engagements.</li>
+        <li>Store, display, and export engagement responses to operator-authorized destinations (such as the operator's own task tracker).</li>
+        <li>Send transactional emails (verification, password reset, magic-link delivery).</li>
+        <li>Detect, prevent, and respond to fraud, abuse, and security incidents.</li>
+        <li>Comply with legal obligations.</li>
+      </ul>
+      <p>
+        We do <strong>not</strong> sell your personal information. We do
+        <strong>not</strong> use information obtained through Google or
+        Microsoft OAuth sign-in for advertising or to train AI/ML models.
+      </p>
+
+      <h2>4. Use of Google user data</h2>
+      <p>
+        Pulse's use and transfer of information received from Google APIs
+        adheres to the
+        <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">
+          Google API Services User Data Policy
+        </a>, including the Limited Use requirements.
+      </p>
+      <p>Specifically:</p>
+      <ul>
+        <li>We only request the minimum scopes needed to sign you in: <code>openid</code>, <code>email</code>, and <code>profile</code>.</li>
+        <li>We use Google account data solely to identify your operator account.</li>
+        <li>We do not transfer this data to third parties except as required to provide or improve the sign-in feature, comply with applicable law, or as part of a merger, acquisition, or sale of assets.</li>
+        <li>We do not use this data for advertising and do not allow humans to read it except with your explicit consent, for security purposes, to comply with applicable law, or where the data is aggregated and used for internal operations.</li>
+      </ul>
+
+      <h2>5. How we share information</h2>
+      <p>We share information only in these limited circumstances:</p>
+      <ul>
+        <li>
+          <strong>With operators on the same engagement.</strong> Client
+          responses are visible to the operator who created the engagement.
+        </li>
+        <li>
+          <strong>With service providers.</strong> We use vendors to host
+          infrastructure, send email, and provide error monitoring. They are
+          contractually bound to handle data only on our behalf.
+        </li>
+        <li>
+          <strong>For legal reasons.</strong> We may disclose information if
+          required by law, subpoena, or court order, or to protect the rights,
+          property, or safety of Axiolo, our users, or the public.
+        </li>
+        <li>
+          <strong>Business transfers.</strong> If Axiolo is involved in a
+          merger, acquisition, or sale of assets, your information may be
+          transferred as part of that transaction, subject to this Policy.
+        </li>
+      </ul>
+
+      <h2>6. Data retention</h2>
+      <p>
+        We retain operator account data for as long as the account is active.
+        Engagement and response data is retained while the engagement is active
+        and for a reasonable period thereafter to allow operators to export or
+        reference it. You may request deletion at any time as described in
+        Section 8.
+      </p>
+
+      <h2>7. Security</h2>
+      <p>
+        We protect the Service with row-level database security, encrypted
+        transport (HTTPS/TLS), salted password hashing (argon2), encrypted
+        storage of sensitive secrets at rest, and signed session cookies. No
+        method of transmission or storage is 100% secure, but we work to
+        protect your information using industry-standard practices.
+      </p>
+
+      <h2>8. Your rights and choices</h2>
+      <p>You may, at any time:</p>
+      <ul>
+        <li>Access, correct, or delete your operator account by contacting us.</li>
+        <li>Disconnect Google or Microsoft sign-in from your account.</li>
+        <li>
+          Revoke Pulse's access to your Google account at any time at
+          <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">
+            myaccount.google.com/permissions
+          </a>.
+        </li>
+        <li>Request a copy of the personal information we hold about you.</li>
+      </ul>
+      <p>
+        To exercise any of these rights, contact
+        <a href="mailto:info@axiolo.com">info@axiolo.com</a>. We will respond
+        within a reasonable timeframe and in accordance with applicable law.
+      </p>
+
+      <h2>9. Children</h2>
+      <p>
+        Pulse is not directed to children under 13, and we do not knowingly
+        collect personal information from children under 13. If you believe a
+        child has provided us with personal information, please contact us so
+        we can delete it.
+      </p>
+
+      <h2>10. International users</h2>
+      <p>
+        Pulse is operated from the United States. If you access the Service from
+        outside the United States, you understand that your information may be
+        transferred to, stored, and processed in the United States.
+      </p>
+
+      <h2>11. Changes to this Policy</h2>
+      <p>
+        We may update this Privacy Policy from time to time. When we do, we
+        will revise the "Effective date" above and, where appropriate, notify
+        operators by email or through the Service.
+      </p>
+
+      <h2>12. Contact us</h2>
+      <p>
+        Axiolo LLC<br />
+        Email: <a href="mailto:info@axiolo.com">info@axiolo.com</a>
+      </p>
+
+      <div class="legal-footer">
+        <a href={baseSlash}>Home</a>
+        <span aria-hidden="true">·</span>
+        <a href={`${baseSlash}terms`}>Terms of Use</a>
+      </div>
+    </div>
+  </body>
+</html>
