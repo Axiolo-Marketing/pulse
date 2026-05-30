@@ -67,8 +67,12 @@
   register: alembic_result
   changed_when: "'Running upgrade' in alembic_result.stdout"
 
-# ── 4. Seed the first admin user (idempotent). The operator then uses
-# "Forgot password?" or OAuth (matched by email) to set their credentials.
+# ── 4. Seed the first admin user (idempotent). password_hash is left NULL;
+# the operator signs in via Google or Microsoft OAuth using an account whose
+# email matches pulse_initial_admin_email — the callback in
+# api/pulse_api/routes/oauth.py links the OAuth identity to this row and
+# issues a session. "Forgot password?" is NOT a valid first-login path here:
+# auth.py:forgot_password skips users with password_hash IS NULL by design.
 - name: Seed initial admin user
   community.postgresql.postgresql_query:
     db: "{{ pulse_db_name }}"
