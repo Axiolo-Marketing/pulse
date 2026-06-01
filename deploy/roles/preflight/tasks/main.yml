@@ -12,12 +12,66 @@
       - rsync
       - acl
       - git
-      - nodejs
-      - npm
       - python3-psycopg2
     state: present
     update_cache: true
     cache_valid_time: 3600
+
+# nodejs + npm are handled separately so we can no-op when working binaries
+# already exist on the shared VPS. Debian 13's apt solver-3.0 refuses to
+# install the `npm` package's chain of node-* deps alongside any nodejs that
+# isn't its exact Debian build — which breaks any host that already has
+# nodejs from a prior install. Trust whatever provides node/npm; the version
+# verification tasks below enforce our actual constraint (node >= 18).
+- name: Check whether node and npm are already on PATH
+  ansible.builtin.command: "{{ item }} --version"
+  register: node_npm_precheck
+  changed_when: false
+  failed_when: false
+  loop:
+    - node
+    - npm
+
+- name: Install nodejs and npm via apt when both are missing
+  ansible.builtin.apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - node_npm_precheck.results[0].rc != 0
+    - node_npm_precheck.results[1].rc != 0
+
+# Mixed state: a non-Debian `nodejs` is already on the host (likely
+# NodeSource left over from another app on this shared VPS), but the matching
+# `npm` is absent. We deliberately do NOT try to add Debian's `npm` package —
+# its node-* dependency chain conflicts with non-Debian nodejs and apt
+# solver-3.0 rightly refuses. Operator needs to install npm matching the
+# existing nodejs (NodeSource ships npm in the same package) before retrying.
+- name: Fail clearly when node is present but npm is missing
+  ansible.builtin.fail:
+    msg: >
+      `node` is installed on {{ inventory_hostname }} but `npm` is not. Pulse
+      cannot install Debian's `npm` package alongside a non-Debian `nodejs`
+      (apt solver-3.0 blocks it). Install `npm` matching the existing
+      Node.js — e.g. reinstall nodejs from the same source it came from, or
+      `apt purge nodejs` and let the playbook install Debian's pair fresh —
+      then rerun the playbook.
+  when:
+    - node_npm_precheck.results[0].rc == 0
+    - node_npm_precheck.results[1].rc != 0
+
+- name: Fail clearly when npm is present but node is missing
+  ansible.builtin.fail:
+    msg: >
+      `npm` is installed on {{ inventory_hostname }} but `node` is not. This
+      is an unusual host state — Pulse expects both binaries from the same
+      source. Reconcile manually before rerunning the playbook.
+  when:
+    - node_npm_precheck.results[0].rc != 0
+    - node_npm_precheck.results[1].rc == 0
 
 - name: Install Python 3.13 runtime prerequisites if available
   block:
