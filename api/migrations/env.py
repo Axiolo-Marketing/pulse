@@ -13,7 +13,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Do NOT push settings.database_url through config.set_main_option — alembic
+# writes that into configparser, which treats `%` as interpolation syntax and
+# blows up on URL-encoded special chars in the password (e.g. `%3D`). We inject
+# the URL directly into the engine config dict in run_async_migrations instead.
 
 target_metadata = SQLModel.metadata
 
@@ -36,10 +39,9 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-    )
+    section = config.get_section(config.config_ini_section, {}) or {}
+    section["sqlalchemy.url"] = settings.database_url
+    connectable = async_engine_from_config(section, prefix="sqlalchemy.")
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
