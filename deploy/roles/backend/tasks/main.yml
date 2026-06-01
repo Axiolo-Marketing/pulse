@@ -1,35 +1,38 @@
-# Backend role: install + run the FastAPI app under /opt/pulse/api.
+# Backend role: install + run the FastAPI app from /opt/pulse/source/api.
+#
+# Source comes from `git pull` on the VPS (matches image-compressor /
+# sitechecker / octoping deploys). The frontend role builds Astro from the
+# same checkout, so both share one clone.
 #
 # Order:
-#   1. Sync the api/ source from the operator's machine to the VPS.
-#   2. Create a venv with the system Python (asserted by preflight).
+#   1. Clone or update the repo at {{ pulse_source_dir }}.
+#   2. Create a venv at {{ pulse_venv_dir }} (outside the source tree).
 #   3. uv sync --frozen into the venv.
 #   4. Template /etc/pulse/pulse.env from group_vars + vault.
 #   5. Run alembic upgrade head.
 #   6. Seed the initial admin user (idempotent — ON CONFLICT DO NOTHING).
 #   7. Drop the systemd unit, daemon-reload, enable + restart.
 
-# ── 1. Source sync ────────────────────────────────────────────────────────
-# NOTE: --chown is rsync 3.1+ and is not supported by BSD rsync on macOS
-# (openrsync 2.6.9-compatible). synchronize runs rsync on the controller, so
-# we set ownership remotely below instead of via rsync_opts.
-- name: Rsync api/ source to {{ pulse_api_dir }}
-  ansible.posix.synchronize:
-    src: "{{ playbook_dir }}/../api/"
-    dest: "{{ pulse_api_dir }}/"
-    delete: true
-    rsync_opts:
-      - "--exclude=.venv"
-      - "--exclude=__pycache__"
-      - "--exclude=.pytest_cache"
-      - "--exclude=tests"            # tests don't ship to prod
-      - "--exclude=.coverage"
-      - "--exclude=htmlcov"
-      - "--exclude=db-init"          # dev-only init scripts
+# ── 1. Source clone/update ────────────────────────────────────────────────
+# pulse is a `create_home: false` system user; export HOME so git/uv/npm
+# never touch /home/pulse (which doesn't exist).
+- name: Clone or update repository at {{ pulse_source_dir }}
+  ansible.builtin.git:
+    repo: "{{ pulse_repo_url }}"
+    dest: "{{ pulse_source_dir }}"
+    version: "{{ pulse_repo_branch }}"
+    force: true
+    update: true
+    accept_hostkey: true
+    key_file: "{{ pulse_deploy_key_remote }}"
+  become_user: "{{ pulse_user }}"
+  environment:
+    HOME: "{{ pulse_app_dir }}"
+  notify: Restart pulse-api
 
-- name: Ensure {{ pulse_api_dir }} is owned by {{ pulse_user }}:{{ pulse_group }}
+- name: Ensure {{ pulse_source_dir }} is owned by {{ pulse_user }}:{{ pulse_group }}
   ansible.builtin.file:
-    path: "{{ pulse_api_dir }}"
+    path: "{{ pulse_source_dir }}"
     owner: "{{ pulse_user }}"
     group: "{{ pulse_group }}"
     recurse: true
@@ -52,6 +55,9 @@
   args:
     chdir: "{{ pulse_api_dir }}"
   become_user: "{{ pulse_user }}"
+  environment:
+    HOME: "{{ pulse_app_dir }}"
+    UV_PROJECT_ENVIRONMENT: "{{ pulse_venv_dir }}"
   register: uv_sync
   changed_when: "'No changes detected' not in (uv_sync.stderr | default(''))"
 

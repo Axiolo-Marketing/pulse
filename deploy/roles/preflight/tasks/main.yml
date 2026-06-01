@@ -11,6 +11,9 @@
       - certbot
       - rsync
       - acl
+      - git
+      - nodejs
+      - npm
       - python3-psycopg2
     state: present
     update_cache: true
@@ -80,6 +83,26 @@
   changed_when: false
   failed_when: rsync_check.rc != 0
 
+- name: Verify git is installed
+  ansible.builtin.command: git --version
+  register: git_check
+  changed_when: false
+  failed_when: git_check.rc != 0
+
+- name: Verify Node.js (>=18) is installed
+  ansible.builtin.command: node --version
+  register: node_check
+  changed_when: false
+  failed_when: >
+    node_check.rc != 0
+    or (node_check.stdout | regex_search('[0-9]+') | int) < 18
+
+- name: Verify npm is installed
+  ansible.builtin.command: npm --version
+  register: npm_check
+  changed_when: false
+  failed_when: npm_check.rc != 0
+
 # ── From here on, the preflight CREATES Pulse-owned directories and the
 # unprivileged service user. These are all Pulse's own resources — nothing
 # else on the box can collide.
@@ -101,9 +124,53 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: "{{ pulse_app_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
-    - { path: "{{ pulse_api_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
+    - { path: "{{ pulse_venv_dir }}",    owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
     - { path: "{{ pulse_uploads_dir }}", owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0750" }
     - { path: "{{ pulse_env_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0750" }
     - { path: "{{ pulse_log_dir }}",     owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0755" }
     - { path: "{{ pulse_backup_dir }}",  owner: "{{ pulse_user }}", group: "{{ pulse_group }}", mode: "0750" }
-    - { path: "{{ pulse_web_root }}",    owner: "www-data",         group: "www-data",          mode: "0755" }
+    - { path: "{{ pulse_web_root | dirname }}", owner: "root",      group: "root",              mode: "0755" }
+
+# {{ pulse_web_root }} is a symlink into the Astro build inside the cloned
+# source tree — nginx follows it and serves the build output directly, so
+# there is no duplicate copy of dist/ on disk. force: true replaces any
+# regular directory that a prior deploy may have left behind. The symlink
+# target ({{ pulse_dist_dir }}) does not exist yet on a first run; that is
+# fine — the frontend role builds it before nginx starts serving.
+- name: Symlink {{ pulse_web_root }} → {{ pulse_dist_dir }}
+  ansible.builtin.file:
+    src: "{{ pulse_dist_dir }}"
+    path: "{{ pulse_web_root }}"
+    state: link
+    force: true
+    follow: false
+    owner: "{{ pulse_user }}"
+    group: "{{ pulse_group }}"
+
+# The git module will create pulse_source_dir on first clone — we don't pre-
+# create it because an empty existing dir is fine, but pre-creating it as the
+# wrong user would risk permissions issues on first clone.
+
+- name: Assert deploy key exists on operator machine
+  ansible.builtin.stat:
+    path: "{{ pulse_deploy_key_path | expanduser }}"
+  delegate_to: localhost
+  become: false
+  register: deploy_key_stat
+  changed_when: false
+  failed_when: not deploy_key_stat.stat.exists
+
+- name: Copy deploy key to {{ pulse_deploy_key_remote }}
+  ansible.builtin.copy:
+    src: "{{ pulse_deploy_key_path | expanduser }}"
+    dest: "{{ pulse_deploy_key_remote }}"
+    owner: "{{ pulse_user }}"
+    group: "{{ pulse_group }}"
+    mode: "0600"
+
+- name: Trust github.com host key
+  ansible.builtin.known_hosts:
+    name: github.com
+    key: "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+    path: /etc/ssh/ssh_known_hosts
+    state: present

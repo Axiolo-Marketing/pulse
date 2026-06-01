@@ -10,10 +10,12 @@ shared configuration alone.
 
 | Resource | Path / name |
 |---|---|
-| App code | `/opt/pulse/api/` (Python venv inside) |
-| Static frontend | `/var/www/pulse/` |
+| App source | `/opt/pulse/source/` (git checkout — backend at `api/`, Astro at `src/`) |
+| Python venv | `/opt/pulse/venv/` (outside source so `git clean` cannot wipe it) |
+| Static frontend | `/var/www/pulse` (symlink → `/opt/pulse/source/dist/`) |
 | Uploads | `/var/lib/pulse/uploads/` |
 | Backend env | `/etc/pulse/pulse.env` (mode 0640) |
+| Deploy key | `/etc/pulse/deploy_key` (mode 0600 — read-only SSH key for the repo) |
 | Backup DB auth | `/etc/pulse/pgpass` (mode 0600) |
 | Systemd unit | `pulse-api.service` |
 | Backup cron | `/etc/cron.d/pulse-backup` |
@@ -45,6 +47,14 @@ python3.13 --version
 
 # 3. Ensure the SSH user in inventory can sudo. For the shared VPS this is
 #    currently ansible_user=gabriel at 198.27.127.130.
+
+# 4. The playbook uses the same SSH key as the other Axiolo deploys
+#    (image-compressor, sitechecker, octoping) — `~/.ssh/github_deploy_key`
+#    on the operator's machine. It has access to all Axiolo-Marketing
+#    repos, so no per-repo Deploy Key is needed. Confirm it exists:
+ls -l ~/.ssh/github_deploy_key
+#    If a different path is preferred, override pulse_deploy_key_path in
+#    group_vars/all.yml.
 ```
 
 ## Configuring
@@ -79,11 +89,12 @@ Encrypt the resulting client ids + secrets with `ansible-vault encrypt_string`
 
 ## Build + deploy
 
+The playbook clones the repo on the VPS and builds the Astro frontend
+there. **Commit and push first** — Ansible deploys whatever is on
+`{{ pulse_repo_branch }}` at origin, not your working tree.
+
 ```bash
-# Build the Astro static site locally — the playbook rsyncs from `../dist/`.
-cd ..
-npm run build
-cd deploy/
+git push    # make sure main is up-to-date
 
 # DRY RUN — read every diff. Anything outside Pulse's owned paths is a bug.
 ansible-playbook deploy.yml --ask-vault-pass --check --diff
@@ -115,17 +126,19 @@ ansible-playbook deploy.yml --ask-vault-pass
 ## Subsequent deploys
 
 ```bash
-git pull
-npm run build
+git push
 cd deploy/
 ansible-playbook deploy.yml --ask-vault-pass
 ```
 
-The `backend` role syncs source, runs `uv sync --frozen`, runs
-`alembic upgrade head`, and restarts `pulse-api`. The `frontend` role
-rsyncs `dist/`. nginx is deployed once in HTTP bootstrap mode if the cert
-does not exist, certbot obtains the cert via webroot, then nginx is deployed
-again with HTTPS enabled.
+The `backend` role `git pull`s on the VPS, runs `uv sync --frozen`, runs
+`alembic upgrade head`, and restarts `pulse-api`. The `frontend` role runs
+`npm ci && npm run build` against the same checkout — nginx serves the
+build output directly via the `/var/www/pulse` → `/opt/pulse/source/dist`
+symlink that `preflight` creates, so there is no second copy of `dist/` on
+disk. nginx is deployed once in HTTP bootstrap mode if the cert does not
+exist, certbot obtains the cert via webroot, then nginx is deployed again
+with HTTPS enabled.
 
 ## Backups
 

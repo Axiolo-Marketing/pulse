@@ -11,14 +11,30 @@ pulse_admin_email: ops@axiolo.com            # Let's Encrypt registration only
 pulse_user: pulse
 pulse_group: pulse
 pulse_app_dir: /opt/pulse
-pulse_api_dir: "{{ pulse_app_dir }}/api"
-pulse_venv_dir: "{{ pulse_api_dir }}/.venv"
+pulse_source_dir: "{{ pulse_app_dir }}/source"     # full git checkout
+pulse_api_dir: "{{ pulse_source_dir }}/api"        # backend working dir
+pulse_venv_dir: "{{ pulse_app_dir }}/venv"         # outside source/ so `git clean -fdx` cannot wipe it
+pulse_dist_dir: "{{ pulse_source_dir }}/dist"      # Astro build output
 pulse_web_root: /var/www/pulse
 pulse_uploads_dir: /var/lib/pulse/uploads
 pulse_env_dir: /etc/pulse
 pulse_env_file: "{{ pulse_env_dir }}/pulse.env"
+pulse_deploy_key_remote: "{{ pulse_env_dir }}/deploy_key"
 pulse_log_dir: /var/log/pulse
 pulse_backup_dir: /var/backups/pulse
+
+# ── Source (git) ─────────────────────────────────────────────────────────
+# The playbook clones the repo on the VPS and builds there. Match the
+# pattern used by image-compressor / sitechecker / octoping deploys.
+pulse_repo_url: git@github.com:Axiolo-Marketing/pulse.git
+pulse_repo_branch: main
+# Local path on the operator's machine to an SSH private key that has read
+# access to the repo above. This is the same key reused across the other
+# Axiolo deploys (image-compressor, sitechecker, octoping) — it has access
+# to all of Axiolo-Marketing's repos, so no per-repo Deploy Key needed. The
+# playbook copies it to {{ pulse_deploy_key_remote }} (0600, pulse-owned) so
+# the `git` module can clone over SSH on the VPS.
+pulse_deploy_key_path: "~/.ssh/github_deploy_key"
 
 # ── Backend process ───────────────────────────────────────────────────────
 pulse_python: /usr/bin/python3.13            # preflight asserts this exists
@@ -34,10 +50,9 @@ pulse_db_host: 127.0.0.1
 pulse_db_port: 5432
 
 # ── Frontend ──────────────────────────────────────────────────────────────
-# Where the local Astro build lives, relative to deploy/. The frontend role
-# does `rsync -a {{ pulse_local_dist }} {{ pulse_web_root }}` so the build
-# happens on the operator's machine, never on the shared VPS.
-pulse_local_dist: ../dist/
+# Astro now builds on the VPS (npm ci + npm run build inside the cloned
+# source tree). The frontend role then syncs {{ pulse_dist_dir }} →
+# {{ pulse_web_root }} locally on the VPS.
 
 # ── OAuth redirect URIs (must match what's configured in Google/Microsoft) ─
 pulse_google_redirect_uri: "https://{{ pulse_domain }}/api/auth/google/callback"

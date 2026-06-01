@@ -1,7 +1,13 @@
 #!/bin/bash
 
 # Axiolo Pulse Deployment Script
-# Usage: ./deploy.sh [--check] [--no-build] [--tags tag1,tag2]
+#
+# The playbook now clones the repo on the VPS and builds the Astro frontend
+# remotely. There is no local build step. Make sure you have committed and
+# pushed any changes you want deployed to {{ pulse_repo_branch }} on origin
+# before running.
+#
+# Usage: ./deploy.sh [--check] [--tags tag1,tag2]
 
 set -e
 
@@ -69,17 +75,12 @@ check_requirements() {
 # Parse command line arguments
 EXTRA_ARGS=()
 CHECK_MODE=false
-SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --check)
             CHECK_MODE=true
             EXTRA_ARGS+=("--check")
-            shift
-            ;;
-        --no-build)
-            SKIP_BUILD=true
             shift
             ;;
         --tags)
@@ -99,7 +100,6 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "OPTIONS:"
             echo "  --check           Run in check mode (dry run)"
-            echo "  --no-build        Skip building the Astro frontend locally"
             echo "  --tags TAGS       Run only specific tags (comma-separated)"
             echo "  --limit HOSTS     Limit to specific hosts"
             echo "  --verbose         Verbose output"
@@ -110,9 +110,8 @@ while [[ $# -gt 0 ]]; do
             echo "  BECOME_PASSWORD      Sudo password for remote host"
             echo ""
             echo "EXAMPLES:"
-            echo "  $0                              # Full deployment (build + deploy)"
+            echo "  $0                              # Full deployment (clone + build + deploy on VPS)"
             echo "  $0 --check                     # Dry run"
-            echo "  $0 --no-build                  # Deploy without rebuilding frontend"
             echo "  $0 --tags backend              # Deploy only backend changes"
             echo "  $0 --limit pulse-prod          # Deploy only to pulse-prod host"
             exit 0
@@ -133,38 +132,6 @@ main() {
     fi
 
     check_requirements
-
-    # Build Astro static site locally if not skipped
-    if [[ "$SKIP_BUILD" == false ]]; then
-        log_info "Building frontend..."
-        
-        # Check if Docker compose frontend service is active and running
-        if command -v docker &> /dev/null && docker compose ps --format json 2>/dev/null | grep -q '"Service":"frontend"'; then
-            log_info "Frontend container is running. Building inside the container..."
-            if docker compose exec frontend npm run build; then
-                log_success "Frontend built successfully inside container!"
-            else
-                log_error "Frontend build failed inside container!"
-                exit 1
-            fi
-        # Fall back to host npm if available
-        elif command -v npm &> /dev/null; then
-            log_info "Frontend container is not running. Building locally on host using npm..."
-            if npm run build; then
-                log_success "Frontend built successfully on host!"
-            else
-                log_error "Frontend build failed locally on host!"
-                exit 1
-            fi
-        else
-            log_error "Cannot build frontend: neither 'npm' nor a running 'frontend' container was found."
-            log_info "Please make sure either node/npm is installed on your host, or start the dev container with 'make dev'."
-            log_info "If you have already built the frontend, you can bypass this with the --no-build flag."
-            exit 1
-        fi
-    else
-        log_warning "Skipping frontend build (--no-build)"
-    fi
 
     # Build ansible command
     ANSIBLE_CMD=(

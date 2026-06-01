@@ -25,7 +25,7 @@ make backend-shell             # sh inside the backend container
 
 Service ports default to standard (5432/8000/4321) but the local `.env` remaps to `55432/58000/14321` because this dev machine has other Compose stacks on those ports. Override via `DB_HOST_PORT` / `BACKEND_HOST_PORT` / `FRONTEND_HOST_PORT` in `.env`.
 
-There is no host-side `npm` or `python` install required — everything lives in containers. The Astro `dist/` build runs in the frontend container (`docker compose exec frontend npm run build`) and is rsynced to prod via Ansible.
+There is no host-side `npm` or `python` install required for local development — everything lives in containers. **Production builds run on the VPS**: the Ansible playbook `git pull`s the repo at `/opt/pulse/source`, then runs `uv sync` (backend) and `npm ci && npm run build` (frontend) there. The shared VPS therefore has `nodejs` + `npm` installed via apt (`state: present` only, no third-party repos). This pattern matches the other Axiolo deploys (`image-compressor`, `sitechecker`, `octoping`).
 
 ## Architecture: Astro frontend → FastAPI → Postgres (RLS preserved)
 
@@ -101,9 +101,11 @@ Fixtures of note: `client_authed` (token-authed httpx client), `admin_authed` (a
 
 Production runs on a **shared Debian VPS** (other apps coexist on the same host). Ansible playbook in `deploy/`. See `deploy/README.md` for the full runbook.
 
-**Critical constraint, baked into every role:** Ansible only performs narrow shared-host setup: install missing apt packages with `state: present` (no upgrades, no third-party repositories), and start/enable Postgres + nginx. The other roles (`postgres-pulse`, `backend`, `frontend`, `nginx-site`, `tls`) are scoped to their own paths/units/DB/roles only. First-run command is always `ansible-playbook deploy.yml --check --diff` so the operator can read every diff before applying.
+**Critical constraint, baked into every role:** Ansible only performs narrow shared-host setup: install missing apt packages with `state: present` (no upgrades, no third-party repositories — `nodejs` + `npm` come from Debian apt, not NodeSource), and start/enable Postgres + nginx. The other roles (`postgres-pulse`, `backend`, `frontend`, `nginx-site`, `tls`) are scoped to their own paths/units/DB/roles only. First-run command is always `ansible-playbook deploy.yml --check --diff` so the operator can read every diff before applying.
 
 If you're editing Ansible: anything outside prerequisite package installation/service start and Pulse's owned paths (`/opt/pulse/`, `/etc/pulse/`, `/var/www/pulse/`, `/var/lib/pulse/`, `/etc/nginx/sites-available/pulse`, `pulse-api.service`, `pulse_*` DB roles, the `pulse` database) is a bug — even if the playbook syntax-checks clean. Pre-existing other apps depend on the rest of the box being untouched.
+
+The repo is cloned on the VPS via the operator's `~/.ssh/github_deploy_key` — the same SSH key already used by `image-compressor`, `sitechecker`, and `octoping`. It has access to all Axiolo-Marketing repos, so no per-repo Deploy Key is needed. The preflight role copies it to `/etc/pulse/deploy_key` (0600, pulse-owned), and the backend role's `ansible.builtin.git` task uses `key_file:` against that path.
 
 ## Obsolete files still in the tree
 

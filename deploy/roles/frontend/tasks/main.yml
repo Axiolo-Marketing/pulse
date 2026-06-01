@@ -1,31 +1,40 @@
-# Frontend role: build Astro on the operator's machine and rsync the static
-# output to the VPS. Node is intentionally NOT installed on the VPS — the
-# shared box doesn't need it.
+# Frontend role: build Astro on the VPS from the cloned source tree. nginx
+# serves directly out of {{ pulse_dist_dir }} via the {{ pulse_web_root }}
+# symlink that the preflight role creates — there is no second copy of the
+# build output. Mirrors the build-on-server pattern used by
+# image-compressor / sitechecker / octoping.
+#
+# Requires nodejs + npm to be present on the host (asserted by preflight).
+# Order:
+#   1. npm ci (frozen lockfile install) inside {{ pulse_source_dir }}.
+#   2. npm run build → {{ pulse_dist_dir }} (which is what
+#      {{ pulse_web_root }} points at).
 
-- name: Verify a local Astro build exists at {{ pulse_local_dist }}
+- name: Install frontend dependencies (npm ci)
+  ansible.builtin.command: npm ci --no-audit --no-fund
+  args:
+    chdir: "{{ pulse_source_dir }}"
+  become_user: "{{ pulse_user }}"
+  environment:
+    HOME: "{{ pulse_app_dir }}"
+    npm_config_cache: "{{ pulse_app_dir }}/.npm"
+  register: npm_ci
+  changed_when: "'added' in (npm_ci.stdout | default('') + npm_ci.stderr | default(''))"
+
+- name: Build Astro static site (npm run build)
+  ansible.builtin.command: npm run build
+  args:
+    chdir: "{{ pulse_source_dir }}"
+  become_user: "{{ pulse_user }}"
+  environment:
+    HOME: "{{ pulse_app_dir }}"
+    npm_config_cache: "{{ pulse_app_dir }}/.npm"
+  register: npm_build
+  changed_when: true
+
+- name: Confirm {{ pulse_dist_dir }} exists post-build (nginx serves it via {{ pulse_web_root }})
   ansible.builtin.stat:
-    path: "{{ playbook_dir }}/{{ pulse_local_dist }}"
-  delegate_to: localhost
-  become: false
-  register: dist_check
-  failed_when: not dist_check.stat.exists or not dist_check.stat.isdir
+    path: "{{ pulse_dist_dir }}/index.html"
+  register: dist_index
+  failed_when: not dist_index.stat.exists
   changed_when: false
-
-# NOTE: --chown is rsync 3.1+ and is not supported by BSD rsync on macOS
-# (openrsync 2.6.9-compatible). synchronize runs rsync on the controller, so
-# we set ownership remotely below instead of via rsync_opts. --chmod is
-# rsync 2.6.7+ and works on the BSD rsync.
-- name: Rsync dist/ → {{ pulse_web_root }}
-  ansible.posix.synchronize:
-    src: "{{ playbook_dir }}/{{ pulse_local_dist }}"
-    dest: "{{ pulse_web_root }}/"
-    delete: true
-    rsync_opts:
-      - "--chmod=D755,F644"
-
-- name: Ensure {{ pulse_web_root }} is owned by www-data:www-data
-  ansible.builtin.file:
-    path: "{{ pulse_web_root }}"
-    owner: www-data
-    group: www-data
-    recurse: true

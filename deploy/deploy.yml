@@ -18,10 +18,10 @@
   gather_facts: true
 
   roles:
-    - role: preflight        # installs/validates host prerequisites, then creates Pulse-owned paths
+    - role: preflight        # installs/validates host prerequisites, copies the deploy key, then creates Pulse-owned paths
     - role: postgres-pulse   # creates pulse DB + roles inside the existing Postgres
-    - role: backend          # /opt/pulse/api venv + systemd unit + .env
-    - role: frontend         # rsync local dist/ to /var/www/pulse
+    - role: backend          # git pull → /opt/pulse/source, venv at /opt/pulse/venv, systemd unit, .env
+    - role: frontend         # npm ci + npm run build inside /opt/pulse/source — nginx serves dist/ via the /var/www/pulse symlink
     - role: nginx-site       # first pass: HTTP-only if the TLS cert does not exist yet
     - role: tls              # requests cert via webroot; nginx stays online for other apps
     - role: nginx-site       # second pass: promotes to HTTPS once the cert exists
