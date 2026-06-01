@@ -1,0 +1,7 @@
+# deploy.yml lists this role twice on purpose: once before `tls` (HTTP-only
+# bootstrap so certbot can answer the ACME challenge) and once after (promotes
+# the vhost to HTTPS now that the cert exists). Ansible deduplicates roles by
+# default, which is why first-time deploys used to need two ansible-playbook
+# invocations — the second listing was silently dropped. allow_duplicates flips
+# that off so both passes actually run.
+allow_duplicates: true
