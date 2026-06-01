@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/var/lib/pulse/uploads")
     max_upload_bytes: int = 26_214_400
 
-    initial_admin_email: str = ""
-
     # ── Observability ────────────────────────────────────────────────────
     sentry_dsn: str = ""
     environment: str = "development"

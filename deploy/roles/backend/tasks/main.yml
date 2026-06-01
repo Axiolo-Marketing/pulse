@@ -82,13 +82,13 @@
   register: alembic_result
   changed_when: "'Running upgrade' in alembic_result.stdout"
 
-# ── 4. Seed the first admin user (idempotent). password_hash is left NULL;
-# the operator signs in via Google or Microsoft OAuth using an account whose
-# email matches pulse_initial_admin_email — the callback in
-# api/pulse_api/routes/oauth.py links the OAuth identity to this row and
-# issues a session. "Forgot password?" is NOT a valid first-login path here:
-# auth.py:forgot_password skips users with password_hash IS NULL by design.
-- name: Seed initial admin user
+# ── 4. Seed admin users (idempotent). password_hash is left NULL; each
+# operator signs in via Google or Microsoft OAuth using an account whose
+# email matches one of these — the callback in api/pulse_api/routes/oauth.py
+# links the OAuth identity to the seeded row and issues a session. "Forgot
+# password?" is NOT a valid first-login path here: auth.py:forgot_password
+# skips users with password_hash IS NULL by design.
+- name: Seed admin users
   community.postgresql.postgresql_query:
     db: "{{ pulse_db_name }}"
     login_user: "{{ pulse_db_owner }}"
@@ -100,7 +100,8 @@
       values (%s, true, now())
       on conflict (email) do nothing
     positional_args:
-      - "{{ pulse_initial_admin_email }}"
+      - "{{ item }}"
+  loop: "{{ pulse_admin_emails }}"
   changed_when: false  # idempotent insert; reporting "changed" every run is noisy
 
 # ── 5. Systemd unit ───────────────────────────────────────────────────────

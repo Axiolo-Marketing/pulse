@@ -105,13 +105,14 @@ ansible-playbook deploy.yml --ask-vault-pass
 
 ## After the first successful deploy
 
-1. The initial admin user (`pulse_initial_admin_email` from `group_vars/all.yml`)
-   has been seeded as `is_admin = true` with no password set. Visit
-   `https://<domain>/admin/`, click **Forgot password?**, enter the admin
-   email, then click the link in the reset email. Or use **Continue with
-   Google / Microsoft** if the admin email is on a tenant that matches
-   one of the OAuth providers — the backend will link the OAuth identity
-   to the pre-seeded user.
+1. Every email in `pulse_admin_emails` (from `group_vars/all.yml`) has been
+   seeded into `public.users` with `is_admin = true` and no password set.
+   Each operator visits `https://<domain>/admin/` and clicks **Continue
+   with Google / Microsoft**, signing in with their seeded address — the
+   OAuth callback links their identity to the pre-seeded user. "Forgot
+   password?" is NOT a valid first-login path: the reset flow skips users
+   whose `password_hash IS NULL`. Add a new admin by appending to
+   `pulse_admin_emails` and re-running the playbook.
 
 2. Verify the four health checks:
    - `https://<domain>/` returns the Pulse landing page.

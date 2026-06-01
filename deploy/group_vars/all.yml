@@ -65,7 +65,14 @@ pulse_smtp_port: 587
 pulse_smtp_from: "noreply@{{ pulse_domain }}"
 
 # ── App config ────────────────────────────────────────────────────────────
-pulse_initial_admin_email: gabriel@axiolo.com    # seeded as is_admin=true on first deploy
+# Admins. Each email here gets seeded into public.users with is_admin=true on
+# every deploy (ON CONFLICT DO NOTHING — adding a new email here grants admin
+# to a brand-new account, but doesn't downgrade or wipe an existing user).
+# Each operator then signs in at /admin/ via Google/Microsoft using one of
+# these addresses; the OAuth callback links their identity to the seeded row.
+pulse_admin_emails:
+  - gabriel@axiolo.com
+  - tom@axiolo.com
 pulse_max_upload_bytes: 26214400             # 25 MB
 pulse_session_max_age_seconds: 2592000       # 30 days
 
