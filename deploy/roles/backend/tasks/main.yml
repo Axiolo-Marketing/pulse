@@ -10,6 +10,9 @@
 #   7. Drop the systemd unit, daemon-reload, enable + restart.
 
 # ── 1. Source sync ────────────────────────────────────────────────────────
+# NOTE: --chown is rsync 3.1+ and is not supported by BSD rsync on macOS
+# (openrsync 2.6.9-compatible). synchronize runs rsync on the controller, so
+# we set ownership remotely below instead of via rsync_opts.
 - name: Rsync api/ source to {{ pulse_api_dir }}
   ansible.posix.synchronize:
     src: "{{ playbook_dir }}/../api/"
@@ -23,7 +26,13 @@
       - "--exclude=.coverage"
       - "--exclude=htmlcov"
       - "--exclude=db-init"          # dev-only init scripts
-      - "--chown={{ pulse_user }}:{{ pulse_group }}"
+
+- name: Ensure {{ pulse_api_dir }} is owned by {{ pulse_user }}:{{ pulse_group }}
+  ansible.builtin.file:
+    path: "{{ pulse_api_dir }}"
+    owner: "{{ pulse_user }}"
+    group: "{{ pulse_group }}"
+    recurse: true
 
 - name: Ensure venv exists at {{ pulse_venv_dir }}
   ansible.builtin.command: "{{ pulse_python }} -m venv {{ pulse_venv_dir }}"

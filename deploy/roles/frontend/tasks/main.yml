@@ -11,11 +11,21 @@
   failed_when: not dist_check.stat.exists or not dist_check.stat.isdir
   changed_when: false
 
+# NOTE: --chown is rsync 3.1+ and is not supported by BSD rsync on macOS
+# (openrsync 2.6.9-compatible). synchronize runs rsync on the controller, so
+# we set ownership remotely below instead of via rsync_opts. --chmod is
+# rsync 2.6.7+ and works on the BSD rsync.
 - name: Rsync dist/ → {{ pulse_web_root }}
   ansible.posix.synchronize:
     src: "{{ playbook_dir }}/{{ pulse_local_dist }}"
     dest: "{{ pulse_web_root }}/"
     delete: true
     rsync_opts:
-      - "--chown=www-data:www-data"
       - "--chmod=D755,F644"
+
+- name: Ensure {{ pulse_web_root }} is owned by www-data:www-data
+  ansible.builtin.file:
+    path: "{{ pulse_web_root }}"
+    owner: www-data
+    group: www-data
+    recurse: true
