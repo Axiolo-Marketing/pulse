@@ -573,6 +573,115 @@ function openNewEngagementModal(container: HTMLElement): void {
   });
 }
 
+// ── edit engagement modal ───────────────────────────────────────────────
+
+function renderDetailHeader(client: Client): string {
+  const subtitle = [client.org_name, client.engagement_name]
+    .filter((s) => s && s.trim().length > 0)
+    .map((s) => escape(s as string))
+    .join(" · ");
+  return `
+    <div>
+      <h2>${escape(client.name)}</h2>
+      ${subtitle ? `<div class="org">${subtitle}</div>` : ""}
+    </div>
+    <div class="detail-actions">
+      <button class="btn-secondary-sm" type="button" id="edit-engagement">Edit details</button>
+      <button class="btn-secondary-sm" type="button" id="download-md">Download as Markdown</button>
+      <button class="btn-secondary-sm" type="button" id="copy-all">Copy all as Markdown</button>
+      <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
+    </div>
+  `;
+}
+
+function openEditEngagementModal(
+  client: Client & { token: string },
+  onSaved: (updated: { name: string; org_name: string | null; engagement_name: string | null }) => void,
+): void {
+  const modalEl = document.createElement("div");
+  modalEl.className = "modal";
+  modalEl.innerHTML = `
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel new-eng-panel">
+      <header class="modal-header">
+        <span class="modal-title">Edit engagement</span>
+        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <form class="new-eng-form" id="edit-eng-form">
+        <label class="edit-field">
+          <span class="edit-label">Client name (required)</span>
+          <input class="input" id="ee-name" type="text" autofocus required value="${escape(client.name)}" />
+        </label>
+        <label class="edit-field">
+          <span class="edit-label">Organization (optional)</span>
+          <input class="input" id="ee-org" type="text" value="${escape(client.org_name ?? "")}" />
+        </label>
+        <label class="edit-field">
+          <span class="edit-label">Engagement name (optional)</span>
+          <input class="input" id="ee-eng" type="text" value="${escape(client.engagement_name ?? "")}" />
+        </label>
+        <div class="edit-actions">
+          <button class="btn-primary-sm" type="submit">Save changes</button>
+          <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+
+  const close = (): void => {
+    modalEl.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+
+  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
+    el.addEventListener("click", close);
+  }
+
+  modalEl.querySelector<HTMLFormElement>("#edit-eng-form")!.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = (modalEl.querySelector<HTMLInputElement>("#ee-name")?.value ?? "").trim();
+    const org = (modalEl.querySelector<HTMLInputElement>("#ee-org")?.value ?? "").trim();
+    const eng = (modalEl.querySelector<HTMLInputElement>("#ee-eng")?.value ?? "").trim();
+    if (!name) {
+      modalEl.querySelector<HTMLInputElement>("#ee-name")?.focus();
+      return;
+    }
+
+    const submitBtn = modalEl.querySelector<HTMLButtonElement>("button[type='submit']");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Saving...";
+    }
+
+    try {
+      const updated = await adminApi.updateClient(client.id, {
+        name,
+        org_name: org || null,
+        engagement_name: eng || null,
+      });
+      onSaved({
+        name: updated.name,
+        org_name: updated.org_name,
+        engagement_name: updated.engagement_name,
+      });
+      close();
+      toast("Engagement updated");
+    } catch (err) {
+      console.error("update engagement:", err);
+      toast("Could not save changes");
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Save changes";
+      }
+    }
+  });
+}
+
 async function rotateToken(container: HTMLElement, clientId: string): Promise<void> {
   try {
     const updated = await adminApi.rotateToken(clientId);
@@ -619,17 +728,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
 
   container.innerHTML = `
     <button class="back-link" type="button" id="back">← All engagements</button>
-    <section class="detail-header">
-      <div>
-        <h2>${escape(client.name)}</h2>
-        <div class="org">${escape(client.org_name ?? "")} · ${escape(client.engagement_name ?? "")}</div>
-      </div>
-      <div class="detail-actions">
-        <button class="btn-secondary-sm" type="button" id="download-md">Download as Markdown</button>
-        <button class="btn-secondary-sm" type="button" id="copy-all">Copy all as Markdown</button>
-        <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
-      </div>
-    </section>
+    <section class="detail-header" id="detail-header">${renderDetailHeader(client)}</section>
     <section id="brief-slot">${renderBriefView(client)}</section>
     <div id="cards-list">${cardsHtml}</div>
     <div id="add-card-slot">
@@ -641,39 +740,55 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     window.location.hash = "";
   });
 
-  container.querySelector<HTMLButtonElement>("#copy-link")?.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(`${PROD_URL}?t=${client.token}`);
-    toast("Link copied to clipboard");
-  });
+  const headerEl = container.querySelector<HTMLElement>("#detail-header")!;
 
-  container.querySelector<HTMLButtonElement>("#copy-all")?.addEventListener("click", async (e) => {
-    const btn = e.currentTarget as HTMLButtonElement;
-    btn.disabled = true;
-    try {
-      const md = buildEngagementMarkdown(data, statusOverrides);
-      await navigator.clipboard.writeText(md);
-      flashCopied(btn, "Copied!");
-      toast("All cards copied as Markdown");
-    } catch (err) {
-      console.error("copy all:", err);
-      toast("Could not copy");
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  const bindHeaderActions = (): void => {
+    headerEl.querySelector<HTMLButtonElement>("#copy-link")?.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(`${PROD_URL}?t=${client.token}`);
+      toast("Link copied to clipboard");
+    });
 
-  container.querySelector<HTMLButtonElement>("#download-md")?.addEventListener("click", (e) => {
-    const btn = e.currentTarget as HTMLButtonElement;
-    try {
-      const md = buildEngagementMarkdown(data, statusOverrides);
-      triggerDownload(md, downloadFilename(client));
-      flashCopied(btn, "Downloaded");
-      toast(`Saved ${downloadFilename(client)}`);
-    } catch (err) {
-      console.error("download:", err);
-      toast("Could not download");
-    }
-  });
+    headerEl.querySelector<HTMLButtonElement>("#copy-all")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      try {
+        const md = buildEngagementMarkdown(data, statusOverrides);
+        await navigator.clipboard.writeText(md);
+        flashCopied(btn, "Copied!");
+        toast("All cards copied as Markdown");
+      } catch (err) {
+        console.error("copy all:", err);
+        toast("Could not copy");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    headerEl.querySelector<HTMLButtonElement>("#download-md")?.addEventListener("click", (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      try {
+        const md = buildEngagementMarkdown(data, statusOverrides);
+        triggerDownload(md, downloadFilename(client));
+        flashCopied(btn, "Downloaded");
+        toast(`Saved ${downloadFilename(client)}`);
+      } catch (err) {
+        console.error("download:", err);
+        toast("Could not download");
+      }
+    });
+
+    headerEl.querySelector<HTMLButtonElement>("#edit-engagement")?.addEventListener("click", () => {
+      openEditEngagementModal(client, (updated) => {
+        client.name = updated.name;
+        client.org_name = updated.org_name;
+        client.engagement_name = updated.engagement_name;
+        headerEl.innerHTML = renderDetailHeader(client);
+        bindHeaderActions();
+      });
+    });
+  };
+
+  bindHeaderActions();
 
   // ── Brief ────────────────────────────────────────────────────────────
   const briefSlot = container.querySelector<HTMLElement>("#brief-slot")!;
