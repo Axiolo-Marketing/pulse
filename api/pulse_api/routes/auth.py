@@ -5,6 +5,7 @@ Email verification + forgot/reset password are deferred — for now, signup
 creates an unverified user and login refuses to issue a session until
 `email_verified_at` is set.
 """
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -12,6 +13,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api.auth import api_keys as api_keys_lib
 from pulse_api.auth.email_messages import password_reset_email, verification_email
 from pulse_api.auth.middleware import get_current_user
 from pulse_api.auth.password import hash_password, verify_password
@@ -19,8 +21,9 @@ from pulse_api.auth.session import InvalidSessionError, encode_session
 from pulse_api.auth.tokens import consume_token, issue_token
 from pulse_api.config import settings
 from pulse_api.db import get_admin_session
-from pulse_api.models import User
+from pulse_api.models import ApiKey, User
 from pulse_api.observability import limiter, log
+from pulse_api.repos import api_keys as api_keys_repo
 from pulse_api.repos import users as users_repo
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -82,6 +85,25 @@ class ChangePasswordRequest(BaseModel):
 class OAuthIdentityResponse(BaseModel):
     provider: str
     linked_at: datetime
+
+
+class CreateApiKeyRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=100)
+
+
+class ApiKeySummary(BaseModel):
+    id: str
+    label: str
+    prefix: str
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class ApiKeyWithSecret(ApiKeySummary):
+    """Includes the raw key — only returned by POST /api/auth/me/api-keys
+    once, at creation. The list endpoint never returns this shape."""
+
+    key: str
 
 
 def _set_session_cookie(response: Response, user_id: str) -> None:
@@ -271,3 +293,92 @@ async def list_identities(
         OAuthIdentityResponse(provider=i.provider, linked_at=i.created_at)
         for i in identities
     ]
+
+
+# ── API keys ──────────────────────────────────────────────────────────────
+
+
+def _summary(row: ApiKey) -> ApiKeySummary:
+    return ApiKeySummary(
+        id=str(row.id),
+        label=row.label,
+        prefix=row.prefix,
+        last_used_at=row.last_used_at,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/me/api-keys", response_model=list[ApiKeySummary])
+async def list_api_keys(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[ApiKeySummary]:
+    """Active keys for the current user. Never includes the raw key or
+    `key_hash` — only what the UI needs to render the list."""
+    keys = await api_keys_repo.list_for_user(session, user.id)
+    return [_summary(k) for k in keys]
+
+
+@router.post("/me/api-keys", status_code=201, response_model=ApiKeyWithSecret)
+@limiter.limit(settings.rate_limit_token_validation)
+async def create_api_key(
+    request: Request,
+    req: CreateApiKeyRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> ApiKeyWithSecret:
+    """Mint a fresh API key for the current user.
+
+    The raw key is returned exactly once in this response and never again
+    — the UI is expected to surface it inline and warn the operator. On
+    disk we keep only `prefix` + `key_hash`; the raw value isn't
+    recoverable from the database.
+    """
+    raw = api_keys_lib.generate_key()
+    prefix = api_keys_lib.prefix_of(raw)
+    key_hash = api_keys_lib.hash_key(raw)
+
+    row = await api_keys_repo.create(
+        session,
+        user_id=user.id,
+        prefix=prefix,
+        key_hash=key_hash,
+        label=req.label.strip(),
+    )
+    await session.commit()
+    await session.refresh(row)
+
+    return ApiKeyWithSecret(
+        id=str(row.id),
+        label=row.label,
+        prefix=row.prefix,
+        last_used_at=row.last_used_at,
+        created_at=row.created_at,
+        key=raw,
+    )
+
+
+@router.delete("/me/api-keys/{key_id}", status_code=204)
+async def revoke_api_key(
+    key_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> None:
+    """Hard-revoke. The key stops authenticating immediately — the partial
+    index `api_keys_prefix_idx` excludes revoked rows, so subsequent
+    bearer lookups won't even see it.
+
+    Cross-user attempts return 404 (not 403) so the existence of someone
+    else's key id can't be probed.
+    """
+    try:
+        as_uuid = uuid.UUID(key_id)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=404, detail="api key not found") from exc
+
+    ok = await api_keys_repo.revoke(
+        session, api_key_id=as_uuid, user_id=user.id
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="api key not found")
+    await session.commit()

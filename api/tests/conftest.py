@@ -143,7 +143,9 @@ async def become_anon(conn: AsyncConnection, *, token: str | None = None) -> Non
 
 
 @pytest.fixture
-async def client(db_conn: AsyncConnection) -> AsyncIterator[AsyncClient]:
+async def client(
+    db_conn: AsyncConnection, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AsyncClient]:
     # Reset the global rate limiter at the start of each test so a fresh
     # budget is available. slowapi keeps in-process state, which would
     # otherwise carry across tests in the same session.
@@ -182,6 +184,27 @@ async def client(db_conn: AsyncConnection) -> AsyncIterator[AsyncClient]:
         factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
         async with factory() as session:
             yield session
+
+    # `_touch_last_used` in production opens a brand-new admin-engine
+    # session so the request's injected session isn't committed mid-request.
+    # In tests, that would (a) write to the dev `pulse` DB (admin_engine is
+    # built at module import from the non-test URL) and (b) be invisible
+    # to the test's rollback transaction. Redirect it through db_conn so
+    # the write rolls back at teardown and is visible to the test's `db`
+    # session.
+    from pulse_api.auth import middleware as _mw
+    from pulse_api.repos import api_keys as _api_keys_repo
+
+    async def _patched_touch_last_used(api_key_id) -> None:
+        await db_conn.execute(text("reset role"))
+        factory = async_sessionmaker(
+            bind=db_conn, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as touch_session:
+            await _api_keys_repo.mark_used(touch_session, api_key_id)
+            await touch_session.commit()
+
+    monkeypatch.setattr(_mw, "_touch_last_used", _patched_touch_last_used)
 
     app.dependency_overrides[get_session] = _override_session
     app.dependency_overrides[get_admin_session] = _override_session
