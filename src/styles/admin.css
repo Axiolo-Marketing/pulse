@@ -324,6 +324,51 @@
   display: block;
 }
 
+.import-error {
+  margin: -16px 0 24px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--warning-soft, #fdecec);
+  border: 1px solid var(--warning, #c0392b);
+  color: var(--warning, #c0392b);
+  font-size: 13px;
+}
+
+.import-error[hidden] {
+  display: none;
+}
+
+.import-error-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.import-error-dismiss {
+  background: transparent;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.import-error-dismiss:hover { opacity: 0.7; }
+
+.import-error-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.import-error-body {
+  margin: 0;
+}
+
 .add-card-form .edit-grid select.input {
   appearance: auto;
   background: var(--white);

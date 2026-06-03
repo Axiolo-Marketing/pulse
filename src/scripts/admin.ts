@@ -929,6 +929,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         <button class="btn-secondary-sm" type="button" id="import-markdown-trigger">Upload as Markdown</button>
         <input type="file" id="import-markdown-file" accept=".md,text/markdown,text/plain" hidden />
       </div>
+      <div class="import-error" id="import-error" hidden></div>
     </div>
   `;
 
@@ -1153,9 +1154,41 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         <button class="btn-secondary-sm" type="button" id="import-markdown-trigger">Upload as Markdown</button>
         <input type="file" id="import-markdown-file" accept=".md,text/markdown,text/plain" hidden />
       </div>
+      <div class="import-error" id="import-error" hidden></div>
     `;
-    addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", showAddCardForm);
+    addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", () => {
+      clearImportError();
+      showAddCardForm();
+    });
     wireImportMarkdownButton();
+  };
+
+  const renderImportError = (detail: string): void => {
+    const slot = addCardSlot.querySelector<HTMLElement>("#import-error");
+    if (!slot) return;
+    const lines = detail.split("\n").map((s) => s.trim()).filter(Boolean);
+    const body =
+      lines.length > 1
+        ? `<ul class="import-error-list">${lines
+            .map((l) => `<li>${escape(l)}</li>`)
+            .join("")}</ul>`
+        : `<p class="import-error-body">${escape(lines[0] ?? detail)}</p>`;
+    slot.innerHTML = `
+      <div class="import-error-head">
+        <strong>Import failed</strong>
+        <button type="button" class="import-error-dismiss" aria-label="Dismiss">×</button>
+      </div>
+      ${body}
+    `;
+    slot.hidden = false;
+    slot.querySelector<HTMLButtonElement>(".import-error-dismiss")?.addEventListener("click", clearImportError);
+  };
+
+  const clearImportError = (): void => {
+    const slot = addCardSlot.querySelector<HTMLElement>("#import-error");
+    if (!slot) return;
+    slot.innerHTML = "";
+    slot.hidden = true;
   };
 
   const wireImportMarkdownButton = (): void => {
@@ -1170,6 +1203,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       fileInput.value = "";
       if (!file) return;
 
+      clearImportError();
       const originalLabel = trigger.textContent ?? "Upload as Markdown";
       trigger.disabled = true;
       trigger.textContent = "Importing...";
@@ -1190,7 +1224,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       } catch (err) {
         const detail = err instanceof ApiError ? err.detail : "Could not import markdown";
         console.error("import markdown:", err);
-        window.alert(`Import failed:\n\n${detail}`);
+        renderImportError(detail);
       } finally {
         trigger.disabled = false;
         trigger.textContent = originalLabel;
@@ -1240,7 +1274,10 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     });
   };
 
-  addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", showAddCardForm);
+  addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", () => {
+    clearImportError();
+    showAddCardForm();
+  });
   wireImportMarkdownButton();
 }
 
