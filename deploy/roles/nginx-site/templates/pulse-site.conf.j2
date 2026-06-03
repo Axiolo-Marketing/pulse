@@ -10,7 +10,14 @@ proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_http_version 1.1;
 
-# Streaming downloads from /api/files/* and /api/admin/uploads/*/download
+# Streaming downloads from /api/files/* and /api/admin/uploads/*/download.
+# Also required for the MCP server at /api/mcp/ — streamable HTTP transport
+# can return SSE streams; nginx's default `proxy_buffering on` would block
+# them until the upstream closes the connection, which breaks any tool call
+# that streams progress. Today the MCP runs `stateless_http=True,
+# json_response=True` (single JSON response per call) so buffering would be
+# tolerable, but keeping buffering off here means nothing breaks if the
+# server switches to true streaming later.
 proxy_buffering off;
 proxy_request_buffering off;
 proxy_read_timeout 120s;

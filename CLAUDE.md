@@ -69,6 +69,32 @@ Token primitives all use `itsdangerous.URLSafeTimedSerializer` with per-purpose 
 
 OAuth state: cookie-based CSRF. The authorize endpoint generates a random state, signs it as a `oauth_state_{provider}` cookie, builds the provider URL with the same state. The callback verifies the cookie matches the URL state before doing any work.
 
+### API keys + MCP (non-browser callers)
+
+Same operator identity, different credential. API keys are per-user Bearer tokens that let scripts and the MCP server reach the admin surface without holding a browser session.
+
+- **Format**: `pulse_<32-hex>` (128 bits of entropy, `pulse_` prefix makes leaks greppable). On disk: SHA-256 of the raw key plus an indexed 8-char `prefix` column for cheap lookup. Constant-time hash compare. Argon2 is overkill — keys already have full entropy.
+- **Creation**: Settings page (`/admin/#settings`) → "API keys" section → Create. Raw key is shown **once** in the create modal; subsequent list views only show `pulse_<prefix>…`. Revoking sets `revoked_at` and stops the key immediately.
+- **Auth path**: `get_current_user` accepts cookie OR `Authorization: Bearer pulse_<key>`. Cookie wins if both are present, so existing browser flows are untouched. The same `is_admin` gate then runs — API keys grant exactly the admin access the owning user already has, nothing more.
+- **MCP endpoint**: mounted at `/api/mcp/` (trailing slash matters — FastMCP's `streamable_http_path="/"` resolves the sub-app's single route at the mount point; `/api/mcp` without the slash 307-redirects). Streamable HTTP transport (POST returns JSON or SSE depending on the call). Same `Authorization: Bearer pulse_<key>` header. Per-tool auth via `authenticate_request(ctx)`; `tools/list` is intentionally unauthenticated because tool names + descriptions are documentation, not secrets, and gating discovery breaks every standard MCP client.
+
+Client config (Claude Code / claude.ai), production:
+
+```json
+{
+  "mcpServers": {
+    "pulse": {
+      "url": "https://pulse.axiolo.com/api/mcp/",
+      "headers": { "Authorization": "Bearer pulse_<key>" }
+    }
+  }
+}
+```
+
+Local dev swaps the URL to `http://localhost:58000/api/mcp/`.
+
+Design notes for the whole API-keys + MCP feature live at `~/.claude/plans/piped-noodling-cook.md` — read it before reopening anything load-bearing here.
+
 ## Database
 
 Schema in `api/migrations/versions/0001_initial_schema.py`. All raw SQL via `op.execute()` because Alembic autogen can't represent RLS / triggers / helper functions / column-scoped grants. SQLModel classes in `api/pulse_api/models/` are the canonical type sources for future autogen migrations.
