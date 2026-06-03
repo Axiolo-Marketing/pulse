@@ -860,3 +860,61 @@
 .settings-identity-name { font-weight: 600; color: var(--ink); }
 .settings-identity-when { color: var(--muted); font-size: 12px; }
 .settings-identity.empty { color: var(--muted); font-style: italic; }
+
+/* ── Danger button + confirm modal ─────────────────────────────────────── */
+
+.btn-secondary-sm.danger {
+  color: var(--warning, #c0392b);
+  border-color: var(--warning, #c0392b);
+  background: var(--white);
+}
+.btn-secondary-sm.danger:hover {
+  background: var(--warning-soft, #fdecec);
+}
+
+.btn-danger-sm {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--warning, #c0392b);
+  color: var(--white);
+  border: 1.5px solid var(--warning, #c0392b);
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  min-height: 36px;
+}
+.btn-danger-sm:hover { filter: brightness(0.92); }
+.btn-danger-sm:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.confirm-panel {
+  max-width: 460px;
+  align-self: center;
+  height: fit-content;
+  margin: 32px;
+}
+
+.confirm-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.confirm-body-line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 20px;
+}

@@ -619,6 +619,7 @@ function renderList(container: HTMLElement, summaries: EngagementSummary[]): voi
           <button class="action-link" type="button" data-action="view">View responses</button>
           <button class="action-link" type="button" data-action="copy-link">Copy link</button>
           <button class="action-link danger" type="button" data-action="rotate">Rotate token</button>
+          <button class="action-link danger" type="button" data-action="delete">Delete</button>
         </td>
       </tr>`;
     })
@@ -675,6 +676,30 @@ function renderList(container: HTMLElement, summaries: EngagementSummary[]): voi
         );
         if (!ok) return;
         await rotateToken(container, summary.id);
+        return;
+      }
+      case "delete": {
+        const label = [summary.name, summary.engagement_name].filter(Boolean).join(" · ");
+        const totalCards = summary.total_cards;
+        const completed = summary.answered_count + summary.skipped_count;
+        const body = [
+          `Delete ${label}?`,
+          totalCards > 0
+            ? `This will permanently remove ${totalCards} card${totalCards === 1 ? "" : "s"} and ${completed} response${completed === 1 ? "" : "s"}, plus any uploaded files.`
+            : "No cards have been added to this engagement yet.",
+          "This cannot be undone.",
+        ].join("\n");
+        openConfirmModal({
+          title: "Delete engagement",
+          body,
+          confirmLabel: "Delete",
+          danger: true,
+          onConfirm: async () => {
+            await adminApi.deleteEngagement(summary.id);
+            toast("Engagement deleted");
+            await draw(container, { kind: "list" });
+          },
+        });
         return;
       }
     }
@@ -782,8 +807,77 @@ function renderDetailHeader(client: Client): string {
       <button class="btn-secondary-sm" type="button" id="download-md">Download as Markdown</button>
       <button class="btn-secondary-sm" type="button" id="copy-all">Copy all as Markdown</button>
       <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
+      <button class="btn-secondary-sm danger" type="button" id="delete-engagement">Delete</button>
     </div>
   `;
+}
+
+interface ConfirmModalOptions {
+  title: string;
+  body: string; // plain text, multi-line allowed
+  confirmLabel: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void | Promise<void>;
+}
+
+function openConfirmModal(opts: ConfirmModalOptions): void {
+  // Reentrancy guard: if the user clicks the trigger twice (or a click
+  // handler fires twice), don't stack confirms — the second open would
+  // have stale state and create an orphan when the first closes.
+  document.body.querySelectorAll<HTMLElement>(".modal.confirm-modal").forEach((el) => el.remove());
+
+  const modalEl = document.createElement("div");
+  modalEl.className = "modal confirm-modal";
+  const bodyHtml = opts.body
+    .split("\n")
+    .map((line) => `<p class="confirm-body-line">${escape(line)}</p>`)
+    .join("");
+  modalEl.innerHTML = `
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel confirm-panel">
+      <header class="modal-header">
+        <span class="modal-title">${escape(opts.title)}</span>
+        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="confirm-body">${bodyHtml}</div>
+      <div class="confirm-actions">
+        <button class="btn-ghost-sm" type="button" data-close>${escape(opts.cancelLabel ?? "Cancel")}</button>
+        <button class="${opts.danger ? "btn-danger-sm" : "btn-primary-sm"}" type="button" data-confirm>${escape(opts.confirmLabel)}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+
+  const close = (): void => {
+    modalEl.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+
+  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
+    el.addEventListener("click", close);
+  }
+
+  const confirmBtn = modalEl.querySelector<HTMLButtonElement>("[data-confirm]")!;
+  confirmBtn.addEventListener("click", async () => {
+    confirmBtn.disabled = true;
+    const original = confirmBtn.textContent;
+    confirmBtn.textContent = "Working...";
+    try {
+      await opts.onConfirm();
+      close();
+    } catch (err) {
+      console.error("confirm action:", err);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = original;
+    }
+  });
+
+  confirmBtn.focus();
 }
 
 function openEditEngagementModal(
@@ -981,6 +1075,38 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         client.engagement_name = updated.engagement_name;
         headerEl.innerHTML = renderDetailHeader(client);
         bindHeaderActions();
+      });
+    });
+
+    headerEl.querySelector<HTMLButtonElement>("#delete-engagement")?.addEventListener("click", () => {
+      const label = [client.name, client.engagement_name].filter(Boolean).join(" · ");
+      const totalCards = cards.length;
+      const completed = [...responses.values()].filter(
+        (r) => r.state === "answered" || r.state === "skipped",
+      ).length;
+      const uploadCount = [...uploads.values()].reduce((n, list) => n + list.length, 0);
+      const lines = [`Delete ${label}?`];
+      if (totalCards > 0) {
+        const parts = [
+          `${totalCards} card${totalCards === 1 ? "" : "s"}`,
+          `${completed} response${completed === 1 ? "" : "s"}`,
+        ];
+        if (uploadCount > 0) {
+          parts.push(`${uploadCount} uploaded file${uploadCount === 1 ? "" : "s"}`);
+        }
+        lines.push(`This will permanently remove ${parts.join(", ")}.`);
+      }
+      lines.push("This cannot be undone.");
+      openConfirmModal({
+        title: "Delete engagement",
+        body: lines.join("\n"),
+        confirmLabel: "Delete",
+        danger: true,
+        onConfirm: async () => {
+          await adminApi.deleteEngagement(client.id);
+          toast("Engagement deleted");
+          window.location.hash = "";
+        },
       });
     });
   };

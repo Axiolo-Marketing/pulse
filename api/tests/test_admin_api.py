@@ -24,6 +24,7 @@ ADMIN_ENDPOINTS = [
     ("GET",    "/api/admin/clients/00000000-0000-0000-0000-000000000000", None),
     ("POST",   "/api/admin/clients",                                      {"name": "x"}),
     ("PATCH",  "/api/admin/clients/00000000-0000-0000-0000-000000000000", {"name": "y"}),
+    ("DELETE", "/api/admin/clients/00000000-0000-0000-0000-000000000000", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/rotate-token", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards",
         {"category": "C", "title": "T", "context": "X", "question": "Q", "response_type": "short-text"}),
@@ -264,6 +265,110 @@ async def test_rotate_token_invalidates_old_token(
 async def test_rotate_token_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
     r = await admin_authed.post(f"/api/admin/clients/{uuid.uuid4()}/rotate-token")
     assert r.status_code == 404
+
+
+# ── DELETE /api/admin/clients/{id} ────────────────────────────────────────
+
+
+async def test_delete_engagement_removes_client_and_cascades(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    db: AsyncSession,
+) -> None:
+    # Seed a response too so we can prove cascade.
+    await db.execute(
+        text(
+            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
+        ),
+        {"k": seed_cards[0]["id"], "c": seed_client["id"]},
+    )
+
+    r = await admin_authed.delete(f"/api/admin/clients/{seed_client['id']}")
+    assert r.status_code == 204
+
+    # Client gone
+    row = (
+        await db.execute(
+            text("select count(*) from public.clients where id = cast(:c as uuid)"),
+            {"c": seed_client["id"]},
+        )
+    ).scalar_one()
+    assert row == 0
+
+    # Cards + responses cascaded
+    cards_remaining = (
+        await db.execute(
+            text("select count(*) from public.cards where client_id = cast(:c as uuid)"),
+            {"c": seed_client["id"]},
+        )
+    ).scalar_one()
+    responses_remaining = (
+        await db.execute(
+            text("select count(*) from public.responses where client_id = cast(:c as uuid)"),
+            {"c": seed_client["id"]},
+        )
+    ).scalar_one()
+    assert cards_remaining == 0
+    assert responses_remaining == 0
+
+
+async def test_delete_engagement_removes_upload_files_from_disk(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    db: AsyncSession,
+    tmp_uploads_dir,
+) -> None:
+    """Files referenced by the cascaded uploads rows must be unlinked
+    from disk; the cascade alone doesn't touch the filesystem."""
+    card_id = seed_cards[0]["id"]
+    client_id = seed_client["id"]
+    rel_path = f"{client_id}/{card_id}/some-id-test.txt"
+
+    full_path = tmp_uploads_dir / rel_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(b"hello")
+    assert full_path.exists()
+
+    await db.execute(
+        text(
+            "insert into public.uploads "
+            "(card_id, client_id, file_name, file_size_bytes, storage_path) "
+            "values (cast(:k as uuid), cast(:c as uuid), :fn, 5, :sp)"
+        ),
+        {"k": card_id, "c": client_id, "fn": "some.txt", "sp": rel_path},
+    )
+
+    r = await admin_authed.delete(f"/api/admin/clients/{client_id}")
+    assert r.status_code == 204
+    assert not full_path.exists()
+
+
+async def test_delete_engagement_unknown_id_returns_404(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.delete(f"/api/admin/clients/{uuid.uuid4()}")
+    assert r.status_code == 404
+
+
+async def test_delete_engagement_only_affects_targeted_client(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    other_seeded_client: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    r = await admin_authed.delete(f"/api/admin/clients/{seed_client['id']}")
+    assert r.status_code == 204
+
+    remaining = (
+        await db.execute(
+            text("select count(*) from public.clients where id = cast(:c as uuid)"),
+            {"c": other_seeded_client["id"]},
+        )
+    ).scalar_one()
+    assert remaining == 1
 
 
 # ── POST /api/admin/clients/{id}/cards ────────────────────────────────────

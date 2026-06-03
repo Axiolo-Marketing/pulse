@@ -122,6 +122,40 @@ async def update_engagement(
     return dict(row) if row else None
 
 
+async def list_upload_paths_for_client(
+    session: AsyncSession, client_id: str
+) -> list[str]:
+    """Fetch storage_path values BEFORE deleting the engagement so the
+    route layer knows which on-disk files to remove after the FK cascade
+    wipes the uploads rows."""
+    try:
+        result = await session.execute(
+            text(
+                "select storage_path from public.uploads "
+                "where client_id = cast(:cid as uuid)"
+            ),
+            {"cid": client_id},
+        )
+    except Exception:
+        return []
+    return [row[0] for row in result.all()]
+
+
+async def delete_engagement(session: AsyncSession, client_id: str) -> bool:
+    """Delete an engagement and let FK cascades wipe its cards, responses,
+    and uploads. Returns True if a row was deleted. The caller is
+    responsible for removing the on-disk upload files — fetch the paths
+    via `list_upload_paths_for_client` *before* this call."""
+    try:
+        result = await session.execute(
+            text("delete from public.clients where id = cast(:cid as uuid)"),
+            {"cid": client_id},
+        )
+    except Exception:
+        return False
+    return result.rowcount > 0
+
+
 async def rotate_token(session: AsyncSession, client_id: str) -> dict | None:
     """Generate a fresh 16-hex token. The old URL stops working immediately."""
     new_token = secrets.token_hex(8)

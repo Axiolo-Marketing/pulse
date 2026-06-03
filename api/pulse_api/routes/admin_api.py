@@ -143,6 +143,28 @@ async def update_engagement(
     return row
 
 
+@router.delete("/clients/{client_id}", status_code=204)
+async def delete_engagement(
+    client_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> None:
+    """Permanent delete. FK cascades wipe cards/responses/uploads in the
+    same transaction; on-disk upload files are removed best-effort after
+    the commit. The token's URL stops working immediately."""
+    upload_paths = await clients_repo.list_upload_paths_for_client(session, client_id)
+    deleted = await clients_repo.delete_engagement(session, client_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    await session.commit()
+
+    # Best-effort cleanup. A failure here leaves an orphaned file under
+    # the upload dir, but the DB is the source of truth — no one can
+    # reach the file via the API anymore.
+    for path in upload_paths:
+        storage.delete_upload(path)
+
+
 @router.post("/clients/{client_id}/rotate-token")
 async def rotate_token(
     client_id: str,
