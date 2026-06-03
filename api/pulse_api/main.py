@@ -14,6 +14,7 @@ from pulse_api.observability import (
     rate_limit_exceeded_handler,
 )
 from pulse_api.routes import admin_api as admin_api_routes
+from pulse_api.routes import attachments as attachments_routes
 from pulse_api.routes import auth as auth_routes
 from pulse_api.routes import client_api as client_api_routes
 from pulse_api.routes import oauth as oauth_routes
@@ -46,6 +47,8 @@ app.include_router(oauth_routes.router)
 app.include_router(client_api_routes.router)
 app.include_router(uploads_routes.router)
 app.include_router(admin_api_routes.router)
+app.include_router(attachments_routes.admin_router)
+app.include_router(attachments_routes.public_router)
 
 
 @app.get("/healthz")

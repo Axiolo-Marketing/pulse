@@ -1,4 +1,25 @@
-import type { Card, ClientResponse } from "./api";
+import { API_BASE, type Card, type ClientResponse } from "./api";
+
+// Extensions that should render via <img>. Everything else (html, htm,
+// pdf) falls back to the sandboxed iframe path that already exists.
+const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"]);
+
+function attachmentExt(path: string): string {
+  const dot = path.lastIndexOf(".");
+  return dot >= 0 ? path.slice(dot).toLowerCase() : "";
+}
+
+function attachmentSrc(path: string, baseUrl: string): string {
+  // Uploaded attachments live behind the API. The backend route is
+  // /api/attachments/<filename>; the stored attachment_path is
+  // `attachments/<uuid>.<ext>`. Static-deliverable paths
+  // (`deliverables/...`) keep the existing same-origin behavior.
+  if (path.startsWith("attachments/")) {
+    const filename = path.slice("attachments/".length);
+    return `${API_BASE}/api/attachments/${filename}`;
+  }
+  return baseUrl.endsWith("/") ? baseUrl + path : `${baseUrl}/${path}`;
+}
 
 // Tiny escape helper so we can build cards via template strings without
 // pulling in a framework. Card text comes from our own database, but we
@@ -615,9 +636,22 @@ function renderEditBody(card: Card): string {
 
 function renderModal(card: Card, baseUrl: string): string {
   const path = card.attachment_path ?? "";
-  // baseUrl from Astro ends with a slash. attachment_path is a relative
-  // path like 'deliverables/glc-org-chart.html'. Compose as one URL.
-  const src = baseUrl.endsWith("/") ? baseUrl + path : `${baseUrl}/${path}`;
+  const src = attachmentSrc(path, baseUrl);
+  const isImage = IMAGE_EXTS.has(attachmentExt(path));
+  const viewer = isImage
+    ? `<img
+         class="modal-image"
+         src="${escapeAttr(src)}"
+         alt="${escapeAttr(card.title)} reference"
+         loading="lazy"
+       />`
+    : `<iframe
+         class="modal-iframe"
+         src="${escapeAttr(src)}"
+         sandbox="allow-scripts"
+         title="${escapeAttr(card.title)} reference"
+         loading="lazy"
+       ></iframe>`;
   return `
     <div class="modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(card.title)}">
       <div class="modal-backdrop" data-action="close-attachment"></div>
@@ -626,13 +660,7 @@ function renderModal(card: Card, baseUrl: string): string {
           <span class="modal-title">${escape(card.title)} reference</span>
           <button class="modal-close" type="button" data-action="close-attachment" aria-label="Close">×</button>
         </header>
-        <iframe
-          class="modal-iframe"
-          src="${escapeAttr(src)}"
-          sandbox="allow-scripts"
-          title="${escapeAttr(card.title)} reference"
-          loading="lazy"
-        ></iframe>
+        ${viewer}
       </div>
     </div>
   `;

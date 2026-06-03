@@ -1194,6 +1194,8 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       swapCardHtml(articleEl, renderEditCardForm(card));
     });
 
+    wireAttachmentUpload(articleEl, ".edit-attachment");
+
     articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-cancel']")?.addEventListener("click", () => {
       swapCardHtml(
         articleEl,
@@ -1370,6 +1372,8 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     typeSelect.addEventListener("change", showOrHideOptions);
     showOrHideOptions();
 
+    wireAttachmentUpload(formEl, ".add-attachment");
+
     formEl.querySelector<HTMLButtonElement>("[data-action='add-card-cancel']")?.addEventListener("click", showAddCardTrigger);
     formEl.querySelector<HTMLButtonElement>("[data-action='add-card-save']")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget as HTMLButtonElement;
@@ -1467,6 +1471,53 @@ function readAddForm(formEl: HTMLElement): AddCardPayload | null {
   };
 }
 
+function wireAttachmentUpload(scope: HTMLElement, inputSelector: string): void {
+  const input = scope.querySelector<HTMLInputElement>(inputSelector);
+  if (!input) return;
+  const field = input.closest<HTMLElement>(".attachment-field");
+  if (!field) return;
+  const trigger = field.querySelector<HTMLButtonElement>(".attachment-upload-trigger");
+  const fileInput = field.querySelector<HTMLInputElement>(".attachment-file-input");
+  const errorEl = field.querySelector<HTMLElement>(".attachment-error");
+  if (!trigger || !fileInput || !errorEl) return;
+
+  const setError = (msg: string | null): void => {
+    if (!msg) {
+      errorEl.textContent = "";
+      errorEl.hidden = true;
+      return;
+    }
+    errorEl.textContent = msg;
+    errorEl.hidden = false;
+  };
+
+  trigger.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // re-pick same file fires change again
+    if (!file) return;
+
+    setError(null);
+    const originalLabel = trigger.textContent ?? "Upload file";
+    trigger.disabled = true;
+    trigger.textContent = "Uploading...";
+    try {
+      const { path } = await adminApi.uploadAttachment(file);
+      input.value = path;
+      // Pulse the input so the operator notices the path was set
+      input.classList.add("attachment-pulse");
+      setTimeout(() => input.classList.remove("attachment-pulse"), 800);
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Upload failed";
+      console.error("attachment upload:", err);
+      setError(detail);
+    } finally {
+      trigger.disabled = false;
+      trigger.textContent = originalLabel;
+    }
+  });
+}
+
 function renderAddCardForm(): string {
   return `
     <article class="response-card is-editing add-card-form">
@@ -1522,10 +1573,16 @@ function renderAddCardForm(): string {
           <textarea class="textarea add-default" rows="2"></textarea>
         </label>
 
-        <label class="edit-field">
-          <span class="edit-label">Active reference path (optional)</span>
-          <input class="input add-attachment" type="text" placeholder="deliverables/example.html" />
-        </label>
+        <div class="edit-field attachment-field">
+          <span class="edit-label">Active reference (optional)</span>
+          <div class="attachment-input-row">
+            <input class="input add-attachment" type="text" placeholder="deliverables/example.html or upload below" />
+            <button class="btn-secondary-sm attachment-upload-trigger" type="button" data-action="upload-attachment">Upload file</button>
+            <input type="file" class="attachment-file-input" hidden accept=".html,.htm,.pdf,.jpg,.jpeg,.png,.gif,.webp,.svg" />
+          </div>
+          <p class="attachment-help">HTML, PDF, JPEG, PNG, GIF, WEBP, or SVG.</p>
+          <div class="attachment-error" hidden></div>
+        </div>
 
         <label class="edit-toggle">
           <input class="add-skip" type="checkbox" checked />
@@ -1799,10 +1856,16 @@ function renderEditCardForm(card: Card): string {
             : ""
         }
 
-        <label class="edit-field">
-          <span class="edit-label">Active reference path (optional)</span>
-          <input class="input edit-attachment" type="text" placeholder="deliverables/example.html" value="${escape(card.attachment_path ?? "")}" />
-        </label>
+        <div class="edit-field attachment-field">
+          <span class="edit-label">Active reference (optional)</span>
+          <div class="attachment-input-row">
+            <input class="input edit-attachment" type="text" placeholder="deliverables/example.html or upload below" value="${escape(card.attachment_path ?? "")}" />
+            <button class="btn-secondary-sm attachment-upload-trigger" type="button" data-action="upload-attachment">Upload file</button>
+            <input type="file" class="attachment-file-input" hidden accept=".html,.htm,.pdf,.jpg,.jpeg,.png,.gif,.webp,.svg" />
+          </div>
+          <p class="attachment-help">HTML, PDF, JPEG, PNG, GIF, WEBP, or SVG.</p>
+          <div class="attachment-error" hidden></div>
+        </div>
 
         <label class="edit-toggle">
           <input class="edit-skip" type="checkbox" ${card.skip_allowed ? "checked" : ""} />

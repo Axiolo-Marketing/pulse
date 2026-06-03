@@ -26,6 +26,23 @@ from pulse_api.config import settings
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 _MAX_FILENAME_LENGTH = 200
 
+# Active-reference attachments (operator-uploaded HTML/PDF/images) live
+# under this prefix inside settings.upload_dir. The filename is
+# `<uuid>.<ext>` — the UUID gates access since this endpoint is public.
+ATTACHMENTS_PREFIX = "attachments"
+
+ATTACHMENT_MIME_BY_EXT: dict[str, str] = {
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+}
+
 
 class StoragePathError(ValueError):
     """Raised when a path attempts to escape the upload directory."""
@@ -50,6 +67,40 @@ def _is_uuid(s: str) -> bool:
         return True
     except (ValueError, AttributeError):
         return False
+
+
+def build_attachment_path(filename: str) -> tuple[str, str]:
+    """Allocate a relative storage path for an operator-uploaded attachment.
+
+    Returns (relative_path, mime_type). The path is
+    `attachments/<uuid>.<ext>` — the UUID is the access gate for the
+    public GET endpoint, and the extension drives the served MIME.
+    Raises StoragePathError if the extension isn't in the allow-list.
+    """
+    ext = Path(filename or "").suffix.lower()
+    if ext not in ATTACHMENT_MIME_BY_EXT:
+        raise StoragePathError(
+            f"unsupported extension {ext!r}; allowed: "
+            f"{', '.join(sorted(ATTACHMENT_MIME_BY_EXT))}"
+        )
+    return f"{ATTACHMENTS_PREFIX}/{uuid.uuid4()}{ext}", ATTACHMENT_MIME_BY_EXT[ext]
+
+
+def resolve_attachment_filename(filename: str) -> Path:
+    """Resolve a public attachment GET filename to its on-disk path.
+
+    Rejects anything that doesn't match the `<uuid>.<ext>` shape we mint
+    in `build_attachment_path` — this is the gate that stops the public
+    endpoint from being abused to read arbitrary files under upload_dir.
+    """
+    name = Path(filename).name  # strip any path components defensively
+    if name != filename:
+        raise StoragePathError(f"path components rejected: {filename!r}")
+    suffix = Path(name).suffix.lower()
+    stem = name[: -len(suffix)] if suffix else name
+    if suffix not in ATTACHMENT_MIME_BY_EXT or not _is_uuid(stem):
+        raise StoragePathError(f"invalid attachment filename: {filename!r}")
+    return resolve_within_upload_dir(f"{ATTACHMENTS_PREFIX}/{name}")
 
 
 def build_storage_path(*, client_id: str, card_id: str, filename: str) -> str:

@@ -11,7 +11,7 @@
 // production behind the same nginx as the frontend, this can be empty
 // and fetches become same-origin relative URLs.
 
-const API_BASE = ((import.meta.env.PUBLIC_API_BASE_URL ?? "") as string)
+export const API_BASE = ((import.meta.env.PUBLIC_API_BASE_URL ?? "") as string)
   .replace(/\/$/, "");
 
 export class ApiError extends Error {
@@ -358,6 +358,12 @@ export const adminApi = {
       method: "POST",
       body: JSON.stringify({ markdown }),
     }),
+
+  uploadAttachment: (file: File): Promise<{ path: string; mime_type: string }> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request("/api/admin/attachments", { method: "POST", body: fd });
+  },
 
   // Server streams the file under the admin's session cookie. Used in
   // <a href target="_blank"> — the browser sends the cookie automatically
