@@ -347,6 +347,15 @@ export const adminApi = {
   deleteCard: (id: string): Promise<void> =>
     request(`/api/admin/cards/${id}`, { method: "DELETE" }),
 
+  importMarkdownCards: (
+    clientId: string,
+    markdown: string,
+  ): Promise<{ created: Card[] }> =>
+    request(`/api/admin/clients/${clientId}/cards/import-markdown`, {
+      method: "POST",
+      body: JSON.stringify({ markdown }),
+    }),
+
   // Server streams the file under the admin's session cookie. Used in
   // <a href target="_blank"> — the browser sends the cookie automatically
   // for same-site requests.

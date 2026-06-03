@@ -27,6 +27,8 @@ ADMIN_ENDPOINTS = [
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/rotate-token", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards",
         {"category": "C", "title": "T", "context": "X", "question": "Q", "response_type": "short-text"}),
+    ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards/import-markdown",
+        {"markdown": "## Card 1: X\n\n**Category:** C\n**Type:** short-text\n**Skip:** optional\n\n**Context:** ctx\n\n**Question:** q?"}),
     ("PATCH",  "/api/admin/cards/00000000-0000-0000-0000-000000000000",   {"title": "y"}),
     ("DELETE", "/api/admin/cards/00000000-0000-0000-0000-000000000000",   None),
 ]
@@ -331,6 +333,156 @@ async def test_add_card_unknown_engagement_returns_404(admin_authed: AsyncClient
         },
     )
     assert r.status_code == 404
+
+
+# ── POST /api/admin/clients/{id}/cards/import-markdown ────────────────────
+
+
+IMPORT_MD_TWO_CARDS = """\
+## Card 1: Buying Trigger
+
+**Category:** Confirm What We Know
+**Type:** single-select
+**Skip:** required
+
+**Context:**
+We have you positioned around regulatory pressure as the primary buying trigger.
+
+**Question:**
+Which trigger should we lead with?
+
+**Options:**
+- Regulatory pressure
+- Tech debt
+
+---
+
+## Card 2: SOW Template
+
+**Category:** Documents and Access
+**Type:** file-upload
+**Skip:** optional
+**Attachment:** deliverables/sow.html
+
+**Context:**
+We need the current SOW template.
+
+**Question:**
+Upload the SOW template you currently use.
+"""
+
+
+async def test_import_markdown_creates_cards_in_order(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.post(
+        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        json={"markdown": IMPORT_MD_TWO_CARDS},
+    )
+    assert r.status_code == 201
+    created = r.json()["created"]
+    assert len(created) == 2
+    assert [c["order_index"] for c in created] == [1, 2]
+    assert created[0]["response_type"] == "single-select"
+    assert created[0]["options"] == ["Regulatory pressure", "Tech debt"]
+    assert created[0]["skip_allowed"] is False
+    assert created[1]["response_type"] == "file-upload"
+    assert created[1]["attachment_path"] == "deliverables/sow.html"
+
+
+async def test_import_markdown_appends_after_existing_cards(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+) -> None:
+    """seed_cards inserts 8 cards. Imported cards should start at order 9."""
+    r = await admin_authed.post(
+        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        json={"markdown": IMPORT_MD_TWO_CARDS},
+    )
+    assert r.status_code == 201
+    created = r.json()["created"]
+    assert [c["order_index"] for c in created] == [9, 10]
+
+
+async def test_import_markdown_unknown_engagement_returns_404(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.post(
+        f"/api/admin/clients/{uuid.uuid4()}/cards/import-markdown",
+        json={"markdown": IMPORT_MD_TWO_CARDS},
+    )
+    assert r.status_code == 404
+
+
+async def test_import_markdown_returns_parse_errors(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    bad = """\
+## Card 1: Test
+
+**Category:** Cat
+**Type:** rambling-essay
+**Skip:** optional
+
+**Context:** ctx
+
+**Question:** q?
+"""
+    r = await admin_authed.post(
+        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        json={"markdown": bad},
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "invalid Type" in detail
+
+
+async def test_import_markdown_rejects_empty_body(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.post(
+        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        json={"markdown": ""},
+    )
+    assert r.status_code == 422
+
+
+async def test_import_markdown_no_partial_writes_on_error(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """If any card in the deck fails validation, none should be inserted."""
+    mixed = IMPORT_MD_TWO_CARDS + """\
+
+---
+
+## Card 3: Bad One
+
+**Category:** Cat
+**Type:** rambling-essay
+**Skip:** optional
+
+**Context:** ctx
+
+**Question:** q?
+"""
+    r = await admin_authed.post(
+        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        json={"markdown": mixed},
+    )
+    assert r.status_code == 400
+
+    count = (
+        await db.execute(
+            text(
+                "select count(*) from public.cards where client_id = cast(:c as uuid)"
+            ),
+            {"c": seed_client["id"]},
+        )
+    ).scalar_one()
+    assert count == 0
 
 
 # ── PATCH /api/admin/cards/{id} ───────────────────────────────────────────

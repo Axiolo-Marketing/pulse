@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import storage
 from pulse_api.auth.middleware import get_current_admin
+from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.db import get_admin_session
 from pulse_api.models import User
 from pulse_api.repos import cards as cards_repo
@@ -77,6 +78,10 @@ class UpdateCardRequest(BaseModel):
     default_value: str | None = None
     skip_allowed: bool | None = None
     attachment_path: str | None = None
+
+
+class ImportMarkdownRequest(BaseModel):
+    markdown: str = Field(min_length=1, max_length=500_000)
 
 
 # ── Engagement (clients table) ─────────────────────────────────────────────
@@ -182,6 +187,46 @@ async def add_card(
         raise HTTPException(status_code=500, detail="card creation failed")
     await session.commit()
     return row
+
+
+@router.post("/clients/{client_id}/cards/import-markdown", status_code=201)
+async def import_cards_markdown(
+    client_id: str,
+    req: ImportMarkdownRequest,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Bulk-import cards from a Pulse-card markdown document.
+
+    Atomic: parse first, then insert all-or-nothing. Cards append to the
+    end of the existing deck — the repo's `coalesce(max(order_index),0)+1`
+    insert sees prior uncommitted rows in the same session, so ordering
+    is stable.
+    """
+    if (await clients_repo.get_by_id(session, client_id)) is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+
+    try:
+        parsed = parse_markdown(req.markdown)
+    except CardImportError as exc:
+        # Join the per-card errors into a single message so the UI's
+        # generic detail-string handler can surface them. Newline-joined
+        # so the frontend can split for multi-line display.
+        detail = "\n".join(exc.errors) if exc.errors else str(exc)
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    created: list[dict[str, Any]] = []
+    for card in parsed:
+        row = await cards_repo.create_card(session, client_id=client_id, **card.to_create_kwargs())
+        if row is None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"failed to insert card {card.title!r}",
+            )
+        created.append(row)
+
+    await session.commit()
+    return {"created": created}
 
 
 @router.patch("/cards/{card_id}")

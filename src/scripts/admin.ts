@@ -924,7 +924,11 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     <section id="brief-slot">${renderBriefView(client)}</section>
     <div id="cards-list">${cardsHtml}</div>
     <div id="add-card-slot">
-      <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
+      <div class="add-card-bar">
+        <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
+        <button class="btn-secondary-sm" type="button" id="import-markdown-trigger">Upload as Markdown</button>
+        <input type="file" id="import-markdown-file" accept=".md,text/markdown,text/plain" hidden />
+      </div>
     </div>
   `;
 
@@ -1144,9 +1148,54 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
 
   const showAddCardTrigger = (): void => {
     addCardSlot.innerHTML = `
-      <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
+      <div class="add-card-bar">
+        <button class="btn-primary-sm add-card-btn" type="button" id="add-card-trigger">+ Add card</button>
+        <button class="btn-secondary-sm" type="button" id="import-markdown-trigger">Upload as Markdown</button>
+        <input type="file" id="import-markdown-file" accept=".md,text/markdown,text/plain" hidden />
+      </div>
     `;
     addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", showAddCardForm);
+    wireImportMarkdownButton();
+  };
+
+  const wireImportMarkdownButton = (): void => {
+    const trigger = addCardSlot.querySelector<HTMLButtonElement>("#import-markdown-trigger");
+    const fileInput = addCardSlot.querySelector<HTMLInputElement>("#import-markdown-file");
+    if (!trigger || !fileInput) return;
+
+    trigger.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      // Reset so picking the same file twice still fires `change`.
+      fileInput.value = "";
+      if (!file) return;
+
+      const originalLabel = trigger.textContent ?? "Upload as Markdown";
+      trigger.disabled = true;
+      trigger.textContent = "Importing...";
+      try {
+        const markdown = await file.text();
+        const { created } = await adminApi.importMarkdownCards(client.id, markdown);
+        for (const card of created) {
+          cards.push(card);
+          const tmp = document.createElement("div");
+          tmp.innerHTML = renderResponseCard(card, undefined, [], statusOverrides).trim();
+          const next = tmp.firstElementChild as HTMLElement | null;
+          if (next) {
+            cardsList.appendChild(next);
+            attachCardHandlers(next);
+          }
+        }
+        toast(`${created.length} card${created.length === 1 ? "" : "s"} imported`);
+      } catch (err) {
+        const detail = err instanceof ApiError ? err.detail : "Could not import markdown";
+        console.error("import markdown:", err);
+        window.alert(`Import failed:\n\n${detail}`);
+      } finally {
+        trigger.disabled = false;
+        trigger.textContent = originalLabel;
+      }
+    });
   };
 
   const showAddCardForm = (): void => {
@@ -1192,6 +1241,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   };
 
   addCardSlot.querySelector<HTMLButtonElement>("#add-card-trigger")?.addEventListener("click", showAddCardForm);
+  wireImportMarkdownButton();
 }
 
 interface AddCardPayload {
