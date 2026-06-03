@@ -59,12 +59,32 @@ def alembic_config() -> AlembicConfig:
 
 @pytest.fixture(scope="session")
 def _migrate(alembic_config: AlembicConfig) -> None:
-    """Run alembic upgrade head once against pulse_test, then leave it alone."""
+    """Run alembic upgrade head once against pulse_test, then leave it alone.
+
+    Auto-recovery: if the test DB is left at a revision that doesn't exist
+    on this branch (e.g. someone applied a feature-branch migration to it
+    and then we switched back to main), alembic raises CommandError with
+    'Can't locate revision'. In that case we drop + recreate `pulse_test`
+    and retry once — the alternative is hand-running psql every time
+    branches diverge on migrations.
+    """
+    from alembic.util.exc import CommandError as AlembicCommandError
+
     original = settings.database_url
     if settings.test_database_url:
         settings.database_url = settings.test_database_url
     try:
-        alembic_command.upgrade(alembic_config, "head")
+        try:
+            alembic_command.upgrade(alembic_config, "head")
+        except AlembicCommandError as exc:
+            if "locate revision" not in str(exc).lower():
+                raise
+            import asyncio
+
+            from scripts.reset_test_db import reset as reset_test_db
+
+            asyncio.run(reset_test_db())
+            alembic_command.upgrade(alembic_config, "head")
     finally:
         settings.database_url = original
 

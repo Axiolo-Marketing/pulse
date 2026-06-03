@@ -21,7 +21,13 @@ make test                      # pytest inside the backend container (80% covera
 make migrate                   # alembic upgrade head against the dev DB
 make makemigration m='msg'     # alembic revision --autogenerate
 make backend-shell             # sh inside the backend container
+make seed-dev                  # idempotent dev admin user (dev@example.com / dev-admin-password)
+make reset-test-db             # drop + recreate pulse_test (rarely needed — see below)
 ```
+
+`make seed-dev` creates a verified admin user in the dev DB so you can sign in to `/admin/` immediately. Idempotent — running it twice is fine; override defaults via `DEV_ADMIN_EMAIL` / `DEV_ADMIN_PASSWORD` / `DEV_ADMIN_NAME`. Use this instead of hand-running SQL when you need to click through the UI.
+
+`make reset-test-db` exists for the branch-switching edge case: if a feature branch added migration `0002` and you applied it to `pulse_test` (via `make test`), then switched back to `main` where that revision doesn't exist, the next `make test` fails with `Can't locate revision`. The `_migrate` fixture auto-recovers from this — drops + recreates the DB and retries once — but if you want to do it manually, this target is the same operation.
 
 Service ports default to standard (5432/8000/4321) but the local `.env` remaps to `55432/58000/14321` because this dev machine has other Compose stacks on those ports. Override via `DB_HOST_PORT` / `BACKEND_HOST_PORT` / `FRONTEND_HOST_PORT` in `.env`.
 
