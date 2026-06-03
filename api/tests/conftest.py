@@ -192,7 +192,7 @@ async def client(
     # to the test's rollback transaction. Redirect it through db_conn so
     # the write rolls back at teardown and is visible to the test's `db`
     # session.
-    from pulse_api.auth import middleware as _mw
+    from pulse_api.auth import api_keys as _api_keys_lib
     from pulse_api.repos import api_keys as _api_keys_repo
 
     async def _patched_touch_last_used(api_key_id) -> None:
@@ -204,7 +204,7 @@ async def client(
             await _api_keys_repo.mark_used(touch_session, api_key_id)
             await touch_session.commit()
 
-    monkeypatch.setattr(_mw, "_touch_last_used", _patched_touch_last_used)
+    monkeypatch.setattr(_api_keys_lib, "_touch_last_used", _patched_touch_last_used)
 
     app.dependency_overrides[get_session] = _override_session
     app.dependency_overrides[get_admin_session] = _override_session

@@ -21,6 +21,7 @@ dependencies = [
     "structlog>=24.4",
     "sentry-sdk[fastapi]>=2.18",
     "uvicorn[standard]>=0.32",
+    "mcp>=1.2",
 ]
 
 [dependency-groups]

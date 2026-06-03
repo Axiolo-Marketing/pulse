@@ -192,7 +192,7 @@ async def test_last_used_at_advances_after_bearer_auth(
     )
     assert r.status_code == 200
 
-    # The middleware's `_touch_last_used` opens a fresh session for the
+    # `auth.api_keys._touch_last_used` opens a fresh session for the
     # UPDATE (it must not commit on the request's injected session). The
     # `client` fixture monkeypatches that helper to write through the
     # same db_conn the test reads from, so we can read the freshly-written
@@ -257,7 +257,6 @@ async def test_unknown_prefix_runs_hash_and_compare_digest(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from pulse_api.auth import api_keys as api_keys_lib
-    from pulse_api.auth import middleware as mw
     from pulse_api.repos import api_keys as api_keys_repo
 
     # Force the lookup to miss for every call.
@@ -275,18 +274,17 @@ async def test_unknown_prefix_runs_hash_and_compare_digest(
         hash_calls.append(raw)
         return real_hash(raw)
 
-    real_compare = mw.hmac.compare_digest
+    real_compare = api_keys_lib.hmac.compare_digest
 
     def _spy_compare(a: str, b: str) -> bool:
         compare_calls.append((a, b))
         return real_compare(a, b)
 
+    # Bearer validation lives in `auth.api_keys.verify_bearer` after the
+    # extraction — patch both the hashing primitive and the constant-time
+    # compare inside that module.
     monkeypatch.setattr(api_keys_lib, "hash_key", _spy_hash)
-    # Also patch the binding inside the middleware module — the bearer
-    # path imports `api_keys as api_keys_lib` so we hit hash_key via that
-    # module-level reference.
-    monkeypatch.setattr(mw.api_keys_lib, "hash_key", _spy_hash)
-    monkeypatch.setattr(mw.hmac, "compare_digest", _spy_compare)
+    monkeypatch.setattr(api_keys_lib.hmac, "compare_digest", _spy_compare)
 
     # Any well-formed `pulse_<32-hex>` will do — the patched lookup
     # always returns None, so we go through the miss path.
