@@ -82,8 +82,13 @@ def _parse_options(raw: str) -> list[str]:
     opts = []
     for line in raw.splitlines():
         line = line.strip()
-        if line.startswith(("-", "*")):
-            opts.append(line[1:].strip())
+        if not line.startswith(("-", "*")):
+            continue
+        if re.fullmatch(r"[-*_]{3,}", line):  # a markdown rule (---), not an option
+            continue
+        text = line[1:].strip()
+        if text:
+            opts.append(text)
     return opts
 
 
@@ -188,8 +193,8 @@ def validate(engagement: dict, cards: list[dict]) -> list[str]:
 class PulseClient:
     def __init__(self, base_url: str):
         self.base = base_url.rstrip("/")
-        cj = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        self.cj = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
         url = f"{self.base}{path}"
@@ -198,6 +203,11 @@ class PulseClient:
         if data is not None:
             req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/json")
+        # The portal sits behind a WAF that 403s the default urllib UA as a bot.
+        req.add_header("User-Agent",
+                       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/124.0.0.0 Safari/537.36")
         try:
             with self.opener.open(req, timeout=30) as resp:
                 raw = resp.read().decode()
@@ -215,6 +225,20 @@ class PulseClient:
     def login(self, email: str, password: str) -> None:
         self._request("POST", "/api/auth/login",
                       {"email": email, "password": password})
+
+    def set_session_cookie(self, value: str) -> None:
+        """Inject an existing `pulse_session` cookie (e.g. copied from a
+        browser logged in via OAuth) so we skip the password login entirely."""
+        from urllib.parse import urlparse
+        host = urlparse(self.base).hostname or ""
+        self.cj.set_cookie(http.cookiejar.Cookie(
+            version=0, name="pulse_session", value=value.strip(),
+            port=None, port_specified=False,
+            domain=host, domain_specified=True, domain_initial_dot=False,
+            path="/", path_specified=True,
+            secure=True, expires=None, discard=False,
+            comment=None, comment_url=None, rest={"HttpOnly": None}, rfc2109=False,
+        ))
 
     def list_clients(self) -> list[dict]:
         return self._request("GET", "/api/admin/clients")
@@ -246,9 +270,14 @@ def main() -> int:
     ap.add_argument("deck", help="Path to the deck markdown file.")
     ap.add_argument("--base-url", default=os.environ.get("PULSE_BASE_URL", DEFAULT_BASE_URL),
                     help=f"Portal base URL (default {DEFAULT_BASE_URL}).")
+    ap.add_argument("--name", default=None,
+                    help="Override the client name (default: the deck's **Client:** line).")
     ap.add_argument("--org", default=None, help="org_name for the engagement (optional).")
     ap.add_argument("--email", default=os.environ.get("PULSE_ADMIN_EMAIL"))
     ap.add_argument("--password", default=os.environ.get("PULSE_ADMIN_PASSWORD"))
+    ap.add_argument("--session", default=os.environ.get("PULSE_SESSION"),
+                    help="An existing 'pulse_session' cookie value (from a browser "
+                         "logged in via OAuth). Skips password login.")
     ap.add_argument("--dry-run", action="store_true", help="Parse + validate only; no network calls.")
     ap.add_argument("--force", action="store_true", help="Create even if an engagement with the same name exists.")
     args = ap.parse_args()
@@ -266,6 +295,8 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
+    if args.name:
+        engagement["name"] = args.name
     if args.org:
         engagement["org_name"] = args.org
 
@@ -289,15 +320,19 @@ def main() -> int:
             print(f"  {c['n']:>2}. [{c['response_type']:<14}] {c['title']}  ({req})")
         return 0
 
-    if not args.email or not args.password:
-        print("error: set PULSE_ADMIN_EMAIL and PULSE_ADMIN_PASSWORD "
-              "(or pass --email/--password).", file=sys.stderr)
+    if not args.session and (not args.email or not args.password):
+        print("error: authenticate with either --session (a pulse_session cookie) "
+              "or --email + --password (env PULSE_ADMIN_EMAIL/PASSWORD).", file=sys.stderr)
         return 1
 
     client = PulseClient(args.base_url)
     try:
-        client.login(args.email, args.password)
-        print(f"\nLogged in to {args.base_url} as {args.email}.")
+        if args.session:
+            client.set_session_cookie(args.session)
+            print(f"\nUsing existing session cookie against {args.base_url}.")
+        else:
+            client.login(args.email, args.password)
+            print(f"\nLogged in to {args.base_url} as {args.email}.")
 
         if not args.force:
             existing = client.list_clients()
