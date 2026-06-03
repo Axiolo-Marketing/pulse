@@ -861,6 +861,97 @@
 .settings-identity-when { color: var(--muted); font-size: 12px; }
 .settings-identity.empty { color: var(--muted); font-style: italic; }
 
+/* ── API keys section ─────────────────────────────────────────────────── */
+
+.api-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.api-key-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+  background: var(--muted-bg, #f5f5f7);
+  border-radius: 8px;
+}
+
+.api-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--muted-bg, #f5f5f7);
+  border-radius: 8px;
+}
+
+.api-key-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.api-key-label {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.api-key-prefix {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.api-key-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.api-key-meta-sep { opacity: 0.6; }
+
+.api-keys-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-key-reveal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.api-key-warning {
+  background: var(--warning-soft, #fdecec);
+  color: var(--warning, #c0392b);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.api-key-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-key-reveal-input {
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
 /* ── Danger button + confirm modal ─────────────────────────────────────── */
 
 .btn-secondary-sm.danger {

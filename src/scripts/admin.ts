@@ -2,6 +2,7 @@ import {
   adminApi,
   ApiError,
   authApi,
+  type ApiKeySummary,
   type AuthUser,
   type Card,
   type Client,
@@ -398,11 +399,12 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
   if (route.kind === "settings") {
     container.innerHTML = `<div class="loading">Loading settings...</div>`;
     try {
-      const [me, identities] = await Promise.all([
+      const [me, identities, apiKeys] = await Promise.all([
         authApi.me(),
         authApi.listIdentities(),
+        authApi.listApiKeys(),
       ]);
-      renderSettings(container, me, identities);
+      renderSettings(container, me, identities, apiKeys);
     } catch (err) {
       console.error("load settings:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
@@ -435,6 +437,7 @@ function renderSettings(
   container: HTMLElement,
   user: AuthUser,
   identities: OAuthIdentitySummary[],
+  apiKeys: ApiKeySummary[],
 ): void {
   const hasPw = user.has_password;
   const pwTitle = hasPw ? "Change password" : "Set a password";
@@ -511,6 +514,15 @@ function renderSettings(
         <h3 class="settings-section-h">Linked accounts</h3>
         <ul class="settings-identity-list">${identityRows}</ul>
       </section>
+
+      <section class="settings-section" id="api-keys-section">
+        <h3 class="settings-section-h">API keys</h3>
+        <p class="settings-section-p">Use these to authenticate non-browser clients — CLI scripts, CI, Claude / MCP integrations. Each key has the same admin access this account has.</p>
+        <div id="api-keys-list" class="api-key-list">${renderApiKeyRows(apiKeys)}</div>
+        <div class="api-keys-actions">
+          <button class="btn-primary-sm" type="button" id="create-api-key">+ Create new key</button>
+        </div>
+      </section>
     </div>
   `;
 
@@ -568,7 +580,7 @@ function renderSettings(
       // Re-render so the form switches from "Set password" to
       // "Change password" mode and the inputs clear.
       const refreshed = await authApi.me();
-      renderSettings(container, refreshed, identities);
+      renderSettings(container, refreshed, identities, apiKeys);
       toast("Password updated");
     } catch (err) {
       pwMsg.textContent =
@@ -576,6 +588,222 @@ function renderSettings(
       pwMsg.classList.add("error");
     }
   });
+
+  // ── API keys section ──
+  const refreshApiKeys = async (): Promise<void> => {
+    try {
+      const fresh = await authApi.listApiKeys();
+      apiKeys.splice(0, apiKeys.length, ...fresh);
+      const listEl = container.querySelector<HTMLElement>("#api-keys-list");
+      if (listEl) listEl.innerHTML = renderApiKeyRows(fresh);
+      bindApiKeyRowHandlers(container, refreshApiKeys);
+    } catch (err) {
+      console.error("refresh api keys:", err);
+      toast("Could not refresh API keys");
+    }
+  };
+
+  container.querySelector<HTMLButtonElement>("#create-api-key")?.addEventListener("click", () => {
+    openCreateApiKeyModal(refreshApiKeys);
+  });
+  bindApiKeyRowHandlers(container, refreshApiKeys);
+}
+
+// ── API keys section helpers ────────────────────────────────────────────
+
+function renderApiKeyRows(keys: ApiKeySummary[]): string {
+  if (keys.length === 0) {
+    return `<p class="api-key-empty">No API keys yet.</p>`;
+  }
+  return keys
+    .map(
+      (k) => `
+      <div class="api-key-row" data-key-id="${escape(k.id)}" data-key-label="${escape(k.label)}">
+        <div class="api-key-info">
+          <div class="api-key-label">${escape(k.label)}</div>
+          <div class="api-key-prefix">pulse_${escape(k.prefix)}…</div>
+          <div class="api-key-meta">
+            <span>Last used ${escape(k.last_used_at ? formatTimestamp(k.last_used_at) : "Never used")}</span>
+            <span class="api-key-meta-sep">·</span>
+            <span>Created ${escape(formatTimestamp(k.created_at))}</span>
+          </div>
+        </div>
+        <button class="btn-ghost-sm danger" type="button" data-action="revoke-api-key">Revoke</button>
+      </div>`,
+    )
+    .join("");
+}
+
+function bindApiKeyRowHandlers(
+  container: HTMLElement,
+  refresh: () => Promise<void>,
+): void {
+  for (const row of container.querySelectorAll<HTMLElement>(".api-key-row")) {
+    const btn = row.querySelector<HTMLButtonElement>("[data-action='revoke-api-key']");
+    if (!btn) continue;
+    btn.addEventListener("click", () => {
+      const id = row.dataset.keyId!;
+      const label = row.dataset.keyLabel ?? "this key";
+      openConfirmModal({
+        title: "Revoke API key",
+        body: `Revoke '${label}'? Any client using this key will stop working immediately. This cannot be undone.`,
+        confirmLabel: "Revoke",
+        danger: true,
+        onConfirm: async () => {
+          await authApi.revokeApiKey(id);
+          toast("API key revoked");
+          await refresh();
+        },
+      });
+    });
+  }
+}
+
+function openCreateApiKeyModal(refresh: () => Promise<void>): void {
+  // Reentrancy guard: never stack two create-key modals.
+  if (document.body.querySelector(".modal.create-api-key-modal")) return;
+
+  const modalEl = document.createElement("div");
+  modalEl.className = "modal create-api-key-modal";
+  modalEl.innerHTML = `
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel confirm-panel" id="create-api-key-panel">
+      <header class="modal-header">
+        <span class="modal-title">Create API key</span>
+        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <div class="confirm-body" id="create-api-key-body">
+        <form class="settings-form" id="create-api-key-form" novalidate style="max-width:none">
+          <label class="edit-field">
+            <span class="edit-label">Label</span>
+            <input class="input" id="api-key-label-input" type="text"
+                   placeholder="e.g. MCP — Claude Code" maxlength="100" autofocus required />
+            <span class="settings-section-p" style="margin:6px 0 0">So you remember what this key is for.</span>
+          </label>
+          <span class="settings-form-msg" id="api-key-form-msg"></span>
+        </form>
+      </div>
+      <div class="confirm-actions" id="create-api-key-actions">
+        <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
+        <button class="btn-primary-sm" type="button" id="api-key-submit">Create</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+
+  let createdKeyForCleanup: string | null = null;
+  const close = (): void => {
+    modalEl.remove();
+    document.removeEventListener("keydown", onKey);
+    // Defensive: clear closure-held raw key from memory.
+    createdKeyForCleanup = null;
+    void createdKeyForCleanup;
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+
+  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
+    el.addEventListener("click", close);
+  }
+
+  const labelInput = modalEl.querySelector<HTMLInputElement>("#api-key-label-input")!;
+  const msgEl = modalEl.querySelector<HTMLElement>("#api-key-form-msg")!;
+  const submitBtn = modalEl.querySelector<HTMLButtonElement>("#api-key-submit")!;
+
+  const showError = (msg: string): void => {
+    msgEl.textContent = msg;
+    msgEl.classList.remove("success");
+    msgEl.classList.add("error");
+  };
+  const clearError = (): void => {
+    msgEl.textContent = "";
+    msgEl.classList.remove("error", "success");
+  };
+
+  labelInput.addEventListener("input", clearError);
+
+  const submit = async (): Promise<void> => {
+    clearError();
+    const label = labelInput.value.trim();
+    if (!label) {
+      showError("Label is required.");
+      labelInput.focus();
+      return;
+    }
+    submitBtn.disabled = true;
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = "Creating...";
+    try {
+      const created = await authApi.createApiKey({ label });
+      showReveal(created);
+      // Refresh underlying list so the row appears once the modal is closed.
+      await refresh();
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Could not create API key";
+      showError(detail);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
+    }
+  };
+
+  submitBtn.addEventListener("click", () => void submit());
+  modalEl.querySelector<HTMLFormElement>("#create-api-key-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    void submit();
+  });
+
+  function showReveal(created: ApiKeyWithSecretShape): void {
+    const bodyEl = modalEl.querySelector<HTMLElement>("#create-api-key-body")!;
+    const actionsEl = modalEl.querySelector<HTMLElement>("#create-api-key-actions")!;
+    const titleEl = modalEl.querySelector<HTMLElement>(".modal-title")!;
+    titleEl.textContent = "Key created — copy it now";
+
+    bodyEl.innerHTML = `
+      <div class="api-key-reveal">
+        <div class="api-key-warning">This is the only time you'll see the full key. Store it somewhere safe.</div>
+        <div class="api-key-reveal-row">
+          <input class="input api-key-reveal-input" id="api-key-reveal-input" type="text" readonly value="${escape(created.key)}" />
+          <button class="btn-secondary-sm" type="button" id="api-key-copy" aria-label="Copy API key">Copy</button>
+        </div>
+      </div>
+    `;
+    actionsEl.innerHTML = `
+      <button class="btn-primary-sm" type="button" id="api-key-done">Done</button>
+    `;
+
+    const revealInput = modalEl.querySelector<HTMLInputElement>("#api-key-reveal-input")!;
+    revealInput.addEventListener("focus", () => revealInput.select());
+    revealInput.focus();
+
+    const copyBtn = modalEl.querySelector<HTMLButtonElement>("#api-key-copy")!;
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(created.key);
+        flashCopied(copyBtn, "Copied!");
+      } catch (err) {
+        console.error("copy api key:", err);
+        toast("Could not copy — select the field and copy manually.");
+      }
+    });
+
+    modalEl.querySelector<HTMLButtonElement>("#api-key-done")?.addEventListener("click", () => {
+      close();
+    });
+  }
+}
+
+// Internal shape mirror — avoids importing the secret-bearing type more
+// broadly than necessary.
+interface ApiKeyWithSecretShape {
+  id: string;
+  label: string;
+  prefix: string;
+  key: string;
+  last_used_at: string | null;
+  created_at: string;
 }
 
 // ── list view ───────────────────────────────────────────────────────────
@@ -671,11 +899,15 @@ function renderList(container: HTMLElement, summaries: EngagementSummary[]): voi
         toast("Link copied to clipboard");
         return;
       case "rotate": {
-        const ok = window.confirm(
-          `Rotate ${summary.name}'s token? The current link will stop working immediately.`
-        );
-        if (!ok) return;
-        await rotateToken(container, summary.id);
+        openConfirmModal({
+          title: "Rotate token",
+          body: `Rotate ${summary.name}'s token? The current link will stop working immediately.`,
+          confirmLabel: "Rotate",
+          danger: true,
+          onConfirm: async () => {
+            await rotateToken(container, summary.id);
+          },
+        });
         return;
       }
       case "delete": {

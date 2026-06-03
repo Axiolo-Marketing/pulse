@@ -205,6 +205,20 @@ export interface OAuthIdentitySummary {
   linked_at: string;
 }
 
+export interface ApiKeySummary {
+  id: string;
+  label: string;
+  prefix: string;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface ApiKeyWithSecret extends ApiKeySummary {
+  /** Full `pulse_<32-hex>` raw key. ONLY returned by POST /api/auth/me/api-keys
+   * once at creation; never persisted, never re-fetchable from the list. */
+  key: string;
+}
+
 export interface EngagementSummary {
   id: string;
   name: string;
@@ -303,6 +317,18 @@ export const authApi = {
 
   listIdentities: (): Promise<OAuthIdentitySummary[]> =>
     request("/api/auth/me/identities"),
+
+  listApiKeys: (): Promise<ApiKeySummary[]> =>
+    request("/api/auth/me/api-keys"),
+
+  createApiKey: (args: { label: string }): Promise<ApiKeyWithSecret> =>
+    request("/api/auth/me/api-keys", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  revokeApiKey: (id: string): Promise<void> =>
+    request(`/api/auth/me/api-keys/${id}`, { method: "DELETE" }),
 
   // Frontend navigates the browser to this URL. The backend redirects to
   // Google/Microsoft with the right state cookie set.
