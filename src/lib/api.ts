@@ -197,6 +197,12 @@ export interface AuthUser {
   name: string | null;
   is_admin: boolean;
   email_verified_at: string | null;
+  has_password: boolean;
+}
+
+export interface OAuthIdentitySummary {
+  provider: string;
+  linked_at: string;
 }
 
 export interface EngagementSummary {
@@ -279,6 +285,24 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify({ token, new_password }),
     }),
+
+  updateProfile: (args: { name: string | null }): Promise<AuthUser> =>
+    request("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(args),
+    }),
+
+  changePassword: (args: {
+    current_password?: string | null;
+    new_password: string;
+  }): Promise<AuthUser> =>
+    request("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  listIdentities: (): Promise<OAuthIdentitySummary[]> =>
+    request("/api/auth/me/identities"),
 
   // Frontend navigates the browser to this URL. The backend redirects to
   // Google/Microsoft with the right state cookie set.

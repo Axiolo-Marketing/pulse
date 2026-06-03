@@ -250,3 +250,203 @@ async def test_full_signup_verify_login_me_logout_flow(
     client.cookies.delete(settings.session_cookie_name)
     r = await client.get("/api/auth/me")
     assert r.status_code == 401
+
+
+# ── profile update ────────────────────────────────────────────────────────
+
+
+async def test_me_includes_has_password(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.get("/api/auth/me")
+    assert r.status_code == 200
+    assert r.json()["has_password"] is True
+
+
+async def test_update_profile_changes_name(
+    admin_authed: AsyncClient, db: AsyncSession, seed_admin_user: dict[str, str]
+) -> None:
+    r = await admin_authed.patch("/api/auth/me", json={"name": "  New Name  "})
+    assert r.status_code == 200
+    assert r.json()["name"] == "New Name"
+
+    row = (
+        await db.execute(
+            text("select name from public.users where id = cast(:i as uuid)"),
+            {"i": seed_admin_user["id"]},
+        )
+    ).mappings().one()
+    assert row["name"] == "New Name"
+
+
+async def test_update_profile_clears_name_when_blank(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.patch("/api/auth/me", json={"name": "   "})
+    assert r.status_code == 200
+    assert r.json()["name"] is None
+
+
+async def test_update_profile_requires_auth(client: AsyncClient) -> None:
+    r = await client.patch("/api/auth/me", json={"name": "Spoof"})
+    assert r.status_code == 401
+
+
+# ── change password ──────────────────────────────────────────────────────
+
+
+async def test_change_password_with_correct_current_succeeds(
+    admin_authed: AsyncClient,
+    seed_admin_user: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    from pulse_api.auth.password import verify_password
+
+    new_pw = "brand-new-password"
+    r = await admin_authed.post(
+        "/api/auth/change-password",
+        json={
+            "current_password": seed_admin_user["password"],
+            "new_password": new_pw,
+        },
+    )
+    assert r.status_code == 200
+
+    row = (
+        await db.execute(
+            text("select password_hash from public.users where id = cast(:i as uuid)"),
+            {"i": seed_admin_user["id"]},
+        )
+    ).mappings().one()
+    assert verify_password(new_pw, row["password_hash"])
+
+
+async def test_change_password_with_wrong_current_returns_400(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.post(
+        "/api/auth/change-password",
+        json={"current_password": "definitely-wrong", "new_password": "new-password-123"},
+    )
+    assert r.status_code == 400
+
+
+async def test_change_password_without_current_when_user_has_one_returns_400(
+    admin_authed: AsyncClient,
+) -> None:
+    """A user with a password set must supply current_password to change it.
+    Otherwise a stolen session cookie could quietly rotate the password."""
+    r = await admin_authed.post(
+        "/api/auth/change-password",
+        json={"new_password": "another-password-123"},
+    )
+    assert r.status_code == 400
+
+
+async def test_oauth_only_user_can_set_initial_password(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """OAuth-only users (password_hash=NULL) can set a first password
+    without supplying current_password — the session cookie + OAuth
+    completion is the auth gate."""
+    from pulse_api.auth.password import verify_password
+    from pulse_api.auth.session import encode_session
+
+    row = (
+        await db.execute(
+            text(
+                "insert into public.users "
+                "(email, password_hash, is_admin, email_verified_at) "
+                "values ('oauth@example.com', null, true, now()) "
+                "returning id::text"
+            )
+        )
+    ).mappings().one()
+    client.cookies.set(settings.session_cookie_name, encode_session(row["id"]))
+
+    # /me reports has_password = false before
+    r = await client.get("/api/auth/me")
+    assert r.status_code == 200
+    assert r.json()["has_password"] is False
+
+    new_pw = "initial-cli-password"
+    r = await client.post(
+        "/api/auth/change-password",
+        json={"new_password": new_pw},
+    )
+    assert r.status_code == 200
+    assert r.json()["has_password"] is True
+
+    stored = (
+        await db.execute(
+            text(
+                "select password_hash from public.users where id = cast(:i as uuid)"
+            ),
+            {"i": row["id"]},
+        )
+    ).mappings().one()
+    assert verify_password(new_pw, stored["password_hash"])
+
+    # And now password login works as well
+    r = await client.post(
+        "/api/auth/login",
+        json={"email": "oauth@example.com", "password": new_pw},
+    )
+    assert r.status_code == 200
+
+
+async def test_change_password_requires_min_length(
+    admin_authed: AsyncClient, seed_admin_user: dict[str, str]
+) -> None:
+    r = await admin_authed.post(
+        "/api/auth/change-password",
+        json={
+            "current_password": seed_admin_user["password"],
+            "new_password": "short",
+        },
+    )
+    assert r.status_code == 422
+
+
+async def test_change_password_requires_auth(client: AsyncClient) -> None:
+    r = await client.post(
+        "/api/auth/change-password",
+        json={"new_password": "long-enough-password"},
+    )
+    assert r.status_code == 401
+
+
+# ── identities ────────────────────────────────────────────────────────────
+
+
+async def test_list_identities_empty_for_email_signup(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.get("/api/auth/me/identities")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_list_identities_returns_linked_providers(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    await db.execute(
+        text(
+            "insert into public.oauth_identities (user_id, provider, provider_user_id) "
+            "values (cast(:u as uuid), 'google', 'google-12345')"
+        ),
+        {"u": seed_admin_user["id"]},
+    )
+    r = await admin_authed.get("/api/auth/me/identities")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["provider"] == "google"
+    assert "linked_at" in body[0]
+
+
+async def test_list_identities_requires_auth(client: AsyncClient) -> None:
+    r = await client.get("/api/auth/me/identities")
+    assert r.status_code == 401

@@ -69,6 +69,23 @@ async def update_password_hash(
     )
 
 
+async def update_name(
+    session: AsyncSession, user_id: uuid.UUID, name: str | None
+) -> None:
+    await session.execute(update(User).where(User.id == user_id).values(name=name))
+
+
+async def list_oauth_identities(
+    session: AsyncSession, user_id: uuid.UUID
+) -> list[OAuthIdentity]:
+    result = await session.execute(
+        select(OAuthIdentity)
+        .where(OAuthIdentity.user_id == user_id)
+        .order_by(OAuthIdentity.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def find_oauth_identity(
     session: AsyncSession, provider: str, provider_user_id: str
 ) -> OAuthIdentity | None:

@@ -56,6 +56,7 @@ class UserResponse(BaseModel):
     name: str | None
     is_admin: bool
     email_verified_at: datetime | None
+    has_password: bool
 
     @classmethod
     def from_model(cls, u: User) -> "UserResponse":
@@ -65,7 +66,22 @@ class UserResponse(BaseModel):
             name=u.name,
             is_admin=u.is_admin,
             email_verified_at=u.email_verified_at,
+            has_password=u.password_hash is not None,
         )
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str | None = Field(default=None, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class OAuthIdentityResponse(BaseModel):
+    provider: str
+    linked_at: datetime
 
 
 def _set_session_cookie(response: Response, user_id: str) -> None:
@@ -206,3 +222,52 @@ async def logout(response: Response) -> dict[str, str]:
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse.from_model(user)
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_profile(
+    req: UpdateProfileRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> UserResponse:
+    name = req.name.strip() if req.name is not None else None
+    await users_repo.update_name(session, user.id, name or None)
+    await session.commit()
+    await session.refresh(user)
+    return UserResponse.from_model(user)
+
+
+@router.post("/change-password", response_model=UserResponse)
+async def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> UserResponse:
+    # Users with an existing password must prove it. OAuth-only users
+    # (no password_hash) can set an initial one — the session cookie is
+    # the auth gate, and they reached it by completing the OAuth flow.
+    if user.password_hash is not None:
+        if not req.current_password or not verify_password(
+            req.current_password, user.password_hash
+        ):
+            log.info("auth.change_password.failed", user_id=str(user.id), reason="bad-current")
+            raise HTTPException(status_code=400, detail="current password is incorrect")
+
+    await users_repo.update_password_hash(
+        session, user.id, hash_password(req.new_password)
+    )
+    await session.commit()
+    await session.refresh(user)
+    return UserResponse.from_model(user)
+
+
+@router.get("/me/identities", response_model=list[OAuthIdentityResponse])
+async def list_identities(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[OAuthIdentityResponse]:
+    identities = await users_repo.list_oauth_identities(session, user.id)
+    return [
+        OAuthIdentityResponse(provider=i.provider, linked_at=i.created_at)
+        for i in identities
+    ]

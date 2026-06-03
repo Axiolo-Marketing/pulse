@@ -8,6 +8,7 @@ import {
   type ClientResponse,
   type EngagementDetail,
   type EngagementSummary,
+  type OAuthIdentitySummary,
   type ResponseType,
   type UploadRow,
 } from "../lib/api";
@@ -303,12 +304,16 @@ interface RouteDetail {
   kind: "detail";
   clientId: string;
 }
-type Route = RouteList | RouteDetail;
+interface RouteSettings {
+  kind: "settings";
+}
+type Route = RouteList | RouteDetail | RouteSettings;
 
 function parseRoute(): Route {
   const hash = window.location.hash.replace(/^#/, "");
   const m = hash.match(/^client\/([0-9a-f-]+)$/i);
   if (m) return { kind: "detail", clientId: m[1] };
+  if (hash === "settings") return { kind: "settings" };
   return { kind: "list" };
 }
 
@@ -319,10 +324,12 @@ async function runAdmin(mount: HTMLElement, _user: AuthUser): Promise<void> {
   const container = mount.querySelector<HTMLElement>(".admin-container")!;
 
   let route = parseRoute();
+  setActiveNav(mount, route);
   await draw(container, route);
 
   window.addEventListener("hashchange", async () => {
     route = parseRoute();
+    setActiveNav(mount, route);
     await draw(container, route);
   });
 }
@@ -338,7 +345,11 @@ function renderShell(): string {
           Pulse
           <span class="admin-title" style="margin-left:8px">Admin</span>
         </span>
-        <button class="admin-logout" type="button" id="logout">Sign out</button>
+        <div class="admin-header-actions">
+          <a class="admin-header-link" href="#" id="nav-engagements">Engagements</a>
+          <a class="admin-header-link" href="#settings" id="nav-settings">Settings</a>
+          <button class="admin-logout" type="button" id="logout">Sign out</button>
+        </div>
       </header>
       <div class="admin-container">
         <div class="loading">Loading...</div>
@@ -357,6 +368,18 @@ function attachShellHandlers(mount: HTMLElement): void {
     window.location.hash = "";
     renderLogin(mount);
   });
+  mount.querySelector<HTMLAnchorElement>("#nav-engagements")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    window.location.hash = "";
+  });
+}
+
+function setActiveNav(mount: HTMLElement, route: Route): void {
+  const setActive = (id: string, active: boolean) => {
+    mount.querySelector<HTMLElement>(`#${id}`)?.classList.toggle("active", active);
+  };
+  setActive("nav-engagements", route.kind === "list" || route.kind === "detail");
+  setActive("nav-settings", route.kind === "settings");
 }
 
 async function draw(container: HTMLElement, route: Route): Promise<void> {
@@ -367,6 +390,21 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
       renderList(container, summaries);
     } catch (err) {
       console.error("load engagements:", err);
+      container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
+    }
+    return;
+  }
+
+  if (route.kind === "settings") {
+    container.innerHTML = `<div class="loading">Loading settings...</div>`;
+    try {
+      const [me, identities] = await Promise.all([
+        authApi.me(),
+        authApi.listIdentities(),
+      ]);
+      renderSettings(container, me, identities);
+    } catch (err) {
+      console.error("load settings:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
     }
     return;
@@ -384,6 +422,160 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
     console.error("load detail:", err);
     container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
   }
+}
+
+// ── settings view ───────────────────────────────────────────────────────
+
+const PROVIDER_LABELS: Record<string, string> = {
+  google: "Google",
+  microsoft: "Microsoft 365",
+};
+
+function renderSettings(
+  container: HTMLElement,
+  user: AuthUser,
+  identities: OAuthIdentitySummary[],
+): void {
+  const hasPw = user.has_password;
+  const pwTitle = hasPw ? "Change password" : "Set a password";
+  const pwIntro = hasPw
+    ? "Update the password you use to sign in."
+    : "You signed in with a third-party provider. Set a password to enable email/password sign-in (useful for CLI or API access).";
+
+  const identityRows = identities.length
+    ? identities
+        .map(
+          (i) => `
+        <li class="settings-identity">
+          <span class="settings-identity-name">${escape(PROVIDER_LABELS[i.provider] ?? i.provider)}</span>
+          <span class="settings-identity-when">linked ${escape(formatTimestamp(i.linked_at))}</span>
+        </li>`,
+        )
+        .join("")
+    : `<li class="settings-identity empty">No third-party accounts linked.</li>`;
+
+  container.innerHTML = `
+    <div class="settings-page">
+      <h2 class="settings-h">Settings</h2>
+
+      <section class="settings-section">
+        <h3 class="settings-section-h">Profile</h3>
+        <form class="settings-form" id="profile-form" novalidate>
+          <label class="edit-field">
+            <span class="edit-label">Email</span>
+            <input class="input" type="email" value="${escape(user.email)}" disabled />
+          </label>
+          <label class="edit-field">
+            <span class="edit-label">Display name</span>
+            <input id="profile-name" class="input" type="text" autocomplete="name"
+                   value="${escape(user.name ?? "")}" />
+          </label>
+          <div class="settings-form-actions">
+            <button class="btn btn-primary" type="submit">Save profile</button>
+            <span class="settings-form-msg" id="profile-msg"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="settings-section">
+        <h3 class="settings-section-h">${escape(pwTitle)}</h3>
+        <p class="settings-section-p">${escape(pwIntro)}</p>
+        <form class="settings-form" id="password-form" novalidate>
+          ${
+            hasPw
+              ? `<label class="edit-field">
+                   <span class="edit-label">Current password</span>
+                   <input id="pw-current" class="input" type="password"
+                          autocomplete="current-password" required />
+                 </label>`
+              : ""
+          }
+          <label class="edit-field">
+            <span class="edit-label">New password (8+ characters)</span>
+            <input id="pw-new" class="input" type="password"
+                   autocomplete="new-password" minlength="8" required />
+          </label>
+          <label class="edit-field">
+            <span class="edit-label">Confirm new password</span>
+            <input id="pw-confirm" class="input" type="password"
+                   autocomplete="new-password" minlength="8" required />
+          </label>
+          <div class="settings-form-actions">
+            <button class="btn btn-primary" type="submit">${escape(hasPw ? "Update password" : "Set password")}</button>
+            <span class="settings-form-msg" id="password-msg"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="settings-section">
+        <h3 class="settings-section-h">Linked accounts</h3>
+        <ul class="settings-identity-list">${identityRows}</ul>
+      </section>
+    </div>
+  `;
+
+  // Profile form
+  const profileForm = container.querySelector<HTMLFormElement>("#profile-form")!;
+  const profileMsg = container.querySelector<HTMLElement>("#profile-msg")!;
+  profileForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    profileMsg.textContent = "";
+    profileMsg.classList.remove("error", "success");
+    const nameVal = (container.querySelector<HTMLInputElement>("#profile-name")?.value ?? "").trim();
+    try {
+      const updated = await authApi.updateProfile({ name: nameVal || null });
+      profileMsg.textContent = "Saved";
+      profileMsg.classList.add("success");
+      // Reflect in the input in case the server normalized it
+      const input = container.querySelector<HTMLInputElement>("#profile-name");
+      if (input) input.value = updated.name ?? "";
+    } catch (err) {
+      profileMsg.textContent =
+        err instanceof ApiError ? err.detail : "Could not save";
+      profileMsg.classList.add("error");
+    }
+  });
+
+  // Password form
+  const pwForm = container.querySelector<HTMLFormElement>("#password-form")!;
+  const pwMsg = container.querySelector<HTMLElement>("#password-msg")!;
+  pwForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    pwMsg.textContent = "";
+    pwMsg.classList.remove("error", "success");
+    const newPw = container.querySelector<HTMLInputElement>("#pw-new")?.value ?? "";
+    const confirmPw = container.querySelector<HTMLInputElement>("#pw-confirm")?.value ?? "";
+    const currentPw = hasPw
+      ? container.querySelector<HTMLInputElement>("#pw-current")?.value ?? ""
+      : null;
+
+    if (newPw.length < 8) {
+      pwMsg.textContent = "Password must be at least 8 characters.";
+      pwMsg.classList.add("error");
+      return;
+    }
+    if (newPw !== confirmPw) {
+      pwMsg.textContent = "Passwords do not match.";
+      pwMsg.classList.add("error");
+      return;
+    }
+
+    try {
+      await authApi.changePassword({
+        current_password: currentPw,
+        new_password: newPw,
+      });
+      // Re-render so the form switches from "Set password" to
+      // "Change password" mode and the inputs clear.
+      const refreshed = await authApi.me();
+      renderSettings(container, refreshed, identities);
+      toast("Password updated");
+    } catch (err) {
+      pwMsg.textContent =
+        err instanceof ApiError ? err.detail : "Could not update password";
+      pwMsg.classList.add("error");
+    }
+  });
 }
 
 // ── list view ───────────────────────────────────────────────────────────
