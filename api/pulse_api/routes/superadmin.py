@@ -36,6 +36,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import org_invite_email
 from pulse_api.auth.middleware import get_current_superadmin
 from pulse_api.config import settings
@@ -275,6 +276,30 @@ async def create_org(
         role="owner",
     )
     await email_module.send_email(owner_email, subject, body)
+
+    # Audit on the BYPASSRLS session — the superadmin lives outside the
+    # org, so we attribute the action under the new org's id so it
+    # surfaces in *that* org's activity feed (the owner reading their
+    # new tenant's audit log sees "Tom (Axiolo superadmin) created this
+    # org" as the first row). The invite emission is also worth a row.
+    await record_audit(
+        session,
+        org_id=org_id,
+        user_id=user.id,
+        action="org.create",
+        target_type="org",
+        target_id=str(org_id),
+        metadata={"name": req.name.strip(), "slug": slug},
+    )
+    await record_audit(
+        session,
+        org_id=org_id,
+        user_id=user.id,
+        action="member.invite",
+        target_type="invite",
+        target_id=str(invite_row["id"]),
+        metadata={"email": owner_email, "role": "owner"},
+    )
     await session.commit()
 
     return CreateOrgResponse(
@@ -295,7 +320,7 @@ async def create_org(
 @router.delete("/api/superadmin/orgs/{org_id}", status_code=204)
 async def delete_org(
     org_id: str,
-    _: User = Depends(get_current_superadmin),
+    user: User = Depends(get_current_superadmin),
     session: AsyncSession = Depends(get_admin_session),
 ) -> None:
     """Delete an empty organization.
@@ -344,6 +369,22 @@ async def delete_org(
                 "before deleting"
             ),
         )
+
+    # Audit the deletion BEFORE the cascade wipes everything tied to
+    # this org. The audit row references this org's id via a `cascade`
+    # FK, so committing this transaction also removes the audit row —
+    # the entry exists only inside the transaction window. We still
+    # write it so a side-channel (e.g. WAL replay, hooks, an external
+    # audit sink in the future) can observe the action.
+    await record_audit(
+        session,
+        org_id=as_uuid,
+        user_id=user.id,
+        action="org.delete",
+        target_type="org",
+        target_id=str(as_uuid),
+        metadata={"name": str(row.get("name")), "slug": str(row.get("slug"))},
+    )
 
     deleted = await orgs_repo.delete_org(session, as_uuid)
     if not deleted:  # pragma: no cover — get_by_id above guards

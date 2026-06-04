@@ -279,6 +279,44 @@ export interface InviteSummary {
   invited_by_email: string | null;
 }
 
+/** Actor sub-payload of an activity entry. Each field can be `null` when
+ * the row was emitted without a user (system maintenance) or when the
+ * user was removed after the action — the row stays via
+ * `ON DELETE SET NULL` on `audit_logs.user_id`. */
+export interface ActivityActor {
+  user_id: string | null;
+  email: string | null;
+  name: string | null;
+}
+
+/** One row of the activity feed. `action` is a stable enum string;
+ * the UI maps it to a human-readable label via `formatActivityRow`
+ * in `activity-tab.ts`. */
+export interface ActivityEntry {
+  id: string;
+  created_at: string;
+  actor: ActivityActor;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+/** Paginated payload returned by `GET /api/orgs/me/activity`. */
+export interface ActivityPage {
+  entries: ActivityEntry[];
+  /** Opaque cursor — pass it back as `cursor` to fetch the next page.
+   * `null` when the current page is the last one. */
+  next_cursor: string | null;
+}
+
+export interface ListActivityArgs {
+  limit?: number;
+  cursor?: string | null;
+  actor_user_id?: string | null;
+  action?: string | null;
+}
+
 /** Public invite-acceptance metadata from `GET /api/invites/{token}`. */
 export interface InviteMetadata {
   org_name: string;
@@ -537,6 +575,19 @@ export const orgsApi = {
 
   revokeInvite: (inviteId: string): Promise<void> =>
     request(`/api/orgs/me/invites/${inviteId}`, { method: "DELETE" }),
+
+  /** Paginated activity feed for the active org. Pass `cursor` (from a
+   * previous page's `next_cursor`) to load more. Filters by actor user
+   * id and/or exact action enum string. */
+  listActivity: (args: ListActivityArgs = {}): Promise<ActivityPage> => {
+    const params = new URLSearchParams();
+    if (args.limit) params.set("limit", String(args.limit));
+    if (args.cursor) params.set("cursor", args.cursor);
+    if (args.actor_user_id) params.set("actor_user_id", args.actor_user_id);
+    if (args.action) params.set("action", args.action);
+    const qs = params.toString();
+    return request(`/api/orgs/me/activity${qs ? `?${qs}` : ""}`);
+  },
 };
 
 /** Public invite-acceptance flow. The token IS the auth — no cookie sent. */

@@ -23,7 +23,9 @@ prefix is reconstructed from authenticated state (the active org's
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -40,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
 from pulse_api import storage
+from pulse_api.audit import AUDIT_ACTIONS, record_audit
 from pulse_api.auth.email_messages import org_invite_email
 from pulse_api.auth.middleware import (
     get_current_org_member,
@@ -52,6 +55,7 @@ from pulse_api.config import settings
 from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.models._helpers import utcnow_naive
+from pulse_api.repos import audit_logs as audit_logs_repo
 from pulse_api.repos import invites as invites_repo
 from pulse_api.repos import memberships as memberships_repo
 from pulse_api.repos import orgs as orgs_repo
@@ -141,6 +145,33 @@ class InviteSummary(BaseModel):
     created_at: object  # datetime
     expires_at: object  # datetime
     invited_by_email: str | None = None
+
+
+class ActivityActor(BaseModel):
+    """Actor sub-payload of an activity entry."""
+
+    user_id: str | None
+    email: str | None
+    name: str | None
+
+
+class ActivityEntry(BaseModel):
+    """One row in the activity feed."""
+
+    id: str
+    created_at: object  # datetime — Pydantic v2 handles it
+    actor: ActivityActor
+    action: str
+    target_type: str | None
+    target_id: str | None
+    metadata: dict[str, Any] | None = None
+
+
+class ActivityPage(BaseModel):
+    """Returned by ``GET /api/orgs/me/activity``."""
+
+    entries: list[ActivityEntry]
+    next_cursor: str | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -291,9 +322,10 @@ async def update_my_org(
     rename would invalidate links. Logo updates go through the
     dedicated ``POST /api/orgs/me/logo`` endpoint.
     """
-    _, membership = org_member
+    user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
     if "name" in fields and fields["name"] is not None:
+        previous = await orgs_repo.get_for_member(session, membership.org_id)
         row = await orgs_repo.update_name(
             session, org_id=membership.org_id, name=fields["name"].strip()
         )
@@ -301,6 +333,18 @@ async def update_my_org(
             raise HTTPException(
                 status_code=404, detail="organization not found"
             )
+        await record_audit(
+            session,
+            org_id=membership.org_id,
+            user_id=user.id,
+            action="org.update",
+            target_type="org",
+            target_id=str(membership.org_id),
+            metadata={
+                "old_name": (previous or {}).get("name") if previous else None,
+                "new_name": row.get("name"),
+            },
+        )
     else:
         row = await orgs_repo.get_for_member(session, membership.org_id)
         if row is None:
@@ -383,7 +427,7 @@ async def upload_org_logo(
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
     ),
-    _: OrganizationMembership = Depends(require_owner),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
     session: AsyncSession = Depends(get_org_scoped_session),
 ) -> dict[str, str]:
     """Owner-only multipart upload. Replaces any existing logo.
@@ -398,9 +442,9 @@ async def upload_org_logo(
     ``settings.upload_dir/org-logos/{org_id}/{uuid}.{ext}`` and updates
     ``organizations.logo_path``. Returns ``{logo_path}``.
     """
-    _, membership = org_member
+    user, membership = org_member
     content = await file.read()
-    ext, _mime = _validate_logo_upload(file, content)
+    ext, mime = _validate_logo_upload(file, content)
 
     org_id_str = str(membership.org_id)
     # Trust boundary: the prefix segment is the active org's id taken
@@ -422,6 +466,15 @@ async def upload_org_logo(
     await orgs_repo.set_logo_path(
         session, org_id=membership.org_id, logo_path=relative_path
     )
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="org.logo_set",
+        target_type="org",
+        target_id=str(membership.org_id),
+        metadata={"mime_type": mime, "size_bytes": len(content)},
+    )
     await session.commit()
     return {"logo_path": relative_path}
 
@@ -431,16 +484,25 @@ async def delete_org_logo(
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
     ),
-    _: OrganizationMembership = Depends(require_owner),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
     session: AsyncSession = Depends(get_org_scoped_session),
 ) -> None:
     """Owner-only. Clear the org's logo and best-effort delete the file."""
-    _, membership = org_member
+    user, membership = org_member
     previous = await orgs_repo.get_for_member(session, membership.org_id)
     if previous and previous.get("logo_path"):
         storage.delete_upload(str(previous["logo_path"]))
     await orgs_repo.set_logo_path(
         session, org_id=membership.org_id, logo_path=None
+    )
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="org.logo_remove",
+        target_type="org",
+        target_id=str(membership.org_id),
+        metadata=None,
     )
     await session.commit()
 
@@ -582,7 +644,7 @@ async def update_member_role(
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
     ),
-    _: OrganizationMembership = Depends(require_owner),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
     session: AsyncSession = Depends(get_org_scoped_session),
     admin_session: AsyncSession = Depends(get_admin_session),
 ) -> MemberRow:
@@ -598,7 +660,7 @@ async def update_member_role(
     re-fetch of the display row (``users`` is not granted to
     ``pulse_member`` — see ``memberships.list_members``).
     """
-    _caller_user, membership = org_member
+    caller_user, membership = org_member
 
     try:
         target_user_id = uuid.UUID(user_id)
@@ -636,6 +698,15 @@ async def update_member_role(
         )
         if updated is None:  # pragma: no cover — get_membership above guards
             raise HTTPException(status_code=404, detail="member not found")
+        await record_audit(
+            session,
+            org_id=membership.org_id,
+            user_id=caller_user.id,
+            action="member.role_change",
+            target_type="member",
+            target_id=str(target_user_id),
+            metadata={"from": current_role, "to": new_role},
+        )
         await session.commit()
 
     # Re-fetch the joined row so we return display fields. Uses the
@@ -666,7 +737,7 @@ async def remove_org_member(
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
     ),
-    _: OrganizationMembership = Depends(require_owner),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
     session: AsyncSession = Depends(get_org_scoped_session),
     admin_session: AsyncSession = Depends(get_admin_session),
 ) -> None:
@@ -680,7 +751,7 @@ async def remove_org_member(
 
     The user row itself is preserved; they may belong to other orgs.
     """
-    _, membership = org_member
+    caller_user, membership = org_member
 
     try:
         target_user_id = uuid.UUID(user_id)
@@ -708,6 +779,15 @@ async def remove_org_member(
     )
     if not ok:  # pragma: no cover — get_membership above guards
         raise HTTPException(status_code=404, detail="member not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=caller_user.id,
+        action="member.remove",
+        target_type="member",
+        target_id=str(target_user_id),
+        metadata={"former_role": str(existing["role"])},
+    )
     await session.commit()
 
     # Clear the user's last_active_org_id if it was pointing at this
@@ -783,7 +863,7 @@ async def create_invite(
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
     ),
-    _: OrganizationMembership = Depends(require_owner),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
     session: AsyncSession = Depends(get_org_scoped_session),
     admin_session: AsyncSession = Depends(get_admin_session),
 ) -> InviteSummary:
@@ -850,6 +930,15 @@ async def create_invite(
         role=req.role,
     )
     await email_module.send_email(target_email, subject, body)
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="member.invite",
+        target_type="invite",
+        target_id=str(row["id"]),
+        metadata={"email": target_email, "role": req.role},
+    )
     await session.commit()
 
     return InviteSummary(
@@ -868,7 +957,7 @@ async def revoke_invite(
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
     ),
-    _: OrganizationMembership = Depends(require_owner),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
     session: AsyncSession = Depends(get_org_scoped_session),
 ) -> None:
     """Owner-only. Revoke a pending invite.
@@ -879,7 +968,7 @@ async def revoke_invite(
     actionable "this invite was revoked, ask the owner for a new
     link" message instead of the misleading "already used" copy.
     """
-    _, membership = org_member
+    user, membership = org_member
     try:
         as_uuid = uuid.UUID(invite_id)
     except (TypeError, ValueError) as exc:
@@ -890,6 +979,15 @@ async def revoke_invite(
     )
     if not ok:
         raise HTTPException(status_code=404, detail="invite not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="member.invite_revoke",
+        target_type="invite",
+        target_id=str(as_uuid),
+        metadata=None,
+    )
     await session.commit()
 
 
@@ -898,3 +996,155 @@ def _max_age_delta():
     from datetime import timedelta
 
     return timedelta(seconds=settings.invite_token_max_age_seconds)
+
+
+# ── Activity feed ─────────────────────────────────────────────────────────
+
+
+# Bounds for the activity-list endpoint. Default keeps the payload small
+# enough to render on a phone; the max is generous for power users
+# triaging a noisy day.
+_ACTIVITY_DEFAULT_LIMIT = 50
+_ACTIVITY_MAX_LIMIT = 200
+
+
+def _parse_activity_cursor(
+    cursor: str | None,
+) -> tuple[datetime, uuid.UUID] | None:
+    """Parse the opaque cursor into ``(created_at, id)``.
+
+    Wire format is ``"<iso8601>|<uuid>"``. Both halves are required so
+    the SQL can do a stable composite comparison and never drop a row
+    with a duplicate ``created_at``. We avoid signing it because the
+    surface is already authed.
+    """
+    if cursor is None or cursor == "":
+        return None
+    try:
+        ts_part, _, id_part = cursor.partition("|")
+        if not ts_part or not id_part:
+            raise ValueError("cursor missing ts or id half")
+        return datetime.fromisoformat(ts_part), uuid.UUID(id_part)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail="invalid cursor"
+        ) from exc
+
+
+@router.get("/api/orgs/me/activity", response_model=ActivityPage)
+async def list_activity(
+    limit: int = _ACTIVITY_DEFAULT_LIMIT,
+    cursor: str | None = None,
+    actor_user_id: str | None = None,
+    action: str | None = None,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    member_session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
+) -> ActivityPage:
+    """Paginated activity feed for the active org.
+
+    Visible to any member of the org (read-only surface — every write
+    that lands here was already gated on the originating route).
+
+    Args:
+        limit: Page size; clamped to ``[1, _ACTIVITY_MAX_LIMIT]``.
+        cursor: Opaque ``created_at`` of the previous page's last row.
+            Pass the value of ``next_cursor`` from the previous response.
+        actor_user_id: Optional filter — only entries by this user.
+        action: Optional exact-match filter on the action enum.
+        org_member: Caller's resolved ``(user, membership)``.
+        member_session: ``pulse_member`` session; RLS-scoped to the
+            active org so a forgotten predicate cannot leak.
+        admin_session: BYPASSRLS session used purely for the
+            actor-display join (``users`` is not granted to
+            ``pulse_member``).
+
+    Returns:
+        ``ActivityPage`` with up to ``limit`` entries in reverse-
+        chronological order plus an opaque ``next_cursor`` (``None``
+        when this is the last page).
+    """
+    _, membership = org_member
+    bounded_limit = max(1, min(int(limit), _ACTIVITY_MAX_LIMIT))
+    cursor_pair = _parse_activity_cursor(cursor)
+
+    parsed_actor: uuid.UUID | None = None
+    if actor_user_id:
+        try:
+            parsed_actor = uuid.UUID(actor_user_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422, detail="invalid actor_user_id"
+            ) from exc
+
+    if action is not None and action not in AUDIT_ACTIONS:
+        raise HTTPException(status_code=422, detail="invalid action")
+
+    rows = await audit_logs_repo.list_for_org(
+        member_session,
+        org_id=membership.org_id,
+        limit=bounded_limit,
+        cursor=cursor_pair,
+        actor_user_id=parsed_actor,
+        action=action,
+    )
+
+    # Two-pass actor enrichment. The `users` table is not granted to
+    # `pulse_member`; we resolve display fields against `pulse_admin`.
+    actor_ids = sorted(
+        {str(r["user_id"]) for r in rows if r.get("user_id") is not None}
+    )
+    if actor_ids:
+        await _reset_role_on_admin_session(admin_session)
+        actor_map = await memberships_repo.list_user_display_fields(
+            admin_session, actor_ids
+        )
+    else:
+        actor_map = {}
+
+    entries: list[ActivityEntry] = []
+    for r in rows:
+        actor_uid = r.get("user_id")
+        actor_uid_str = str(actor_uid) if actor_uid is not None else None
+        actor_row = actor_map.get(actor_uid_str) if actor_uid_str else None
+        entries.append(
+            ActivityEntry(
+                id=str(r["id"]),
+                created_at=r["created_at"],
+                actor=ActivityActor(
+                    user_id=actor_uid_str,
+                    email=(
+                        str(actor_row["email"]) if actor_row else None
+                    ),
+                    name=(
+                        (str(actor_row["name"]) if actor_row.get("name") else None)
+                        if actor_row
+                        else None
+                    ),
+                ),
+                action=str(r["action"]),
+                target_type=(
+                    str(r["target_type"])
+                    if r.get("target_type") is not None
+                    else None
+                ),
+                target_id=(
+                    str(r["target_id"])
+                    if r.get("target_id") is not None
+                    else None
+                ),
+                metadata=r.get("metadata"),
+            )
+        )
+
+    next_cursor: str | None = None
+    if len(entries) == bounded_limit and rows:
+        last_row = rows[-1]
+        last_created = last_row["created_at"]
+        last_id = last_row["id"]
+        if isinstance(last_created, datetime):
+            next_cursor = f"{last_created.isoformat()}|{last_id}"
+
+    return ActivityPage(entries=entries, next_cursor=next_cursor)

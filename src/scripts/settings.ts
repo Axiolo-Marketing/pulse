@@ -23,8 +23,9 @@ import {
   orgLogoUrl,
 } from "../lib/api";
 import { formatTimestamp } from "../lib/format-time";
+import { renderActivityTab } from "./activity-tab";
 
-export type SettingsTab = "personal" | "organization";
+export type SettingsTab = "personal" | "organization" | "activity";
 
 export interface SettingsHostHelpers {
   /** Brief transient toast. */
@@ -108,6 +109,14 @@ export function renderSettings(args: RenderSettingsArgs): void {
             href="#settings/organization"
             id="settings-tab-organization"
           >Organization</a>
+          <a
+            class="settings-tab${tab === "activity" ? " is-active" : ""}"
+            role="tab"
+            aria-selected="${tab === "activity" ? "true" : "false"}"
+            aria-controls="settings-tabpanel"
+            href="#settings/activity"
+            id="settings-tab-activity"
+          >Activity</a>
         </nav>
       </header>
       <div
@@ -124,6 +133,12 @@ export function renderSettings(args: RenderSettingsArgs): void {
 
   if (tab === "personal") {
     renderPersonalTab(panel, args);
+  } else if (tab === "activity") {
+    renderActivityTab({
+      container: panel,
+      members: args.members,
+      helpers: { toast: args.helpers.toast },
+    });
   } else {
     renderOrgTab(panel, args);
   }

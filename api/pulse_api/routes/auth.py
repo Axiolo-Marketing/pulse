@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api.audit import record_audit
 from pulse_api.auth import api_keys as api_keys_lib
 from pulse_api.auth.email_messages import password_reset_email, verification_email
 from pulse_api.auth.middleware import get_current_org_member, get_current_user
@@ -423,6 +424,17 @@ async def create_api_key(
         key_hash=key_hash,
         label=req.label.strip(),
     )
+    # NEVER record the raw key — only the prefix is safe. The Activity
+    # UI renders "Operator created API key 'CLI script' (pulse_abc1…)".
+    await record_audit(
+        session,
+        org_id=target_org_id,
+        user_id=user.id,
+        action="api_key.create",
+        target_type="api_key",
+        target_id=str(row.id),
+        metadata={"label": row.label, "prefix": row.prefix},
+    )
     await session.commit()
     await session.refresh(row)
 
@@ -451,15 +463,51 @@ async def revoke_api_key(
     can still revoke any of their personal keys regardless of which org
     they were minted against. Cross-user attempts return 404 (not 403)
     so the existence of someone else's key id can't be probed.
+
+    The audit row is written under the key's own ``org_id`` so the
+    activity feed surfaces it in the org the key was minted against —
+    not the operator's currently-active org. Cross-org owners revoking
+    a key from outside the key's org therefore still leave a trail in
+    the right place.
     """
     try:
         as_uuid = uuid.UUID(key_id)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=404, detail="api key not found") from exc
 
+    # Peek at the key BEFORE revoke so the audit log can capture its
+    # org_id + prefix (needed for the activity row and to attribute it
+    # to the right org). Same `user_id` predicate as the revoke so this
+    # also short-circuits cross-user probes.
+    snapshot = await session.execute(
+        text(
+            "select org_id::text as org_id, prefix, label "
+            "from public.api_keys "
+            "where id = cast(:k as uuid) "
+            "  and user_id = cast(:u as uuid) "
+            "  and revoked_at is null"
+        ),
+        {"k": str(as_uuid), "u": str(user.id)},
+    )
+    snapshot_row = snapshot.mappings().one_or_none()
+
     ok = await api_keys_repo.revoke(
         session, api_key_id=as_uuid, user_id=user.id
     )
     if not ok:
         raise HTTPException(status_code=404, detail="api key not found")
+
+    if snapshot_row is not None:
+        await record_audit(
+            session,
+            org_id=str(snapshot_row["org_id"]),
+            user_id=user.id,
+            action="api_key.revoke",
+            target_type="api_key",
+            target_id=str(as_uuid),
+            metadata={
+                "label": str(snapshot_row["label"]),
+                "prefix": str(snapshot_row["prefix"]),
+            },
+        )
     await session.commit()
