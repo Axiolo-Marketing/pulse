@@ -82,16 +82,37 @@ async def create_engagement(
     name: str,
     org_name: str | None,
     engagement_name: str | None,
+    org_id: str,
 ) -> dict:
+    """Insert a new engagement and return its row.
+
+    Args:
+        session: DB session (admin role in PR 1, member role in PR 2).
+        name: Customer-facing name.
+        org_name: Legacy customer-org text column (free-form).
+        engagement_name: Optional engagement label.
+        org_id: Owning organization UUID — NOT NULL on the column.
+
+    Returns:
+        Dict of the inserted row with the same keys the admin API
+        already returns for client rows.
+    """
     token = secrets.token_hex(8)
     result = await session.execute(
         text(
-            "insert into public.clients (name, org_name, engagement_name, token) "
-            "values (:n, :o, :e, :t) "
+            "insert into public.clients "
+            "(name, org_name, engagement_name, token, org_id) "
+            "values (:n, :o, :e, :t, cast(:org as uuid)) "
             "returning id::text, name, org_name, engagement_name, token, brief, "
             "created_at, last_active_at"
         ),
-        {"n": name, "o": org_name, "e": engagement_name, "t": token},
+        {
+            "n": name,
+            "o": org_name,
+            "e": engagement_name,
+            "t": token,
+            "org": org_id,
+        },
     )
     return dict(result.mappings().one())
 

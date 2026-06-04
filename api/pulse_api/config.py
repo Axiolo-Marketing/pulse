@@ -17,10 +17,18 @@ class Settings(BaseSettings):
     database_url: str
     anon_database_url: str | None = None
     admin_database_url: str | None = None
+    member_database_url: str | None = None
 
     test_database_url: str | None = None
     test_anon_database_url: str | None = None
     test_admin_database_url: str | None = None
+    test_member_database_url: str | None = None
+
+    # ── Multi-tenant ─────────────────────────────────────────────────────
+    # Whitespace/comma-separated list of operator emails granted
+    # `is_superadmin = true`. Consumed by the 0004 data migration and by
+    # `make seed-dev`. Empty means no superadmins (acceptable in dev).
+    superadmin_emails: str = ""
 
     session_secret: str = ""
     session_cookie_name: str = "pulse_session"

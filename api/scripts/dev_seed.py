@@ -2,12 +2,20 @@
 
 Inserts (or updates) a verified admin user so the operator can log in to
 `/admin/` without hand-running SQL or a one-off Python snippet every time
-the dev database is reset.
+the dev database is reset. As of PR 1 of the multi-tenant refactor the
+seeder also:
+
+- upserts the "Axiolo" organization (idempotent on slug);
+- inserts/upserts an owner membership for the seeded user;
+- sets ``users.last_active_org_id`` to the Axiolo org;
+- promotes the user to ``is_superadmin = true`` if their email appears
+  in the ``SUPERADMIN_EMAILS`` env var.
 
 Defaults to dev@example.com / dev-admin-password. Override via env:
     DEV_ADMIN_EMAIL=...
     DEV_ADMIN_PASSWORD=...
     DEV_ADMIN_NAME=...
+    SUPERADMIN_EMAILS=...   (whitespace/comma separated)
 
 Run from the project root:
     make seed-dev
@@ -36,6 +44,9 @@ DEFAULT_EMAIL = "dev@example.com"
 DEFAULT_PASSWORD = "dev-admin-password"
 DEFAULT_NAME = "Dev Admin"
 
+AXIOLO_ORG_NAME = "Axiolo"
+AXIOLO_ORG_SLUG = "axiolo"
+
 
 def _looks_like_prod(database_url: str) -> bool:
     """Refuse to run against anything that isn't obviously local."""
@@ -48,14 +59,69 @@ def _looks_like_prod(database_url: str) -> bool:
     return False
 
 
+def _superadmin_emails() -> set[str]:
+    """Lower-cased emails from the ``SUPERADMIN_EMAILS`` env var.
+
+    Mirrors the parsing the 0004 migration uses so dev + prod data
+    arrive at the same superadmin set.
+    """
+    raw = os.environ.get("SUPERADMIN_EMAILS", "").strip()
+    if not raw:
+        return set()
+    return {p.strip().lower() for p in raw.replace(",", " ").split() if p}
+
+
 async def seed_admin_user(
     email: str, password: str, name: str
 ) -> tuple[str, bool]:
-    """Insert the user if missing, or update password/name + ensure admin
-    and verified flags otherwise. Returns (user_id, was_created)."""
+    """Insert/update an admin user and ensure the Axiolo org wiring is in place.
+
+    Operations performed (all idempotent):
+
+    1. Upsert the Axiolo organization by slug.
+    2. Insert or update the user (password, name, is_admin, verified).
+    3. Insert (or no-op) the owner membership row.
+    4. Set ``users.last_active_org_id`` to the Axiolo org.
+    5. Promote the user to ``is_superadmin = true`` if their email is in
+       the ``SUPERADMIN_EMAILS`` env var.
+
+    Args:
+        email: Operator email (will be lower-cased on disk).
+        password: Plaintext password — hashed before insert.
+        name: Display name.
+
+    Returns:
+        Tuple of (user_id, was_created) where ``was_created`` is True
+        on a fresh insert and False on update.
+    """
+    superadmins = _superadmin_emails()
+    is_super = email.lower() in superadmins
+
     engine = create_async_engine(settings.database_url)
     try:
         async with engine.begin() as conn:
+            # 1. Axiolo org
+            org_id = (
+                await conn.execute(
+                    text(
+                        "select id::text from public.organizations "
+                        "where slug = :s"
+                    ),
+                    {"s": AXIOLO_ORG_SLUG},
+                )
+            ).scalar_one_or_none()
+            if org_id is None:
+                org_id = (
+                    await conn.execute(
+                        text(
+                            "insert into public.organizations (name, slug) "
+                            "values (:n, :s) returning id::text"
+                        ),
+                        {"n": AXIOLO_ORG_NAME, "s": AXIOLO_ORG_SLUG},
+                    )
+                ).scalar_one()
+
+            # 2. User
             existing = (
                 await conn.execute(
                     text("select id::text from public.users where email = :e"),
@@ -63,32 +129,61 @@ async def seed_admin_user(
                 )
             ).scalar_one_or_none()
 
-            if existing is None:
-                row = (
+            was_created = existing is None
+            if was_created:
+                user_id = (
                     await conn.execute(
                         text(
                             "insert into public.users "
-                            "(email, password_hash, name, is_admin, email_verified_at) "
-                            "values (:e, :h, :n, true, now()) "
+                            "(email, password_hash, name, is_admin, "
+                            " is_superadmin, last_active_org_id, "
+                            " email_verified_at) "
+                            "values (:e, :h, :n, true, :su, cast(:org as uuid), now()) "
                             "returning id::text"
                         ),
-                        {"e": email.lower(), "h": hash_password(password), "n": name},
+                        {
+                            "e": email.lower(),
+                            "h": hash_password(password),
+                            "n": name,
+                            "su": is_super,
+                            "org": org_id,
+                        },
                     )
                 ).scalar_one()
-                return row, True
+            else:
+                user_id = existing
+                await conn.execute(
+                    text(
+                        "update public.users set "
+                        "  password_hash = :h, "
+                        "  name = :n, "
+                        "  is_admin = true, "
+                        "  is_superadmin = case when :su then true else is_superadmin end, "
+                        "  last_active_org_id = coalesce(last_active_org_id, cast(:org as uuid)), "
+                        "  email_verified_at = coalesce(email_verified_at, now()) "
+                        "where id = cast(:i as uuid)"
+                    ),
+                    {
+                        "h": hash_password(password),
+                        "n": name,
+                        "su": is_super,
+                        "org": org_id,
+                        "i": user_id,
+                    },
+                )
 
+            # 3. Owner membership (idempotent via the (org_id, user_id) UNIQUE).
             await conn.execute(
                 text(
-                    "update public.users set "
-                    "  password_hash = :h, "
-                    "  name = :n, "
-                    "  is_admin = true, "
-                    "  email_verified_at = coalesce(email_verified_at, now()) "
-                    "where id = cast(:i as uuid)"
+                    "insert into public.organization_memberships "
+                    "(org_id, user_id, role) "
+                    "values (cast(:org as uuid), cast(:uid as uuid), 'owner') "
+                    "on conflict (org_id, user_id) do nothing"
                 ),
-                {"h": hash_password(password), "n": name, "i": existing},
+                {"org": org_id, "uid": user_id},
             )
-            return existing, False
+
+            return user_id, was_created
     finally:
         await engine.dispose()
 

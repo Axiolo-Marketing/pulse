@@ -30,11 +30,13 @@ import base64
 from typing import Any
 
 from mcp.server.fastmcp.server import Context
+from sqlalchemy import text
 
 from pulse_api import storage
 from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.config import settings
 from pulse_api.mcp.server import _open_admin_session, authenticate_request, mcp
+from pulse_api.models import User
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import responses as responses_repo
@@ -93,16 +95,38 @@ async def pulse_create_engagement(
     org_name: str | None = None,
     engagement_name: str | None = None,
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
+    user = await authenticate_request(ctx)
     async with _open_admin_session() as session:
+        org_id = await _resolve_org_id(session, user)
         row = await clients_repo.create_engagement(
             session,
             name=name,
             org_name=org_name,
             engagement_name=engagement_name,
+            org_id=str(org_id),
         )
         await session.commit()
         return row
+
+
+async def _resolve_org_id(session: Any, user: User) -> Any:
+    """Resolve the org_id to use for a create operation.
+
+    PR 1 mirrors the REST admin route's behaviour: prefer the user's
+    ``last_active_org_id`` (always populated for admin users by the
+    0004 data migration), else fall back to the Axiolo org by slug for
+    freshly-created admins. PR 2 replaces this with the active org
+    threaded through the auth dependency.
+    """
+    if user.last_active_org_id is not None:
+        return user.last_active_org_id
+    result = await session.execute(
+        text("select id from public.organizations where slug = 'axiolo' limit 1")
+    )
+    row_org = result.scalar_one_or_none()
+    if row_org is None:
+        raise ValueError("no organization available for this user")
+    return row_org
 
 
 @mcp.tool(

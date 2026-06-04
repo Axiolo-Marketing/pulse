@@ -139,6 +139,25 @@ async def become_anon(conn: AsyncConnection, *, token: str | None = None) -> Non
         )
 
 
+async def become_member(conn: AsyncConnection, *, org_id: str) -> None:
+    """Flip the open transaction's effective role to `pulse_member`.
+
+    Mirrors `become_anon`: switches the role and sets the
+    ``pulse.org_id`` GUC so org-scoped RLS policies fire. Use this in
+    multi-tenant isolation tests that need to prove a member of org A
+    cannot read rows tagged with org B's ``org_id``.
+
+    Args:
+        conn: The test's open `AsyncConnection`.
+        org_id: UUID string of the active organization.
+    """
+    await conn.execute(text("set local role pulse_member"))
+    await conn.execute(
+        text("select set_config('pulse.org_id', :o, true)"),
+        {"o": org_id},
+    )
+
+
 # ── HTTP client wired so the app shares db_conn's transaction ─────────────
 
 
@@ -172,14 +191,28 @@ async def client(
     ) -> AsyncIterator[AsyncSession]:
         if not x_pulse_token:
             raise HTTPException(status_code=401, detail="missing token")
-        # Flip db_conn's effective role to pulse_anon and set the GUC that
-        # the helper functions read. Both are SET LOCAL — they roll back
-        # with the outer transaction at teardown. This matches the
-        # production `get_anon_session` shape exactly.
+        # Flip db_conn's effective role to pulse_anon and set the GUCs the
+        # helper functions read (pulse.token + pulse.org_id). All three
+        # are SET LOCAL — they roll back with the outer transaction at
+        # teardown. This matches the production `get_anon_session` shape
+        # exactly, including the org_id lookup from the client row.
         await db_conn.execute(text("set local role pulse_anon"))
         await db_conn.execute(
             text("select set_config('pulse.token', :t, true)"),
             {"t": x_pulse_token},
+        )
+        org_id = (
+            await db_conn.execute(
+                text(
+                    "select coalesce((select org_id::text from public.clients "
+                    "where token = :t limit 1), '')"
+                ),
+                {"t": x_pulse_token},
+            )
+        ).scalar_one()
+        await db_conn.execute(
+            text("select set_config('pulse.org_id', :o, true)"),
+            {"o": org_id or ""},
         )
         factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
         async with factory() as session:
@@ -221,37 +254,74 @@ async def client(
 
 
 @pytest.fixture
-async def seed_client(db: AsyncSession) -> dict[str, str]:
-    token = secrets.token_hex(8)
+async def axiolo_org(db: AsyncSession) -> dict[str, str]:
+    """Resolve the Axiolo org row created by migration 0004.
+
+    Idempotent — re-running tests against the same DB volume reuses the
+    same id. Returns ``{"id": str, "slug": "axiolo"}``. Every seed
+    fixture below depends on this so newly-inserted tenant rows can
+    carry a valid ``org_id``.
+    """
     row = (
         await db.execute(
             text(
-                "insert into public.clients (name, token) values (:n, :t) "
-                "returning id::text, token, name"
+                "select id::text, slug from public.organizations "
+                "where slug = 'axiolo' limit 1"
             ),
-            {"n": "Renee", "t": token},
         )
-    ).mappings().one()
+    ).mappings().one_or_none()
+    if row is None:
+        # Defensive — should never fire because the migration inserts
+        # the row. If it does, surface a clear failure instead of an
+        # opaque NOT NULL violation on the next seed.
+        raise RuntimeError(
+            "Axiolo org missing from test DB — has migration 0004 run?"
+        )
     return dict(row)
 
 
 @pytest.fixture
-async def other_seeded_client(db: AsyncSession) -> dict[str, str]:
+async def seed_client(
+    db: AsyncSession, axiolo_org: dict[str, str]
+) -> dict[str, str]:
     token = secrets.token_hex(8)
     row = (
         await db.execute(
             text(
-                "insert into public.clients (name, token) values (:n, :t) "
+                "insert into public.clients (name, token, org_id) "
+                "values (:n, :t, cast(:org as uuid)) "
                 "returning id::text, token, name"
             ),
-            {"n": "Josh", "t": token},
+            {"n": "Renee", "t": token, "org": axiolo_org["id"]},
         )
     ).mappings().one()
-    return dict(row)
+    return {**dict(row), "org_id": axiolo_org["id"]}
 
 
 @pytest.fixture
-async def seed_cards(db: AsyncSession, seed_client: dict[str, str]) -> list[dict[str, str]]:
+async def other_seeded_client(
+    db: AsyncSession, axiolo_org: dict[str, str]
+) -> dict[str, str]:
+    token = secrets.token_hex(8)
+    row = (
+        await db.execute(
+            text(
+                "insert into public.clients (name, token, org_id) "
+                "values (:n, :t, cast(:org as uuid)) "
+                "returning id::text, token, name"
+            ),
+            {"n": "Josh", "t": token, "org": axiolo_org["id"]},
+        )
+    ).mappings().one()
+    return {**dict(row), "org_id": axiolo_org["id"]}
+
+
+@pytest.fixture
+async def seed_cards(
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    axiolo_org: dict[str, str],
+) -> list[dict[str, str]]:
     """One card per response_type for seed_client. Useful for parametrized tests."""
     types = [
         "confirm-edit", "single-select", "multi-select", "short-text",
@@ -263,11 +333,19 @@ async def seed_cards(db: AsyncSession, seed_client: dict[str, str]) -> list[dict
             await db.execute(
                 text(
                     "insert into public.cards "
-                    "(client_id, order_index, category, title, context, question, response_type) "
-                    "values (cast(:cid as uuid), :idx, 'Test', :t, 'ctx', 'q?', :rt) "
+                    "(client_id, order_index, category, title, context, "
+                    " question, response_type, org_id) "
+                    "values (cast(:cid as uuid), :idx, 'Test', :t, 'ctx', "
+                    "        'q?', :rt, cast(:org as uuid)) "
                     "returning id::text, response_type, title"
                 ),
-                {"cid": seed_client["id"], "idx": i, "t": f"Card {rt}", "rt": rt},
+                {
+                    "cid": seed_client["id"],
+                    "idx": i,
+                    "t": f"Card {rt}",
+                    "rt": rt,
+                    "org": axiolo_org["id"],
+                },
             )
         ).mappings().one()
         cards.append(dict(row))
@@ -284,7 +362,13 @@ async def client_authed(client: AsyncClient, seed_client: dict[str, str]) -> Asy
 async def seed_user(db: AsyncSession) -> dict[str, str]:
     """Insert a verified non-admin operator user. password_hash matches
     `password`. Returned dict has id, email, password (plaintext for login
-    tests)."""
+    tests).
+
+    No membership is created — this fixture models a user who exists
+    but is not (yet) attached to any org. Tests that need the user
+    attached to Axiolo should use ``seed_admin_user`` or attach the
+    membership explicitly.
+    """
     from pulse_api.auth.password import hash_password
 
     pw = "correct-horse-battery-staple"
@@ -302,22 +386,51 @@ async def seed_user(db: AsyncSession) -> dict[str, str]:
 
 
 @pytest.fixture
-async def seed_admin_user(db: AsyncSession) -> dict[str, str]:
-    """Insert a verified admin user."""
+async def seed_admin_user(
+    db: AsyncSession, axiolo_org: dict[str, str]
+) -> dict[str, str]:
+    """Insert a verified admin user attached to the Axiolo org as owner.
+
+    Inserts the ``users`` row with ``is_admin = true`` (PR 1 keeps the
+    column — see migration 0004 module docstring), then inserts the
+    ``organization_memberships`` row that PR 2's auth refactor will key
+    on. ``users.last_active_org_id`` is set to Axiolo so the
+    admin_api ``create_engagement`` route's org_id lookup succeeds.
+
+    Returned dict includes ``org_id`` for tests that want to assert
+    against the active org.
+    """
     from pulse_api.auth.password import hash_password
 
     pw = "admin-pass-12345678"
     row = (
         await db.execute(
             text(
-                "insert into public.users (email, password_hash, name, is_admin, email_verified_at) "
-                "values (:e, :h, :n, true, now()) "
+                "insert into public.users "
+                "(email, password_hash, name, is_admin, "
+                " last_active_org_id, email_verified_at) "
+                "values (:e, :h, :n, true, cast(:org as uuid), now()) "
                 "returning id::text, email"
             ),
-            {"e": "admin@example.com", "h": hash_password(pw), "n": "Admin"},
+            {
+                "e": "admin@example.com",
+                "h": hash_password(pw),
+                "n": "Admin",
+                "org": axiolo_org["id"],
+            },
         )
     ).mappings().one()
-    return {**dict(row), "password": pw}
+    user_id = row["id"]
+    await db.execute(
+        text(
+            "insert into public.organization_memberships "
+            "(org_id, user_id, role) "
+            "values (cast(:org as uuid), cast(:uid as uuid), 'owner') "
+            "on conflict (org_id, user_id) do nothing"
+        ),
+        {"org": axiolo_org["id"], "uid": user_id},
+    )
+    return {**dict(row), "password": pw, "org_id": axiolo_org["id"]}
 
 
 @pytest.fixture
