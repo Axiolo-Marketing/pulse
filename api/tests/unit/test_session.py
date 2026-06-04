@@ -22,8 +22,12 @@ def test_roundtrip_returns_same_user_id() -> None:
 
 def test_tampered_token_rejected() -> None:
     token = encode_session("anything")
-    # Flip a single character in the payload
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Replace the entire HMAC signature segment with a same-length string
+    # of `X`s. A single-char flip occasionally lands on a position where
+    # itsdangerous still accepts the token; corrupting the whole sig
+    # is reliably rejected.
+    head, _, sig = token.rpartition(".")
+    tampered = f"{head}.{'X' * len(sig)}"
     with pytest.raises(InvalidSessionError):
         decode_session(tampered, max_age_seconds=3600)
 

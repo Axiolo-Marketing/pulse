@@ -135,6 +135,7 @@ async def _membership_for(db: AsyncSession, *, email: str) -> dict | None:
         "existing_user_pending_invite",
         "existing_user_no_invite",
         "pending_invite_owner_role",
+        "explicit_invite_token_in_state",
     ],
 )
 async def test_oauth_callback_invite_matrix(
@@ -227,6 +228,71 @@ async def test_oauth_callback_invite_matrix(
             db, org_id=axiolo_org["id"], email=email, role="owner"
         )
         expected_role = "owner"
+
+    elif scenario == "explicit_invite_token_in_state":
+        # The invite is for a *different* email than the OAuth-verified
+        # identity. The explicit invite_token in the state cookie wins
+        # — the user gets attached to the invite's org despite the
+        # mismatched email.
+        from pulse_api.auth.tokens import issue_token
+        from pulse_api.repos.invites import hash_invite_token
+
+        invite_email = f"invited-{secrets.token_hex(3)}@example.com"
+        # Insert the invite directly so we know its id.
+        invite_id = (
+            await db.execute(
+                text(
+                    "insert into public.organization_invites "
+                    "(org_id, email, role, token_hash, "
+                    " expires_at, accepted_at) "
+                    "values (cast(:o as uuid), :e, :r, :h, "
+                    "        now() + interval '7 days', null) "
+                    "returning id::text"
+                ),
+                {
+                    "o": axiolo_org["id"],
+                    "e": invite_email,
+                    "r": "owner",
+                    "h": f"placeholder-{secrets.token_hex(8)}",
+                },
+            )
+        ).mappings().one()["id"]
+        raw_invite_token = issue_token("org-invite", {"invite_id": invite_id})
+        await db.execute(
+            text(
+                "update public.organization_invites set token_hash = :h "
+                "where id = cast(:i as uuid)"
+            ),
+            {"h": hash_invite_token(raw_invite_token), "i": invite_id},
+        )
+        # Run the authorize → callback dance with the invite_token in
+        # the query, which stashes it inside the signed state cookie.
+        await db.flush()
+        r = await client.get(
+            f"/api/auth/{PROVIDER}/authorize",
+            params={"invite_token": raw_invite_token},
+            follow_redirects=False,
+        )
+        state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        state_cookie = r.cookies.get(f"oauth_state_{PROVIDER}")
+        _stub_provider(respx_mock, sub=sub, email=email, name="Auto Test")
+        client.cookies.set(f"oauth_state_{PROVIDER}", state_cookie)
+        r2 = await client.get(
+            f"/api/auth/{PROVIDER}/callback",
+            params={"code": "fake", "state": state},
+            follow_redirects=False,
+        )
+        assert r2.status_code == 302, r2.text
+        assert "error=" not in r2.headers["location"], r2.headers
+        assert r2.cookies.get(settings.session_cookie_name)
+
+        # The user (created with the OAuth-verified email) ends up
+        # attached to the invite's org with the invite's role.
+        membership = await _membership_for(db, email=email)
+        assert membership is not None
+        assert membership["role"] == "owner"
+        assert membership["org_id"] == axiolo_org["id"]
+        return  # bypass the rest of the parametrized assertions
 
     else:  # pragma: no cover
         raise AssertionError(f"unknown scenario {scenario!r}")

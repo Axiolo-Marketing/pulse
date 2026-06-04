@@ -1,0 +1,900 @@
+"""Organization, membership, and invite admin routes.
+
+Three concerns share this module because the route surface is one
+operator's view of "their" org — switching, settings, members, invites
+all live under ``/api/orgs/me/*`` or ``/api/me/*``.
+
+Three auth gates are used:
+
+* ``get_current_user`` — for the multi-org switching surface. The
+  switch endpoint is the only place we touch orgs the user might not
+  be currently active in, so the gate is just "is this a signed-in
+  user" and the verification is per-call.
+* ``get_current_org_member`` — read-only org context (list members,
+  list invites, GET org details).
+* ``require_owner`` — owner-gated mutations (PATCH org, manage members,
+  create/revoke invites, manage logo).
+
+Logo uploads live under ``settings.upload_dir/org-logos/{org_id}/`` so
+the disk layout mirrors the existing client-upload pattern. The path
+prefix is reconstructed from authenticated state (the active org's
+``id``) — never from the wire body.
+"""
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from pulse_api import email as email_module
+from pulse_api import storage
+from pulse_api.auth.email_messages import org_invite_email
+from pulse_api.auth.middleware import (
+    get_current_org_member,
+    get_current_user,
+    get_org_scoped_session,
+    require_owner,
+)
+from pulse_api.auth.session import write_session
+from pulse_api.config import settings
+from pulse_api.db import get_admin_session
+from pulse_api.models import OrganizationMembership, User
+from pulse_api.models._helpers import utcnow_naive
+from pulse_api.repos import invites as invites_repo
+from pulse_api.repos import memberships as memberships_repo
+from pulse_api.repos import orgs as orgs_repo
+
+router = APIRouter(tags=["orgs"])
+
+
+async def _reset_role_on_admin_session(session: AsyncSession) -> None:
+    """Reset the effective role on the admin session.
+
+    In production this is a no-op (the ``pulse_admin`` engine opens its
+    own connection that's already at the right role). In tests the
+    admin session shares the test transaction's connection, so the
+    org-scoped session's ``set local role pulse_member`` would
+    otherwise leak across — calling ``reset role`` brings the
+    connection back to its session_user (the owner role in dev) so
+    queries against ``users`` succeed.
+    """
+    await session.execute(text("reset role"))
+
+# ── Request/response models ───────────────────────────────────────────────
+
+
+class OrgSummary(BaseModel):
+    """Slim org payload used in the ``/api/me/orgs`` list."""
+
+    id: str
+    name: str
+    slug: str
+    role: str
+    logo_path: str | None = None
+
+
+class SwitchOrgRequest(BaseModel):
+    """Body for ``POST /api/me/switch-org``."""
+
+    org_id: str
+
+
+class OrgDetails(BaseModel):
+    """Returned by ``GET /api/orgs/me`` — the Settings page header."""
+
+    id: str
+    name: str
+    slug: str
+    logo_path: str | None = None
+    role: str
+    member_count: int
+    pending_invite_count: int
+
+
+class UpdateOrgRequest(BaseModel):
+    """Body for ``PATCH /api/orgs/me``. Slug is intentionally immutable."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class UpdateMemberRequest(BaseModel):
+    """Body for ``PATCH /api/orgs/me/members/{user_id}``."""
+
+    role: str = Field(pattern=r"^(owner|member)$")
+
+
+class MemberRow(BaseModel):
+    """Row in the ``/api/orgs/me/members`` listing."""
+
+    user_id: str
+    email: str
+    name: str | None
+    role: str
+    joined_at: object  # datetime — Pydantic v2 handles it
+
+
+class CreateInviteRequest(BaseModel):
+    """Body for ``POST /api/orgs/me/invites``."""
+
+    email: EmailStr
+    role: str = Field(pattern=r"^(owner|member)$")
+
+
+class InviteSummary(BaseModel):
+    """Returned by the invite list + create endpoints (no token)."""
+
+    id: str
+    email: str
+    role: str
+    created_at: object  # datetime
+    expires_at: object  # datetime
+    invited_by_email: str | None = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────
+
+
+def _role_str(membership: OrganizationMembership) -> str:
+    """Return ``membership.role`` as a plain string regardless of enum shape.
+
+    The role column is plain text on disk; SQLModel instances can
+    surface either the enum or the raw value depending on how the row
+    was loaded.
+    """
+    return (
+        membership.role.value
+        if hasattr(membership.role, "value")
+        else str(membership.role)
+    )
+
+
+# ── Multi-org switching ───────────────────────────────────────────────────
+
+
+@router.get("/api/me/orgs", response_model=list[OrgSummary])
+async def list_my_orgs(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[OrgSummary]:
+    """List every org the user is a member of.
+
+    Uses a BYPASSRLS session because the list spans every org — RLS
+    would filter to only the currently-active org, which is the
+    opposite of what this endpoint is for.
+    """
+    rows = await orgs_repo.list_orgs_for_user(session, user.id)
+    return [
+        OrgSummary(
+            id=str(r["id"]),
+            name=str(r["name"]),
+            slug=str(r["slug"]),
+            role=str(r["role"]),
+            logo_path=r.get("logo_path"),
+        )
+        for r in rows
+    ]
+
+
+@router.post("/api/me/switch-org", response_model=OrgSummary)
+async def switch_org(
+    req: SwitchOrgRequest,
+    response: Response,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_admin_session),
+) -> OrgSummary:
+    """Set the active org for the caller's session.
+
+    Verifies the user holds a current membership in the target org,
+    updates ``users.last_active_org_id``, and re-issues the session
+    cookie with the new ``active_org_id``. Returns the resolved org so
+    the UI can update its header without an extra round-trip.
+
+    Returns 422 for a malformed UUID, 403 for an org the user isn't a
+    member of (or doesn't exist).
+    """
+    try:
+        target_org_id = uuid.UUID(req.org_id)
+    except (TypeError, ValueError) as exc:
+        # Match FastAPI's malformed-uuid error shape.
+        raise HTTPException(status_code=422, detail="invalid org_id") from exc
+
+    is_member = await orgs_repo.is_member_of(
+        session, user_id=user.id, org_id=target_org_id
+    )
+    if not is_member:
+        # Same shape regardless of "doesn't exist" vs "not a member" so
+        # an attacker can't probe org existence.
+        raise HTTPException(
+            status_code=403, detail="not a member of the target organization"
+        )
+
+    rows = await orgs_repo.list_orgs_for_user(session, user.id)
+    org_row = next((r for r in rows if str(r["id"]) == str(target_org_id)), None)
+    if org_row is None:
+        # Race: the membership disappeared between the two queries.
+        raise HTTPException(
+            status_code=403, detail="not a member of the target organization"
+        )
+
+    await orgs_repo.set_last_active_org(
+        session, user_id=user.id, org_id=target_org_id
+    )
+    await session.commit()
+
+    write_session(response, user_id=user.id, active_org_id=target_org_id)
+
+    return OrgSummary(
+        id=str(org_row["id"]),
+        name=str(org_row["name"]),
+        slug=str(org_row["slug"]),
+        role=str(org_row["role"]),
+        logo_path=org_row.get("logo_path"),
+    )
+
+
+# ── Org details + branding ────────────────────────────────────────────────
+
+
+@router.get("/api/orgs/me", response_model=OrgDetails)
+async def get_my_org(
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> OrgDetails:
+    """Return the active org's name + slug + logo + the caller's role
+    plus member/invite counts. Single endpoint for the Settings header.
+    """
+    _, membership = org_member
+    row = await orgs_repo.get_for_member(session, membership.org_id)
+    if row is None:
+        # RLS narrowed the org row away — would imply the GUC and the
+        # membership disagree, which shouldn't be possible. Treat as 404.
+        raise HTTPException(status_code=404, detail="organization not found")
+    member_count = await orgs_repo.member_count(session, membership.org_id)
+    invite_count = await orgs_repo.pending_invite_count(session, membership.org_id)
+    return OrgDetails(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        slug=str(row["slug"]),
+        logo_path=row.get("logo_path"),
+        role=_role_str(membership),
+        member_count=member_count,
+        pending_invite_count=invite_count,
+    )
+
+
+@router.patch("/api/orgs/me", response_model=OrgDetails)
+async def update_my_org(
+    req: UpdateOrgRequest,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> OrgDetails:
+    """Owner-only. Update the org's display name.
+
+    Slug is immutable — it appears in URLs and the audit log, and a
+    rename would invalidate links. Logo updates go through the
+    dedicated ``POST /api/orgs/me/logo`` endpoint.
+    """
+    _, membership = org_member
+    fields = req.model_dump(exclude_unset=True)
+    if "name" in fields and fields["name"] is not None:
+        row = await orgs_repo.update_name(
+            session, org_id=membership.org_id, name=fields["name"].strip()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="organization not found"
+            )
+    else:
+        row = await orgs_repo.get_for_member(session, membership.org_id)
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="organization not found"
+            )
+
+    await session.commit()
+    member_count = await orgs_repo.member_count(session, membership.org_id)
+    invite_count = await orgs_repo.pending_invite_count(
+        session, membership.org_id
+    )
+    return OrgDetails(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        slug=str(row["slug"]),
+        logo_path=row.get("logo_path"),
+        role=_role_str(membership),
+        member_count=member_count,
+        pending_invite_count=invite_count,
+    )
+
+
+# Defense-in-depth: each allowed mime maps to the extension we'll
+# write. We accept the lookup from BOTH sides — the wire-supplied
+# content-type AND the file's extension must both point at the same
+# entry. Reject if either is missing or they disagree.
+_LOGO_MIME_TO_EXT: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/svg+xml": ".svg",
+    "image/webp": ".webp",
+}
+_LOGO_EXT_TO_MIME: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+}
+
+
+def _validate_logo_upload(
+    file: UploadFile, content: bytes
+) -> tuple[str, str]:
+    """Validate logo content type, extension, and size.
+
+    Returns ``(safe_extension, mime_type)``. Raises HTTPException with
+    the right status code on rejection:
+
+    * 413 — size > ``settings.max_org_logo_bytes``.
+    * 400 — empty file.
+    * 415 — MIME and extension don't match an allow-listed pair.
+    """
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(content) > settings.max_org_logo_bytes:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    content_type = (file.content_type or "").lower().strip()
+    if content_type not in settings.allowed_logo_mime_types:
+        raise HTTPException(
+            status_code=415, detail=f"unsupported content-type: {content_type!r}"
+        )
+
+    ext = Path(file.filename or "").suffix.lower()
+    expected_ext = _LOGO_MIME_TO_EXT.get(content_type)
+    # Both sides must agree. .jpg ↔ image/jpeg is the only alias.
+    if expected_ext is None or _LOGO_EXT_TO_MIME.get(ext) != content_type:
+        raise HTTPException(
+            status_code=415,
+            detail="content-type and filename extension do not match",
+        )
+    return expected_ext, content_type
+
+
+@router.post("/api/orgs/me/logo")
+async def upload_org_logo(
+    file: UploadFile = File(...),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> dict[str, str]:
+    """Owner-only multipart upload. Replaces any existing logo.
+
+    Constraints:
+
+    * ≤ ``settings.max_org_logo_bytes`` (default 500KB).
+    * Content-Type ∈ ``settings.allowed_logo_mime_types``.
+    * Filename extension must match the supplied content type.
+
+    On success, writes the file under
+    ``settings.upload_dir/org-logos/{org_id}/{uuid}.{ext}`` and updates
+    ``organizations.logo_path``. Returns ``{logo_path}``.
+    """
+    _, membership = org_member
+    content = await file.read()
+    ext, _mime = _validate_logo_upload(file, content)
+
+    org_id_str = str(membership.org_id)
+    # Trust boundary: the prefix segment is the active org's id taken
+    # from the authenticated membership — never the wire body.
+    relative_path = f"org-logos/{org_id_str}/{uuid.uuid4()}{ext}"
+    try:
+        storage.resolve_within_upload_dir(relative_path)
+    except storage.StoragePathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    storage.write_upload(relative_path=relative_path, content=content)
+
+    # Best-effort: delete the previous logo on disk so old files don't
+    # accumulate. The DB row is the source of truth; an orphan on disk
+    # is cheap to recover from.
+    previous = await orgs_repo.get_for_member(session, membership.org_id)
+    if previous and previous.get("logo_path"):
+        storage.delete_upload(str(previous["logo_path"]))
+
+    await orgs_repo.set_logo_path(
+        session, org_id=membership.org_id, logo_path=relative_path
+    )
+    await session.commit()
+    return {"logo_path": relative_path}
+
+
+@router.delete("/api/orgs/me/logo", status_code=204)
+async def delete_org_logo(
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> None:
+    """Owner-only. Clear the org's logo and best-effort delete the file."""
+    _, membership = org_member
+    previous = await orgs_repo.get_for_member(session, membership.org_id)
+    if previous and previous.get("logo_path"):
+        storage.delete_upload(str(previous["logo_path"]))
+    await orgs_repo.set_logo_path(
+        session, org_id=membership.org_id, logo_path=None
+    )
+    await session.commit()
+
+
+@router.get("/api/orgs/me/logo/{filename}")
+async def serve_org_logo(
+    filename: str,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> FileResponse:
+    """Serve the logo bytes for the active org.
+
+    Auth: any member of the active org. The filename in the URL is the
+    UUID-based name we minted at upload, so unguessable as a discovery
+    vector; the auth gate still narrows access to people who can already
+    reach the org.
+
+    Path traversal defense lives in
+    ``storage.resolve_within_upload_dir`` — refuses absolute paths,
+    ``..`` traversal, and anything that resolves outside the upload root.
+    """
+    _, membership = org_member
+    base_name = Path(filename).name
+    if base_name != filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    relative_path = f"org-logos/{membership.org_id}/{base_name}"
+    try:
+        path = storage.resolve_within_upload_dir(relative_path)
+    except storage.StoragePathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Confirm this is in fact the active logo (avoids leaking old logos
+    # after they were replaced — the previous-file delete is best-effort).
+    row = await orgs_repo.get_for_member(session, membership.org_id)
+    if row is None or row.get("logo_path") != relative_path:
+        raise HTTPException(status_code=404, detail="logo not found")
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="logo not found")
+
+    mime = _LOGO_EXT_TO_MIME.get(
+        path.suffix.lower(), "application/octet-stream"
+    )
+    headers: dict[str, str] = {}
+    if path.suffix.lower() == ".svg":
+        # SVG can embed scripts — strict CSP so direct-tab opens are safe.
+        headers["Content-Security-Policy"] = (
+            "script-src 'none'; default-src 'self' data:;"
+        )
+    return FileResponse(path=path, media_type=mime, headers=headers)
+
+
+# ── Members ───────────────────────────────────────────────────────────────
+
+
+async def _list_members_two_pass(
+    *,
+    member_session: AsyncSession,
+    admin_session: AsyncSession,
+    org_id: object,
+) -> list[dict[str, object]]:
+    """Two-pass membership listing.
+
+    Step 1 (``member_session``, RLS-scoped) — fetch bare
+    ``organization_memberships`` rows for the active org.
+
+    Step 2 (``admin_session``, BYPASSRLS) — resolve user_id → email/name.
+
+    The ``reset role`` between steps is a no-op in production
+    (different engines / connections) and a deliberate clean-up in
+    tests (shared connection — the org-scoped dep set role to
+    ``pulse_member``, which would otherwise block the users SELECT).
+    """
+    rows = await memberships_repo.list_membership_rows(member_session, org_id)
+    if not rows:
+        return []
+    await _reset_role_on_admin_session(admin_session)
+    user_ids = [str(r["user_id"]) for r in rows]
+    user_map = await memberships_repo.list_user_display_fields(
+        admin_session, user_ids
+    )
+    out: list[dict[str, object]] = []
+    for r in rows:
+        u = user_map.get(str(r["user_id"]))
+        if u is None:
+            continue
+        out.append(
+            {
+                "user_id": str(r["user_id"]),
+                "email": u["email"],
+                "name": u["name"],
+                "role": r["role"],
+                "joined_at": r["joined_at"],
+            }
+        )
+    return out
+
+
+@router.get("/api/orgs/me/members", response_model=list[MemberRow])
+async def list_org_members(
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    member_session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
+) -> list[MemberRow]:
+    """List members of the active org. Visible to any member of the org.
+
+    Two-pass to avoid a join the ``pulse_member`` role can't make
+    (no SELECT on ``users``): membership rows via the RLS-scoped
+    ``member_session``; display fields via the BYPASSRLS
+    ``admin_session``. The route gate plus the org_id-RLS on the
+    membership half are the tenant boundary.
+    """
+    _, membership = org_member
+    rows = await _list_members_two_pass(
+        member_session=member_session,
+        admin_session=admin_session,
+        org_id=membership.org_id,
+    )
+    return [
+        MemberRow(
+            user_id=str(r["user_id"]),
+            email=str(r["email"]),
+            name=(str(r["name"]) if r.get("name") is not None else None),
+            role=str(r["role"]),
+            joined_at=r["joined_at"],
+        )
+        for r in rows
+    ]
+
+
+@router.patch("/api/orgs/me/members/{user_id}", response_model=MemberRow)
+async def update_member_role(
+    user_id: str,
+    req: UpdateMemberRequest,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
+) -> MemberRow:
+    """Owner-only. Change a member's role.
+
+    The "at least one owner" invariant is enforced application-side:
+    demoting the last owner returns 409. Demoting yourself when you
+    are the only owner also returns 409 — same invariant, separate
+    error message for the UI.
+
+    Uses both sessions: ``session`` (``pulse_member``) for the membership
+    mutation so RLS scopes it; ``admin_session`` for the join-to-users
+    re-fetch of the display row (``users`` is not granted to
+    ``pulse_member`` — see ``memberships.list_members``).
+    """
+    _caller_user, membership = org_member
+
+    try:
+        target_user_id = uuid.UUID(user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="member not found") from exc
+
+    existing = await memberships_repo.get_membership(
+        session, org_id=membership.org_id, user_id=target_user_id
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="member not found")
+
+    current_role = str(existing["role"])
+    new_role = req.role
+
+    if current_role != new_role:
+        # Demoting an owner — enforce the "at least one owner" invariant.
+        if current_role == "owner" and new_role != "owner":
+            # Lock all owners to serialize concurrent demote/remove;
+            # prevents the last-owner TOCTOU.
+            await memberships_repo.lock_owners(session, membership.org_id)
+            owners = await memberships_repo.count_owners(
+                session, membership.org_id
+            )
+            if owners <= 1:
+                raise HTTPException(
+                    status_code=409, detail="at least one owner required"
+                )
+
+        updated = await memberships_repo.update_role(
+            session,
+            org_id=membership.org_id,
+            user_id=target_user_id,
+            role=new_role,
+        )
+        if updated is None:  # pragma: no cover — get_membership above guards
+            raise HTTPException(status_code=404, detail="member not found")
+        await session.commit()
+
+    # Re-fetch the joined row so we return display fields. Uses the
+    # two-pass helper because the join needs SELECT on users.
+    rows = await _list_members_two_pass(
+        member_session=session,
+        admin_session=admin_session,
+        org_id=membership.org_id,
+    )
+    row = next(
+        (r for r in rows if str(r["user_id"]) == str(target_user_id)),
+        None,
+    )
+    if row is None:  # pragma: no cover — we just updated it
+        raise HTTPException(status_code=404, detail="member not found")
+    return MemberRow(
+        user_id=str(row["user_id"]),
+        email=str(row["email"]),
+        name=(str(row["name"]) if row.get("name") is not None else None),
+        role=str(row["role"]),
+        joined_at=row["joined_at"],
+    )
+
+
+@router.delete("/api/orgs/me/members/{user_id}", status_code=204)
+async def remove_org_member(
+    user_id: str,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
+) -> None:
+    """Owner-only. Remove a member from the active org.
+
+    Refuses to remove the last owner (whether that's the caller or
+    anyone else). On success, clears
+    ``users.last_active_org_id`` for the removed user iff it was
+    pointing at this org — otherwise their next sign-in would 403
+    until they explicitly switched.
+
+    The user row itself is preserved; they may belong to other orgs.
+    """
+    _, membership = org_member
+
+    try:
+        target_user_id = uuid.UUID(user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="member not found") from exc
+
+    existing = await memberships_repo.get_membership(
+        session, org_id=membership.org_id, user_id=target_user_id
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="member not found")
+
+    if str(existing["role"]) == "owner":
+        # Lock all owners to serialize concurrent demote/remove;
+        # prevents the last-owner TOCTOU.
+        await memberships_repo.lock_owners(session, membership.org_id)
+        owners = await memberships_repo.count_owners(session, membership.org_id)
+        if owners <= 1:
+            raise HTTPException(
+                status_code=409, detail="at least one owner required"
+            )
+
+    ok = await memberships_repo.remove_member(
+        session, org_id=membership.org_id, user_id=target_user_id
+    )
+    if not ok:  # pragma: no cover — get_membership above guards
+        raise HTTPException(status_code=404, detail="member not found")
+    await session.commit()
+
+    # Clear the user's last_active_org_id if it was pointing at this
+    # org. Uses the admin session because ``users`` has no grant to
+    # ``pulse_member``; the route gate is the auth boundary.
+    await _reset_role_on_admin_session(admin_session)
+    await orgs_repo.clear_last_active_org_if_match(
+        admin_session,
+        user_id=target_user_id,
+        org_id=membership.org_id,
+    )
+    await admin_session.commit()
+
+
+# ── Invites ───────────────────────────────────────────────────────────────
+
+
+@router.get("/api/orgs/me/invites", response_model=list[InviteSummary])
+async def list_org_invites(
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    member_session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
+) -> list[InviteSummary]:
+    """List pending (non-expired, unaccepted) invites for the active org.
+
+    Two-pass like the member listing: invite rows via the RLS-scoped
+    ``member_session``, inviter display email via the BYPASSRLS
+    ``admin_session`` (``pulse_member`` has no SELECT on ``users``).
+    """
+    _, membership = org_member
+    rows = await invites_repo.list_pending_invite_rows(
+        member_session, membership.org_id
+    )
+    if not rows:
+        return []
+    inviter_ids = [
+        str(r["invited_by_user_id"])
+        for r in rows
+        if r.get("invited_by_user_id") is not None
+    ]
+    await _reset_role_on_admin_session(admin_session)
+    user_map = await memberships_repo.list_user_display_fields(
+        admin_session, inviter_ids
+    )
+    out: list[InviteSummary] = []
+    for r in rows:
+        inviter_id = r.get("invited_by_user_id")
+        inviter_email = None
+        if inviter_id is not None:
+            u = user_map.get(str(inviter_id))
+            if u is not None:
+                inviter_email = str(u["email"])
+        out.append(
+            InviteSummary(
+                id=str(r["id"]),
+                email=str(r["email"]),
+                role=str(r["role"]),
+                created_at=r["created_at"],
+                expires_at=r["expires_at"],
+                invited_by_email=inviter_email,
+            )
+        )
+    return out
+
+
+@router.post(
+    "/api/orgs/me/invites", status_code=201, response_model=InviteSummary
+)
+async def create_invite(
+    req: CreateInviteRequest,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
+) -> InviteSummary:
+    """Owner-only. Create a pending invite + send the email.
+
+    Validation:
+
+    * 409 if the email is already a member of this org.
+    * 409 if a pending non-expired invite already exists for
+      ``(org_id, email)`` — re-sending the link would just confuse the
+      recipient.
+
+    Storage: only the SHA-256 hash of the signed token lives in the DB.
+    The raw token is embedded in the outbound email and is never
+    persisted nor returned in the response.
+
+    Uses both sessions: ``session`` (``pulse_member``) writes the
+    invite under org-RLS; ``admin_session`` does the
+    ``has_membership_in_org`` check that joins through ``users``.
+    """
+    user, membership = org_member
+    target_email = req.email.lower().strip()
+
+    await _reset_role_on_admin_session(admin_session)
+    already_member = await memberships_repo.is_existing_user_membership(
+        member_session=session,
+        admin_session=admin_session,
+        org_id=membership.org_id,
+        email=target_email,
+    )
+    if already_member:
+        raise HTTPException(
+            status_code=409, detail="user is already a member of this organization"
+        )
+
+    existing_invite = await invites_repo.find_pending_invite_for_email(
+        session, org_id=membership.org_id, email=target_email
+    )
+    if existing_invite is not None:
+        raise HTTPException(
+            status_code=409, detail="invite already pending for this email"
+        )
+
+    # Expiry — use the configured max-age so the link the email contains
+    # and the DB row agree on when it stops working.
+    expires_at = utcnow_naive() + _max_age_delta()
+
+    row, raw_token = await invites_repo.create_invite(
+        session,
+        org_id=membership.org_id,
+        email=target_email,
+        role=req.role,
+        invited_by_user_id=user.id,
+        expires_at=expires_at,
+    )
+    # Look up the org name so the email body can be human-readable.
+    org_row = await orgs_repo.get_for_member(session, membership.org_id)
+    org_name = str(org_row["name"]) if org_row else "your organization"
+
+    subject, body = org_invite_email(
+        raw_token,
+        org_name=org_name,
+        inviter_name=user.name,
+        role=req.role,
+    )
+    await email_module.send_email(target_email, subject, body)
+    await session.commit()
+
+    return InviteSummary(
+        id=str(row["id"]),
+        email=str(row["email"]),
+        role=str(row["role"]),
+        created_at=row["created_at"],
+        expires_at=row["expires_at"],
+        invited_by_email=user.email,
+    )
+
+
+@router.delete("/api/orgs/me/invites/{invite_id}", status_code=204)
+async def revoke_invite(
+    invite_id: str,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> None:
+    """Owner-only. Revoke a pending invite.
+
+    Stamps a dedicated ``revoked_at`` column (added in 0006) so the
+    public token-resolve endpoint can return ``status = "revoked"`` —
+    distinct from ``"accepted"``, so the acceptance UI can render an
+    actionable "this invite was revoked, ask the owner for a new
+    link" message instead of the misleading "already used" copy.
+    """
+    _, membership = org_member
+    try:
+        as_uuid = uuid.UUID(invite_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="invite not found") from exc
+
+    ok = await invites_repo.revoke_pending(
+        session, invite_id=as_uuid, org_id=membership.org_id
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="invite not found")
+    await session.commit()
+
+
+def _max_age_delta():
+    """Translate ``settings.invite_token_max_age_seconds`` to a timedelta."""
+    from datetime import timedelta
+
+    return timedelta(seconds=settings.invite_token_max_age_seconds)
