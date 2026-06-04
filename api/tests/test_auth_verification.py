@@ -20,6 +20,14 @@ from pulse_api.config import settings
 from pulse_api.email import OutboundEmail
 
 
+@pytest.fixture(autouse=True)
+def _enable_signup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests drive the verification flow through `POST /signup`.
+    Production gates that endpoint; this module opts in.
+    """
+    monkeypatch.setattr(settings, "signup_enabled", True)
+
+
 def _extract_token(emails: list[OutboundEmail], rel_path: str) -> str:
     """Pull the `token=...` query value out of the first matching email body."""
     for e in emails:

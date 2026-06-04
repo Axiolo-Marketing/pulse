@@ -15,6 +15,7 @@ Strategy:
 """
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from pathlib import Path  # noqa: F401  (used by tmp_uploads_dir fixture)
@@ -32,9 +33,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from pulse_api import email as email_module
+from pulse_api.auth.middleware import get_org_scoped_session
 from pulse_api.auth.session import encode_session
 from pulse_api.config import settings
 from pulse_api.db import get_admin_session, get_anon_session, get_session
@@ -239,15 +241,50 @@ async def client(
 
     monkeypatch.setattr(_api_keys_lib, "_touch_last_used", _patched_touch_last_used)
 
+    from pulse_api.auth.middleware import get_current_org_member
+
+    async def _override_org_scoped_session(
+        org_member=Depends(get_current_org_member),
+    ) -> AsyncIterator[AsyncSession]:
+        """Bind ``get_org_scoped_session`` to ``db_conn`` for tests.
+
+        Production opens a brand-new ``pulse_member`` connection per
+        request and flips the GUC. In tests we share the rolled-back
+        connection: flip the effective role to ``pulse_member``, set the
+        GUC to the resolved membership's ``org_id``, and yield a
+        session bound to ``db_conn``.
+
+        ``org_member`` comes from FastAPI's dep graph — the same
+        ``get_current_org_member`` that production uses. We re-evaluate
+        it via the Depends() machinery so the tests don't have to
+        re-implement the resolution logic.
+        """
+        _, membership = org_member
+        # The cookie-auth path in `_override_session` set role=anon for
+        # a prior request inside this test; reset before flipping.
+        await db_conn.execute(text("reset role"))
+        await db_conn.execute(text("set local role pulse_member"))
+        await db_conn.execute(
+            text("select set_config('pulse.org_id', :o, true)"),
+            {"o": str(membership.org_id)},
+        )
+        factory = async_sessionmaker(
+            bind=db_conn, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as session:
+            yield session
+
     app.dependency_overrides[get_session] = _override_session
     app.dependency_overrides[get_admin_session] = _override_session
     app.dependency_overrides[get_anon_session] = _override_anon_session
+    app.dependency_overrides[get_org_scoped_session] = _override_org_scoped_session
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.pop(get_session, None)
     app.dependency_overrides.pop(get_admin_session, None)
     app.dependency_overrides.pop(get_anon_session, None)
+    app.dependency_overrides.pop(get_org_scoped_session, None)
 
 
 # ── seed fixtures ─────────────────────────────────────────────────────────
@@ -261,6 +298,12 @@ async def axiolo_org(db: AsyncSession) -> dict[str, str]:
     same id. Returns ``{"id": str, "slug": "axiolo"}``. Every seed
     fixture below depends on this so newly-inserted tenant rows can
     carry a valid ``org_id``.
+
+    Side effect: sets ``pulse.org_id`` to the Axiolo org id on the
+    current transaction so the column DEFAULTs that 0004 installs on
+    ``responses`` and ``uploads`` populate correctly when tests insert
+    raw rows without an explicit ``org_id``. The default is overridden
+    by ``become_anon`` / ``become_member`` in tests that need it.
     """
     row = (
         await db.execute(
@@ -277,6 +320,10 @@ async def axiolo_org(db: AsyncSession) -> dict[str, str]:
         raise RuntimeError(
             "Axiolo org missing from test DB — has migration 0004 run?"
         )
+    await db.execute(
+        text("select set_config('pulse.org_id', :o, true)"),
+        {"o": row["id"]},
+    )
     return dict(row)
 
 
@@ -360,14 +407,15 @@ async def client_authed(client: AsyncClient, seed_client: dict[str, str]) -> Asy
 
 @pytest.fixture
 async def seed_user(db: AsyncSession) -> dict[str, str]:
-    """Insert a verified non-admin operator user. password_hash matches
-    `password`. Returned dict has id, email, password (plaintext for login
-    tests).
+    """Insert a verified operator user with no org membership.
 
-    No membership is created — this fixture models a user who exists
-    but is not (yet) attached to any org. Tests that need the user
-    attached to Axiolo should use ``seed_admin_user`` or attach the
-    membership explicitly.
+    Models a user who exists but is not (yet) attached to any org —
+    can hit ``/api/auth/me`` but every ``/api/admin/*`` call yields
+    403. Tests that need the user attached to Axiolo should use
+    ``seed_admin_user`` or attach a membership explicitly.
+
+    ``password_hash`` matches the returned ``password`` string so
+    login-flow tests can sign in.
     """
     from pulse_api.auth.password import hash_password
 
@@ -375,8 +423,9 @@ async def seed_user(db: AsyncSession) -> dict[str, str]:
     row = (
         await db.execute(
             text(
-                "insert into public.users (email, password_hash, name, is_admin, email_verified_at) "
-                "values (:e, :h, :n, false, now()) "
+                "insert into public.users "
+                "(email, password_hash, name, email_verified_at) "
+                "values (:e, :h, :n, now()) "
                 "returning id::text, email"
             ),
             {"e": "operator@example.com", "h": hash_password(pw), "n": "Operator"},
@@ -389,16 +438,16 @@ async def seed_user(db: AsyncSession) -> dict[str, str]:
 async def seed_admin_user(
     db: AsyncSession, axiolo_org: dict[str, str]
 ) -> dict[str, str]:
-    """Insert a verified admin user attached to the Axiolo org as owner.
+    """Insert a verified user with an owner membership on Axiolo.
 
-    Inserts the ``users`` row with ``is_admin = true`` (PR 1 keeps the
-    column — see migration 0004 module docstring), then inserts the
-    ``organization_memberships`` row that PR 2's auth refactor will key
-    on. ``users.last_active_org_id`` is set to Axiolo so the
-    admin_api ``create_engagement`` route's org_id lookup succeeds.
+    After PR 2 there is no ``users.is_admin`` column — admin powers come
+    from the ``organization_memberships`` row with ``role = 'owner'``.
+    ``users.last_active_org_id`` is set to Axiolo so the session cookie
+    minted by ``admin_session_cookie`` resolves to a member-scoped
+    session without requiring a switch-org call first.
 
-    Returned dict includes ``org_id`` for tests that want to assert
-    against the active org.
+    Returned dict includes ``org_id`` and ``membership_id`` for tests
+    that want to assert against the active org or role.
     """
     from pulse_api.auth.password import hash_password
 
@@ -407,9 +456,9 @@ async def seed_admin_user(
         await db.execute(
             text(
                 "insert into public.users "
-                "(email, password_hash, name, is_admin, "
+                "(email, password_hash, name, "
                 " last_active_org_id, email_verified_at) "
-                "values (:e, :h, :n, true, cast(:org as uuid), now()) "
+                "values (:e, :h, :n, cast(:org as uuid), now()) "
                 "returning id::text, email"
             ),
             {
@@ -421,24 +470,38 @@ async def seed_admin_user(
         )
     ).mappings().one()
     user_id = row["id"]
-    await db.execute(
-        text(
-            "insert into public.organization_memberships "
-            "(org_id, user_id, role) "
-            "values (cast(:org as uuid), cast(:uid as uuid), 'owner') "
-            "on conflict (org_id, user_id) do nothing"
-        ),
-        {"org": axiolo_org["id"], "uid": user_id},
-    )
-    return {**dict(row), "password": pw, "org_id": axiolo_org["id"]}
+    membership_row = (
+        await db.execute(
+            text(
+                "insert into public.organization_memberships "
+                "(org_id, user_id, role) "
+                "values (cast(:org as uuid), cast(:uid as uuid), 'owner') "
+                "on conflict (org_id, user_id) do update set role = 'owner' "
+                "returning id::text"
+            ),
+            {"org": axiolo_org["id"], "uid": user_id},
+        )
+    ).mappings().one()
+    return {
+        **dict(row),
+        "password": pw,
+        "org_id": axiolo_org["id"],
+        "membership_id": membership_row["id"],
+    }
 
 
 @pytest.fixture
 def admin_session_cookie(seed_admin_user: dict[str, str]) -> str:
-    """A signed session cookie value for the seeded admin. Fast path that
-    bypasses /login — use this when the test isn't about the login flow
-    itself."""
-    return encode_session(seed_admin_user["id"])
+    """A signed session cookie value for the seeded admin.
+
+    Fast path that bypasses ``/api/auth/login`` — use when the test
+    isn't about the login flow itself. Carries ``active_org_id =
+    axiolo`` so ``get_current_org_member`` resolves immediately without
+    needing to backfill from ``users.last_active_org_id``.
+    """
+    return encode_session(
+        seed_admin_user["id"], seed_admin_user["org_id"]
+    )
 
 
 @pytest.fixture
@@ -447,6 +510,41 @@ async def admin_authed(
 ) -> AsyncClient:
     client.cookies.set(settings.session_cookie_name, admin_session_cookie)
     return client
+
+
+@pytest.fixture(scope="session")
+async def mcp_session_manager() -> AsyncIterator[None]:
+    """Run the FastMCP session manager exactly once for the test session.
+
+    The MCP runtime is a singleton (``mcp_server.mcp.session_manager``)
+    backed by an anyio task group. Starting it twice — e.g. once from
+    ``test_mcp.py`` and again from ``test_mcp_org_scope.py`` — deadlocks
+    when the second ``async with mcp.session_manager.run()`` waits for
+    the cancel scope of the first task group, which is still alive.
+
+    Putting the fixture in the shared conftest makes both MCP test
+    modules share one manager. Both files request this fixture via
+    ``mcp_runtime``; one task hosts the manager for the lifetime of
+    the suite.
+    """
+    from pulse_api.mcp import server as _mcp_server
+
+    _ = _mcp_server.mcp.session_manager  # force lazy init
+    started = asyncio.Event()
+    shutdown = asyncio.Event()
+
+    async def _host() -> None:
+        async with _mcp_server.mcp.session_manager.run():
+            started.set()
+            await shutdown.wait()
+
+    task = asyncio.create_task(_host(), name="mcp-session-manager")
+    await started.wait()
+    try:
+        yield
+    finally:
+        shutdown.set()
+        await task
 
 
 @pytest.fixture(autouse=True)

@@ -27,32 +27,45 @@ from tests.conftest import become_anon
 RLS_TABLES = ["clients", "cards", "responses", "uploads"]
 
 
-async def _seed_full_set(db: AsyncSession, client_id: str, label: str) -> None:
-    """Insert one card + one response + one upload for the given client."""
+async def _seed_full_set(
+    db: AsyncSession,
+    client_id: str,
+    label: str,
+    *,
+    org_id: str,
+) -> None:
+    """Insert one card + one response + one upload for the given client.
+
+    ``org_id`` is NOT NULL on every tenant-scoped table (migration 0005);
+    we thread it through explicitly so the seed doesn't rely on the
+    ``responses`` / ``uploads`` GUC default.
+    """
     await db.execute(
         text(
             "insert into public.cards "
-            "(client_id, order_index, category, title, context, question, response_type) "
-            "values (cast(:cid as uuid), 1, 'C', :t, 'X', 'Q', 'short-text')"
+            "(client_id, order_index, category, title, context, question, "
+            " response_type, org_id) "
+            "values (cast(:cid as uuid), 1, 'C', :t, 'X', 'Q', 'short-text', "
+            "        cast(:o as uuid))"
         ),
-        {"cid": client_id, "t": f"{label} card"},
+        {"cid": client_id, "t": f"{label} card", "o": org_id},
     )
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state) "
-            "select id, client_id, 'answered' from public.cards "
+            "insert into public.responses (card_id, client_id, state, org_id) "
+            "select id, client_id, 'answered', cast(:o as uuid) from public.cards "
             "where client_id = cast(:cid as uuid)"
         ),
-        {"cid": client_id},
+        {"cid": client_id, "o": org_id},
     )
     await db.execute(
         text(
             "insert into public.uploads "
-            "(card_id, client_id, file_name, file_size_bytes, storage_path) "
-            "select id, client_id, :fn, 100, 'x/y/z' from public.cards "
-            "where client_id = cast(:cid as uuid)"
+            "(card_id, client_id, file_name, file_size_bytes, storage_path, org_id) "
+            "select id, client_id, :fn, 100, 'x/y/z', cast(:o as uuid) "
+            "from public.cards where client_id = cast(:cid as uuid)"
         ),
-        {"cid": client_id, "fn": f"{label}.pdf"},
+        {"cid": client_id, "fn": f"{label}.pdf", "o": org_id},
     )
 
 
@@ -64,8 +77,8 @@ async def test_anon_with_no_token_sees_zero_rows(
     other_seeded_client: dict[str, str],
     table: str,
 ) -> None:
-    await _seed_full_set(db, seed_client["id"], "renee")
-    await _seed_full_set(db, other_seeded_client["id"], "josh")
+    await _seed_full_set(db, seed_client["id"], "renee", org_id=seed_client["org_id"])
+    await _seed_full_set(db, other_seeded_client["id"], "josh", org_id=other_seeded_client["org_id"])
 
     await become_anon(db_conn)
 
@@ -81,8 +94,8 @@ async def test_anon_with_token_sees_only_own_rows(
     other_seeded_client: dict[str, str],
     table: str,
 ) -> None:
-    await _seed_full_set(db, seed_client["id"], "renee")
-    await _seed_full_set(db, other_seeded_client["id"], "josh")
+    await _seed_full_set(db, seed_client["id"], "renee", org_id=seed_client["org_id"])
+    await _seed_full_set(db, other_seeded_client["id"], "josh", org_id=other_seeded_client["org_id"])
 
     await become_anon(db_conn, token=seed_client["token"])
 

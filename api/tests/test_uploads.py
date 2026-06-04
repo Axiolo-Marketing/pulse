@@ -95,11 +95,13 @@ async def test_upload_other_clients_card_returns_404(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, response_type) "
-                "values (cast(:c as uuid), 1, 'C', 'their card', 'X', 'Q', 'file-upload') "
+                "(client_id, order_index, category, title, context, question, "
+                " response_type, org_id) "
+                "values (cast(:c as uuid), 1, 'C', 'their card', 'X', 'Q', "
+                "        'file-upload', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"c": other_seeded_client["id"]},
+            {"c": other_seeded_client["id"], "o": other_seeded_client["org_id"]},
         )
     ).mappings().one()
     r = await client_authed.post(
@@ -173,11 +175,13 @@ async def test_download_cannot_target_other_clients_upload(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, response_type) "
-                "values (cast(:c as uuid), 1, 'C', 'theirs', 'X', 'Q', 'file-upload') "
+                "(client_id, order_index, category, title, context, question, "
+                " response_type, org_id) "
+                "values (cast(:c as uuid), 1, 'C', 'theirs', 'X', 'Q', "
+                "        'file-upload', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"c": other_seeded_client["id"]},
+            {"c": other_seeded_client["id"], "o": other_seeded_client["org_id"]},
         )
     ).mappings().one()
 
@@ -249,22 +253,30 @@ async def test_delete_other_clients_upload_returns_404(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, response_type) "
-                "values (cast(:c as uuid), 1, 'C', 'theirs', 'X', 'Q', 'file-upload') "
+                "(client_id, order_index, category, title, context, question, "
+                " response_type, org_id) "
+                "values (cast(:c as uuid), 1, 'C', 'theirs', 'X', 'Q', "
+                "        'file-upload', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"c": other_seeded_client["id"]},
+            {"c": other_seeded_client["id"], "o": other_seeded_client["org_id"]},
         )
     ).mappings().one()
     upload_row = (
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, client_id, file_name, file_size_bytes, storage_path, mime_type) "
-                "values (cast(:k as uuid), cast(:c as uuid), 'x.bin', 1, 'fake/path', null) "
+                "(card_id, client_id, file_name, file_size_bytes, storage_path, "
+                " mime_type, org_id) "
+                "values (cast(:k as uuid), cast(:c as uuid), 'x.bin', 1, "
+                "        'fake/path', null, cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"k": card_row["id"], "c": other_seeded_client["id"]},
+            {
+                "k": card_row["id"],
+                "c": other_seeded_client["id"],
+                "o": other_seeded_client["org_id"],
+            },
         )
     ).mappings().one()
 

@@ -50,10 +50,12 @@ async def test_cards_returns_only_my_clients_cards(
     await db.execute(
         text(
             "insert into public.cards "
-            "(client_id, order_index, category, title, context, question, response_type) "
-            "values (cast(:cid as uuid), 99, 'C', 'Other card', 'X', 'Q', 'short-text')"
+            "(client_id, order_index, category, title, context, question, "
+            " response_type, org_id) "
+            "values (cast(:cid as uuid), 99, 'C', 'Other card', 'X', 'Q', "
+            "        'short-text', cast(:o as uuid))"
         ),
-        {"cid": other_seeded_client["id"]},
+        {"cid": other_seeded_client["id"], "o": other_seeded_client["org_id"]},
     )
 
     r = await client_authed.get("/api/cards")
@@ -81,10 +83,17 @@ async def test_cards_ordering_by_order_index(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, response_type) "
-                "values (cast(:cid as uuid), :i, 'C', :t, 'X', 'Q', 'short-text')"
+                "(client_id, order_index, category, title, context, question, "
+                " response_type, org_id) "
+                "values (cast(:cid as uuid), :i, 'C', :t, 'X', 'Q', "
+                "        'short-text', cast(:o as uuid))"
             ),
-            {"cid": seed_client["id"], "i": idx, "t": f"card-{idx}"},
+            {
+                "cid": seed_client["id"],
+                "i": idx,
+                "t": f"card-{idx}",
+                "o": seed_client["org_id"],
+            },
         )
 
     r = await client_authed.get("/api/cards")
@@ -146,11 +155,13 @@ async def test_mark_viewed_cannot_target_other_clients_card(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, response_type) "
-                "values (cast(:cid as uuid), 1, 'C', 'theirs', 'X', 'Q', 'short-text') "
+                "(client_id, order_index, category, title, context, question, "
+                " response_type, org_id) "
+                "values (cast(:cid as uuid), 1, 'C', 'theirs', 'X', 'Q', "
+                "        'short-text', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"cid": other_seeded_client["id"]},
+            {"cid": other_seeded_client["id"], "o": other_seeded_client["org_id"]},
         )
     ).mappings().one()
 
