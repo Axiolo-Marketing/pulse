@@ -1702,3 +1702,317 @@
     align-self: flex-start;
   }
 }
+
+/* ── Superadmin page (PR 5) ─────────────────────────────────────────────── */
+
+.superadmin-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.superadmin-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.superadmin-h {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.superadmin-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.superadmin-empty {
+  max-width: 480px;
+  margin: 80px auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+  padding: 24px;
+}
+
+.superadmin-create-form .edit-field {
+  max-width: 540px;
+}
+
+.superadmin-list-slot {
+  margin-top: 4px;
+}
+
+.superadmin-loading,
+.superadmin-error,
+.superadmin-empty-list {
+  margin: 0;
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.superadmin-error {
+  color: #b3261e;
+}
+
+/* Desktop table */
+.superadmin-table-wrap {
+  display: block;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--white);
+  box-shadow: var(--shadow-card);
+}
+
+.superadmin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.superadmin-table thead {
+  background: var(--surface-muted);
+}
+
+.superadmin-table th,
+.superadmin-table td {
+  text-align: left;
+  padding: 12px 16px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.superadmin-table thead th {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.superadmin-table tbody tr:last-child th,
+.superadmin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.superadmin-table th.num,
+.superadmin-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  width: 1%;
+  white-space: nowrap;
+}
+
+.superadmin-org-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.superadmin-org-slug {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.superadmin-owners {
+  color: var(--ink);
+  word-break: break-word;
+  max-width: 280px;
+}
+
+.superadmin-when {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.superadmin-actions-cell {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.superadmin-actions-cell .btn-ghost-sm {
+  margin-left: 4px;
+}
+
+.superadmin-row-confirm {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.superadmin-row-confirm[hidden] {
+  display: none;
+}
+
+/* Mobile cards (hidden ≥768px) */
+.superadmin-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.superadmin-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-card);
+}
+
+.superadmin-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.superadmin-card-name {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.superadmin-card-slug {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.superadmin-card-stats {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+}
+
+.superadmin-card-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.superadmin-card-stats dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.superadmin-card-stats dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.superadmin-card-owners {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.superadmin-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Members drawer (modal-shaped on desktop, full-width on mobile) */
+.superadmin-members-panel {
+  max-width: 560px;
+  width: 100%;
+}
+
+.superadmin-members-body {
+  padding: 16px 20px 20px;
+}
+
+.superadmin-members-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.superadmin-member {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+  gap: 12px;
+}
+
+.superadmin-member-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.superadmin-member-name {
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.superadmin-member-email {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.superadmin-member-role {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.superadmin-member-role--owner {
+  background: var(--primary-soft);
+  border-color: var(--primary-soft);
+  color: var(--primary-dark);
+}
+
+@media (max-width: 767px) {
+  .superadmin-table-wrap {
+    display: none;
+  }
+  .superadmin-cards {
+    display: flex;
+  }
+}

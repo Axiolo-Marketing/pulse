@@ -20,6 +20,7 @@ import {
   renderSettings as renderSettingsPage,
   type SettingsTab,
 } from "./settings";
+import { renderSuperadmin } from "./superadmin";
 import {
   STATUS_VALUES,
   suggestStatus,
@@ -341,7 +342,10 @@ interface RouteSettings {
   kind: "settings";
   tab: SettingsTab;
 }
-type Route = RouteList | RouteDetail | RouteSettings;
+interface RouteSuperadmin {
+  kind: "superadmin";
+}
+type Route = RouteList | RouteDetail | RouteSettings | RouteSuperadmin;
 
 function parseRoute(): Route {
   const hash = window.location.hash.replace(/^#/, "");
@@ -355,6 +359,9 @@ function parseRoute(): Route {
   }
   if (hash === "settings" || hash.startsWith("settings/")) {
     return { kind: "settings", tab: "personal" };
+  }
+  if (hash === "superadmin") {
+    return { kind: "superadmin" };
   }
   return { kind: "list" };
 }
@@ -398,7 +405,7 @@ async function runAdmin(mount: HTMLElement, user: AuthUser): Promise<void> {
     throw err;
   }
 
-  mount.innerHTML = renderShell();
+  mount.innerHTML = renderShell(state.user);
   attachShellHandlers(mount, state);
   renderShellOrg(mount, state);
 
@@ -418,8 +425,16 @@ async function runAdmin(mount: HTMLElement, user: AuthUser): Promise<void> {
   });
 }
 
-function renderShell(): string {
+function renderShell(user: AuthUser): string {
   const baseSlash = BASE_URL.endsWith("/") ? BASE_URL : `${BASE_URL}/`;
+  // Superadmin link only renders for users with `is_superadmin = true`.
+  // The backend is still the source of truth — `get_current_superadmin`
+  // gates every `/api/superadmin/*` call independently — but hiding the
+  // nav entry keeps the page from misleading non-super users into
+  // clicking through to a route they'd 404 on.
+  const superLink = user.is_superadmin
+    ? `<a class="admin-header-link" href="#superadmin" id="nav-superadmin">Superadmin</a>`
+    : "";
   return `
     <div class="admin-page">
       <header class="admin-header" role="banner">
@@ -435,6 +450,7 @@ function renderShell(): string {
         <nav class="admin-header-actions" aria-label="Primary">
           <a class="admin-header-link" href="#" id="nav-engagements">Engagements</a>
           <a class="admin-header-link" href="#settings/personal" id="nav-settings">Settings</a>
+          ${superLink}
           <button class="admin-logout" type="button" id="logout">Sign out</button>
         </nav>
       </header>
@@ -504,6 +520,7 @@ function setActiveNav(mount: HTMLElement, route: Route): void {
   };
   setActive("nav-engagements", route.kind === "list" || route.kind === "detail");
   setActive("nav-settings", route.kind === "settings");
+  setActive("nav-superadmin", route.kind === "superadmin");
 }
 
 async function draw(
@@ -518,6 +535,29 @@ async function draw(
       renderList(container, summaries);
     } catch (err) {
       console.error("load engagements:", err);
+      container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
+    }
+    return;
+  }
+
+  if (route.kind === "superadmin") {
+    container.innerHTML = `<div class="loading">Loading superadmin tools...</div>`;
+    try {
+      await renderSuperadmin({
+        container,
+        user: state.user,
+        helpers: { toast },
+      });
+      // The "back to engagements" CTA inside the not-found state needs
+      // the same hash-clearing handler the other empty states use.
+      container
+        .querySelector<HTMLAnchorElement>("[data-go-home]")
+        ?.addEventListener("click", (e) => {
+          e.preventDefault();
+          window.location.hash = "";
+        });
+    } catch (err) {
+      console.error("load superadmin:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
     }
     return;

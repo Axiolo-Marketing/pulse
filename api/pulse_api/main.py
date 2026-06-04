@@ -24,6 +24,7 @@ from pulse_api.routes import client_api as client_api_routes
 from pulse_api.routes import invites as invites_routes
 from pulse_api.routes import oauth as oauth_routes
 from pulse_api.routes import orgs as orgs_routes
+from pulse_api.routes import superadmin as superadmin_routes
 from pulse_api.routes import uploads as uploads_routes
 
 configure_logging()
@@ -72,6 +73,7 @@ app.include_router(attachments_routes.admin_router)
 app.include_router(attachments_routes.public_router)
 app.include_router(orgs_routes.router)
 app.include_router(invites_routes.router)
+app.include_router(superadmin_routes.router)
 
 # MCP server (streamable HTTP transport) — single endpoint at /api/mcp.
 # FastMCP's `streamable_http_path` is set to "/" in `pulse_api.mcp.server`
