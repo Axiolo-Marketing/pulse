@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Persona Library · Canary Commercialization</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #15324c;
+    --navy-deep: #0e2436;
+    --ink: #1d2a33;
+    --muted: #5e6f7a;
+    --line: #dfe4e6;
+    --paper: #fbfaf7;
+    --card: #ffffff;
+    --accent: #1f7a6d;
+    --eu: #15324c;
+    --partner: #1f7a6d;
+    --existing: #9a6a1e;
+    --other: #6b5687;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 0;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 28px 56px; }
+
+  header.masthead {
+    background: linear-gradient(160deg, var(--navy) 0%, var(--navy-deep) 100%);
+    color: #fff;
+    padding: 40px 0 34px;
+  }
+  .masthead .wrap { padding-bottom: 0; }
+  .kicker {
+    font-size: 11.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: #9fc4bd; font-weight: 600; margin-bottom: 14px;
+  }
+  h1 {
+    font-family: 'Fraunces', serif; font-weight: 500;
+    font-size: 40px; line-height: 1.05; letter-spacing: -0.01em;
+  }
+  .sub { margin-top: 12px; color: #c4d2da; font-size: 15px; max-width: 620px; }
+  .meta {
+    margin-top: 22px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.16);
+    display: flex; gap: 28px; flex-wrap: wrap; font-size: 12.5px; color: #aebfc8;
+  }
+  .meta b { color: #fff; font-weight: 600; }
+
+  .intro {
+    margin: 34px 0 26px; font-size: 15px; color: var(--muted);
+    max-width: 720px;
+  }
+  .intro strong { color: var(--ink); font-weight: 600; }
+
+  .cat-band {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 34px 0 16px;
+  }
+  .cat-band h2 {
+    font-family: 'Fraunces', serif; font-weight: 600; font-size: 19px; color: var(--navy);
+  }
+  .cat-band .rule { flex: 1; height: 1px; background: var(--line); }
+  .cat-band .count { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+
+  .persona {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; position: relative; overflow: hidden;
+  }
+  .persona::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--accent);
+  }
+  .persona[data-cat="eu"]::before { background: var(--eu); }
+  .persona[data-cat="partner"]::before { background: var(--partner); }
+  .persona[data-cat="existing"]::before { background: var(--existing); }
+  .persona[data-cat="other"]::before { background: var(--other); }
+
+  .pid {
+    font-family: 'IBM Plex Sans', monospace; font-size: 10.5px; letter-spacing: 0.06em;
+    color: var(--muted); font-weight: 600; text-transform: uppercase;
+  }
+  .pname {
+    font-family: 'Fraunces', serif; font-weight: 600; font-size: 17px;
+    color: var(--ink); margin: 3px 0 8px;
+  }
+  .pwho { font-size: 13.5px; color: var(--ink); margin-bottom: 10px; }
+  .ptitles { font-size: 12px; color: var(--muted); }
+  .ptitles b { color: var(--navy); font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; font-size: 10.5px; }
+
+  .note {
+    margin-top: 22px; background: #f0f5f4; border: 1px solid #d4e3df;
+    border-radius: 10px; padding: 16px 20px; font-size: 13px; color: #2c4a44;
+  }
+  .note b { color: var(--accent); }
+
+  footer {
+    margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+    font-size: 11.5px; color: var(--muted); letter-spacing: 0.03em;
+  }
+</style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="wrap">
+      <div class="kicker">Canary Commercialization · Audience Map</div>
+      <h1>Persona Library</h1>
+      <p class="sub">The eight client-facing personas that anchor the marketing audience map. This is the working reference for persona weighting and prioritization.</p>
+      <div class="meta">
+        <span><b>Source</b> &nbsp;01 Persona Library v3.4</span>
+        <span><b>Categories</b> &nbsp;End User · Partner · Existing Customer · Other</span>
+        <span><b>For</b> &nbsp;Canary Labs, Inc.</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <p class="intro">Each persona below is a distinct type of person who contacts Canary, with its own motivations, information needs, and buying role. <strong>Confirm the map is right, then weight which two or three matter most right now.</strong> Where a persona is missing, mislabeled, or one you would deprioritize, flag it.</p>
+
+    <!-- END USER -->
+    <div class="cat-band">
+      <h2>End User</h2>
+      <span class="count">3 personas</span>
+      <span class="rule"></span>
+    </div>
+    <div class="grid">
+      <div class="persona" data-cat="eu">
+        <div class="pid">PER-EU-BUYER</div>
+        <div class="pname">End User Buyer</div>
+        <div class="pwho">Holds budget authority or purchasing influence. Signs or recommends the PO. Evaluating whether Canary is the right investment, not necessarily a day-to-day user.</div>
+        <div class="ptitles"><b>Titles</b><br>VP of IT, Control Systems Project Manager, Plant Manager, Engineering Director</div>
+      </div>
+      <div class="persona" data-cat="eu">
+        <div class="pid">PER-EU-TECH</div>
+        <div class="pname">End User Technical Evaluator</div>
+        <div class="pwho">The engineer who will use Canary daily. Validates compatibility with existing systems. Does not sign the PO, but the deal does not happen without their technical approval.</div>
+        <div class="ptitles"><b>Titles</b><br>Controls Engineer, Automation &amp; Controls Software Engineer, SCADA Manager, Instrumentation Engineer</div>
+      </div>
+      <div class="persona" data-cat="eu">
+        <div class="pid">PER-EU-PART</div>
+        <div class="pname">End User with Existing Partner</div>
+        <div class="pwho">An engineer at a larger company already working with a Canary partner or system integrator. Evaluating Canary while a partner is also in the relationship.</div>
+        <div class="ptitles"><b>Titles</b><br>Engineer (specific title varies)</div>
+      </div>
+    </div>
+
+    <!-- PARTNER -->
+    <div class="cat-band">
+      <h2>Partner</h2>
+      <span class="count">2 personas</span>
+      <span class="rule"></span>
+    </div>
+    <div class="grid">
+      <div class="persona" data-cat="partner">
+        <div class="pid">PER-SI</div>
+        <div class="pname">System Integrator / Partner</div>
+        <div class="pwho">Sells and implements Canary for end user clients. One persona value with three sub-types differentiated by lead subtype: Established Partner, Non-Program (project basis), and New Applicant.</div>
+        <div class="ptitles"><b>Titles</b><br>Company Owner, Director, Project Manager, Sales Account Manager, Controls/SCADA roles, Business Development</div>
+      </div>
+      <div class="persona" data-cat="partner">
+        <div class="pid">PER-OEM</div>
+        <div class="pname">OEM Partner</div>
+        <div class="pwho">A technology company that embeds Canary's historian into its own product or platform. Not implementing for a customer, building Canary into their own offering.</div>
+        <div class="ptitles"><b>Titles</b><br>Product Manager, Engineering Director, Business Development</div>
+      </div>
+    </div>
+
+    <!-- EXISTING CUSTOMER -->
+    <div class="cat-band">
+      <h2>Existing Customer</h2>
+      <span class="count">2 personas</span>
+      <span class="rule"></span>
+    </div>
+    <div class="grid">
+      <div class="persona" data-cat="existing">
+        <div class="pid">PER-EC-RENEW</div>
+        <div class="pname">Existing Customer, Renewal</div>
+        <div class="pwho">An active license holder returning to renew an annual subscription or CustomerCare contract. Already knows and uses Canary.</div>
+        <div class="ptitles"><b>Titles</b><br>Same as End User Buyer and Technical Evaluator, with an existing Canary relationship</div>
+      </div>
+      <div class="persona" data-cat="existing">
+        <div class="pid">PER-EC-EXPAND</div>
+        <div class="pname">Existing Customer, Expansion</div>
+        <div class="pwho">An active license holder expanding usage: more tags, more sites, upgrading CustomerCare tier, or a new project within an existing company.</div>
+        <div class="ptitles"><b>Titles</b><br>Same as End User Buyer and Technical Evaluator, with an existing Canary relationship</div>
+      </div>
+    </div>
+
+    <!-- OTHER -->
+    <div class="cat-band">
+      <h2>Other</h2>
+      <span class="count">1 persona</span>
+      <span class="rule"></span>
+    </div>
+    <div class="grid">
+      <div class="persona" data-cat="other">
+        <div class="pid">PER-EDU</div>
+        <div class="pname">Educator</div>
+        <div class="pwho">A professor, instructor, or department head in an industrial automation, controls engineering, or SCADA program who wants to use Canary in their curriculum.</div>
+        <div class="ptitles"><b>Titles</b><br>Professor, Department Chair, Program Director, Lab Coordinator</div>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>Note on the partner persona.</b> All SI/Partner contacts share the PER-SI value in HubSpot. Routing, sequence, and relationship differ by sub-type (Established Partner, Project Request, New Application) rather than by separate persona. A Distributor designation also exists for internal routing only and is not a client-marketed persona.
+    </div>
+
+    <footer>
+      <span>Persona Library v3.4 · Phase 1A Deliverable</span>
+      <span>Prepared by Zeibari &amp; Co, LLC · April 2026</span>
+    </footer>
+  </div>
+</body>
+</html>
