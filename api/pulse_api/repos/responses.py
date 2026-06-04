@@ -124,3 +124,14 @@ async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
     except Exception:
         return []
     return [dict(r) for r in result.mappings().all()]
+
+
+async def delete_all_for_client(session: AsyncSession, client_id: str) -> int:
+    """Admin reset: wipe every response for one engagement so the deck
+    restarts clean. Returns the number of rows removed. BYPASSRLS session
+    with an explicit client_id filter."""
+    result = await session.execute(
+        text("delete from public.responses where client_id = cast(:cid as uuid)"),
+        {"cid": client_id},
+    )
+    return result.rowcount or 0

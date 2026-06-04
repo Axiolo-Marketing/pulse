@@ -361,6 +361,11 @@ export const adminApi = {
   deleteEngagement: (id: string): Promise<void> =>
     request(`/api/admin/clients/${id}`, { method: "DELETE" }),
 
+  /** Clear all answers + uploaded files for a fresh restart. Cards and the
+   * link are preserved. Returns counts of what was cleared. */
+  resetEngagement: (id: string): Promise<{ responses_cleared: number; uploads_cleared: number }> =>
+    request(`/api/admin/clients/${id}/reset`, { method: "POST" }),
+
   createCard: (clientId: string, args: CreateCardArgs): Promise<Card> =>
     request(`/api/admin/clients/${clientId}/cards`, {
       method: "POST",

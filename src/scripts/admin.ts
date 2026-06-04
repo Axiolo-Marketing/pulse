@@ -1039,6 +1039,7 @@ function renderDetailHeader(client: Client): string {
       <button class="btn-secondary-sm" type="button" id="download-md">Download as Markdown</button>
       <button class="btn-secondary-sm" type="button" id="copy-all">Copy all as Markdown</button>
       <button class="btn-secondary-sm" type="button" id="copy-link">Copy link</button>
+      <button class="btn-secondary-sm warn" type="button" id="reset-engagement">Reset answers</button>
       <button class="btn-secondary-sm danger" type="button" id="delete-engagement">Delete</button>
     </div>
   `;
@@ -1338,6 +1339,35 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
           await adminApi.deleteEngagement(client.id);
           toast("Engagement deleted");
           window.location.hash = "";
+        },
+      });
+    });
+
+    headerEl.querySelector<HTMLButtonElement>("#reset-engagement")?.addEventListener("click", () => {
+      const label = [client.name, client.engagement_name].filter(Boolean).join(" · ");
+      const completed = [...responses.values()].filter(
+        (r) => r.state === "answered" || r.state === "skipped",
+      ).length;
+      const uploadCount = [...uploads.values()].reduce((n, list) => n + list.length, 0);
+      const lines = [`Reset all answers for ${label}?`];
+      const parts: string[] = [];
+      if (completed > 0) parts.push(`${completed} response${completed === 1 ? "" : "s"}`);
+      if (uploadCount > 0) parts.push(`${uploadCount} uploaded file${uploadCount === 1 ? "" : "s"}`);
+      if (parts.length > 0) {
+        lines.push(`This clears ${parts.join(" and ")}, returning every card to unanswered.`);
+      } else {
+        lines.push("There are no answers to clear yet.");
+      }
+      lines.push("The cards and the link stay the same, so the client can start over. This cannot be undone.");
+      openConfirmModal({
+        title: "Reset answers",
+        body: lines.join("\n"),
+        confirmLabel: "Reset answers",
+        danger: true,
+        onConfirm: async () => {
+          await adminApi.resetEngagement(client.id);
+          toast("Answers reset");
+          window.location.reload();
         },
       });
     });

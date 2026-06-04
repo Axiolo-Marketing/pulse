@@ -30,6 +30,20 @@ async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
     return [dict(r) for r in result.mappings().all()]
 
 
+async def delete_all_for_client(session: AsyncSession, client_id: str) -> list[dict]:
+    """Admin reset: delete every upload row for one engagement and return
+    the deleted rows so the route can remove the on-disk files. BYPASSRLS
+    session with an explicit client_id filter."""
+    result = await session.execute(
+        text(
+            f"delete from public.uploads where client_id = cast(:cid as uuid) "
+            f"returning {UPLOAD_COLS}"
+        ),
+        {"cid": client_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 # ── Client-mode (RLS-filtered) ─────────────────────────────────────────────
 
 
