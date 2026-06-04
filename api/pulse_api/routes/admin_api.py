@@ -165,6 +165,39 @@ async def delete_engagement(
         storage.delete_upload(path)
 
 
+@router.post("/clients/{client_id}/reset")
+async def reset_engagement(
+    client_id: str,
+    session: AsyncSession = Depends(get_admin_session),
+    _: User = Depends(get_current_admin),
+) -> dict[str, int]:
+    """Reset an engagement for a clean restart: wipe every response and
+    every upload (rows + on-disk files), returning all cards to an
+    unanswered state. The cards, the engagement, and the magic link are
+    left intact, so the same URL can be re-run by the client (or a fresh
+    reviewer). Distinct from delete, which removes everything.
+
+    Use when multiple people need to take the deck, or a client wants to
+    start over."""
+    if (await clients_repo.get_by_id(session, client_id)) is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+
+    removed_uploads = await uploads_repo.delete_all_for_client(session, client_id)
+    responses_cleared = await responses_repo.delete_all_for_client(session, client_id)
+    await session.commit()
+
+    # Files removed after the DB change is durable, mirroring delete: a
+    # failure here only leaves orphan files, never a row pointing at a
+    # missing file. delete_upload is best-effort and never raises.
+    for up in removed_uploads:
+        storage.delete_upload(up["storage_path"])
+
+    return {
+        "responses_cleared": responses_cleared,
+        "uploads_cleared": len(removed_uploads),
+    }
+
+
 @router.post("/clients/{client_id}/rotate-token")
 async def rotate_token(
     client_id: str,

@@ -26,6 +26,7 @@ ADMIN_ENDPOINTS = [
     ("PATCH",  "/api/admin/clients/00000000-0000-0000-0000-000000000000", {"name": "y"}),
     ("DELETE", "/api/admin/clients/00000000-0000-0000-0000-000000000000", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/rotate-token", None),
+    ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/reset", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards",
         {"category": "C", "title": "T", "context": "X", "question": "Q", "response_type": "short-text"}),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards/import-markdown",
@@ -344,6 +345,77 @@ async def test_delete_engagement_removes_upload_files_from_disk(
     r = await admin_authed.delete(f"/api/admin/clients/{client_id}")
     assert r.status_code == 204
     assert not full_path.exists()
+
+
+async def test_reset_engagement_clears_answers_keeps_cards(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    db: AsyncSession,
+    tmp_uploads_dir,
+) -> None:
+    """Reset wipes responses + uploads (rows and on-disk files) but leaves
+    the engagement and its cards intact for a clean re-run."""
+    client_id = seed_client["id"]
+    card_id = seed_cards[0]["id"]
+
+    # A response and an upload (row + file on disk).
+    await db.execute(
+        text(
+            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
+        ),
+        {"k": card_id, "c": client_id},
+    )
+    rel_path = f"{client_id}/{card_id}/reset-me.txt"
+    full_path = tmp_uploads_dir / rel_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(b"data")
+    await db.execute(
+        text(
+            "insert into public.uploads "
+            "(card_id, client_id, file_name, file_size_bytes, storage_path) "
+            "values (cast(:k as uuid), cast(:c as uuid), :fn, 4, :sp)"
+        ),
+        {"k": card_id, "c": client_id, "fn": "reset-me.txt", "sp": rel_path},
+    )
+
+    r = await admin_authed.post(f"/api/admin/clients/{client_id}/reset")
+    assert r.status_code == 200
+    assert r.json() == {"responses_cleared": 1, "uploads_cleared": 1}
+
+    # Answers gone, file unlinked.
+    responses_left = (
+        await db.execute(
+            text("select count(*) from public.responses where client_id = cast(:c as uuid)"),
+            {"c": client_id},
+        )
+    ).scalar_one()
+    uploads_left = (
+        await db.execute(
+            text("select count(*) from public.uploads where client_id = cast(:c as uuid)"),
+            {"c": client_id},
+        )
+    ).scalar_one()
+    assert responses_left == 0
+    assert uploads_left == 0
+    assert not full_path.exists()
+
+    # Cards + engagement preserved.
+    cards_left = (
+        await db.execute(
+            text("select count(*) from public.cards where client_id = cast(:c as uuid)"),
+            {"c": client_id},
+        )
+    ).scalar_one()
+    assert cards_left == len(seed_cards)
+    detail = await admin_authed.get(f"/api/admin/clients/{client_id}")
+    assert detail.status_code == 200
+
+
+async def test_reset_engagement_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
+    r = await admin_authed.post(f"/api/admin/clients/{uuid.uuid4()}/reset")
+    assert r.status_code == 404
 
 
 async def test_delete_engagement_unknown_id_returns_404(

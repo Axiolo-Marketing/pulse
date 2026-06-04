@@ -963,6 +963,17 @@
   background: var(--warning-soft, #fdecec);
 }
 
+/* Reset answers: destructive but recoverable (re-runnable), so amber, a
+   step below the red Delete. */
+.btn-secondary-sm.warn {
+  color: #9a6a1e;
+  border-color: #d8b878;
+  background: var(--white);
+}
+.btn-secondary-sm.warn:hover {
+  background: #fbf3e3;
+}
+
 .btn-danger-sm {
   font-family: var(--font-sans);
   font-size: 13px;
