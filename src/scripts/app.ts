@@ -200,6 +200,12 @@ function runApp(ctx: RunCtx): void {
       cards,
       responses,
       handlers,
+      // Org logo rendering on the client deck is deferred until the
+      // backend exposes a public token-scoped logo URL — the existing
+      // `/api/orgs/me/logo/...` endpoint requires a session cookie the
+      // client never has. The `RenderCardArgs.orgLogoSrc` field is
+      // already wired through so the wire-up is a single line once the
+      // backend ships a token-auth equivalent.
     });
   };
 

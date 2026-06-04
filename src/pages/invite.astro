@@ -1,0 +1,38 @@
+---
+import "../styles/admin.css";
+import "../styles/legal.css";
+const base = import.meta.env.BASE_URL ?? "/";
+const baseSlash = base.endsWith("/") ? base : `${base}/`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2960F6" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />
+    <title>Join your team · Pulse</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+    />
+  </head>
+  <body>
+    <div id="invite-mount">
+      <div class="loading">Loading invite...</div>
+    </div>
+    <footer class="app-legal-footer">
+      <a href={`${baseSlash}privacy`}>Privacy Policy</a>
+      <span class="sep" aria-hidden="true">·</span>
+      <a href={`${baseSlash}terms`}>Terms of Use</a>
+    </footer>
+
+    <script>
+      import "../scripts/invite.ts";
+    </script>
+  </body>
+</html>

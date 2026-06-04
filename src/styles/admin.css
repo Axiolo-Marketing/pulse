@@ -1052,3 +1052,653 @@
 .attachment-pulse {
   animation: attachment-pulse 0.8s ease-out;
 }
+
+/* ── Multi-tenant tokens (PR 4) ──────────────────────────────────────── */
+
+:root {
+  --hairline:        rgba(10, 15, 46, 0.08);
+  --surface-elev:    #FFFFFF;
+  --role-owner-bg:   #E8EEFE;
+  --role-owner-fg:   var(--primary-dark);
+}
+
+/* ── Admin header — switcher + brand row ─────────────────────────────── */
+
+.admin-header {
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+
+.admin-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.admin-header-org {
+  display: flex;
+  align-items: center;
+}
+
+/* ── Org switcher ────────────────────────────────────────────────────── */
+
+.org-switcher {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.org-switcher--static {
+  padding: 6px 12px 6px 6px;
+  background: var(--surface-muted);
+  border-radius: 999px;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.org-switcher-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  min-height: 36px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.org-switcher-trigger:hover {
+  background: var(--surface-muted);
+  border-color: var(--ink);
+}
+
+.org-switcher-trigger[aria-expanded="true"] {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
+.org-switcher-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.org-switcher-caret {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.org-switcher-logo {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--surface-muted);
+}
+
+.org-switcher-logo--fallback {
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.org-switcher-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  max-width: 320px;
+  margin: 0;
+  padding: 6px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  list-style: none;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: org-switcher-pop 0.14s ease;
+}
+
+@keyframes org-switcher-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .org-switcher-menu { animation: none; }
+}
+
+.org-switcher-menu[hidden] { display: none; }
+
+.org-switcher-item {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.org-switcher-item:hover,
+.org-switcher-item:focus-visible {
+  background: var(--surface-muted);
+}
+
+.org-switcher-item.is-active {
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+}
+
+.org-switcher-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.org-switcher-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.org-switcher-item-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-switcher-item-role {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.org-switcher-item.is-active .org-switcher-item-role {
+  color: var(--primary-dark);
+}
+
+.org-switcher-item-mark {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+/* ── Settings page chrome (tabs) ─────────────────────────────────────── */
+
+.settings-page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--white);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.settings-tab {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 8px 16px;
+  border-radius: 999px;
+  white-space: nowrap;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.settings-tab:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.settings-tab.is-active {
+  background: var(--primary);
+  color: var(--white);
+}
+
+.settings-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Organization tab: header / logo uploader ────────────────────────── */
+
+.settings-section--org-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.org-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.org-header-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.org-header-meta .settings-section-h {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--surface-muted);
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
+.org-logo-mark--lg {
+  width: 96px;
+  height: 96px;
+  border-radius: 16px;
+  font-size: 36px;
+}
+
+.org-logo-mark--fallback {
+  background: var(--primary-soft);
+}
+
+.settings-org-readonly-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-radius: 8px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+}
+
+.logo-uploader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.logo-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logo-preview-img {
+  width: 96px;
+  height: 96px;
+  border-radius: 16px;
+  object-fit: cover;
+  background: var(--surface-muted);
+}
+
+.logo-uploader-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* ── Members list ────────────────────────────────────────────────────── */
+
+.members-list,
+.invites-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.members-empty,
+.invites-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.invites-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.invites-empty-hint {
+  margin: 0;
+  font-size: 12px;
+  font-style: normal;
+  color: var(--muted);
+}
+
+.member-row,
+.invite-row {
+  background: var(--surface-muted);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.member-row-main,
+.invite-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.member-row-identity,
+.invite-row-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.member-row-name,
+.invite-row-email {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.member-row-self {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.member-row-email,
+.invite-row-meta {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.member-row-role {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--surface-elev);
+  color: var(--muted);
+  border: 1px solid var(--hairline);
+}
+
+.member-row-role--owner {
+  background: var(--role-owner-bg);
+  color: var(--role-owner-fg);
+  border-color: transparent;
+}
+
+.member-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Helper line under the caller's row when the only-owner safety guard
+   hides their demote/remove buttons. Keeps the spacing tight so the
+   row doesn't grow taller than its peers. */
+.member-row-helper {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.member-row-confirm,
+.invite-row-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--white);
+  border: 1.5px solid var(--warning);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.member-row-confirm[hidden],
+.invite-row-confirm[hidden] {
+  display: none;
+}
+
+.inline-confirm-msg {
+  font-size: 13px;
+  color: var(--ink);
+  flex: 1 1 200px;
+}
+
+.inline-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Invite form ─────────────────────────────────────────────────────── */
+
+.invite-form .input,
+.invite-form select.input {
+  margin: 0;
+}
+
+/* ── Invite acceptance page (/invite) ────────────────────────────────── */
+
+.invite-page-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-muted);
+}
+
+.invite-page-shell > .admin-header {
+  background: var(--white);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.invite-page {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  background: var(--surface-muted);
+}
+
+.invite-card {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 32px;
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.invite-eyebrow {
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--primary);
+  font-weight: 700;
+  margin: 0;
+}
+
+.invite-h {
+  font-weight: 700;
+  font-size: 24px;
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.invite-body {
+  font-size: 14px;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.invite-oauth-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.invite-sep {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0;
+}
+
+.invite-form-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.invite-form-msg {
+  font-size: 13px;
+  margin: 0;
+  min-height: 1em;
+}
+
+.invite-form-msg.success { color: var(--primary-dark); }
+.invite-form-msg.error { color: var(--warning); }
+
+.invite-fineprint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  line-height: 1.5;
+}
+
+.invite-oauth-error {
+  margin-top: 8px;
+}
+
+/* ── Mobile-first responsive tweaks ──────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .admin-header {
+    align-items: stretch;
+    padding-bottom: 16px;
+  }
+
+  .admin-header-brand {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .admin-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .org-switcher-menu {
+    right: auto;
+    left: 0;
+    min-width: 100%;
+  }
+
+  .settings-tabs {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .settings-tab {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .logo-uploader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .member-row-main,
+  .invite-row-main {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .member-row-role {
+    align-self: flex-start;
+  }
+}

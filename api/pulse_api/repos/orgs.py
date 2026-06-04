@@ -255,6 +255,7 @@ async def pending_invite_count(
             "select count(*)::int from public.organization_invites "
             "where org_id = cast(:o as uuid) "
             "  and accepted_at is null "
+            "  and revoked_at is null "
             "  and expires_at > now()"
         ),
         {"o": str(org_id)},

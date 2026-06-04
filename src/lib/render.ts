@@ -135,6 +135,16 @@ export interface RenderCardArgs {
   cards?: Card[];
   responses?: Map<string, ClientResponse>;
   handlers: CardHandlers;
+  /** Optional `<img src>` for the operator's org logo. When supplied
+   * (caller resolved it from `Client.org_logo_path`), the top-bar
+   * renders this in place of the default Axiolo wordmark — that's the
+   * client-facing piece of the org branding work. Omitted by callers
+   * that don't have logo data — the deck falls back to the Axiolo
+   * wordmark and the existing layout is unchanged. */
+  orgLogoSrc?: string | null;
+  /** Optional human-readable org name (shown next to or instead of
+   * "Pulse" in the brand row). Falls back to the Pulse wordmark. */
+  orgName?: string | null;
 }
 
 export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
@@ -146,7 +156,6 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
     saveError,
     baseUrl,
     modalOpen,
-    handlers,
   } = args;
 
   const banner = saveError
@@ -187,9 +196,18 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
   // baseUrl may or may not end with `/` depending on Astro's `base` config.
   const baseSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
 
+  // Brand row: if the operator's org has a logo, render it in front of
+  // the Axiolo wordmark; the wordmark stays as the "powered by" anchor.
+  // Falls back to the existing markup when no org logo is supplied.
+  const orgBrandHtml = args.orgLogoSrc
+    ? `<img src="${escapeAttr(args.orgLogoSrc)}" alt="${escapeAttr(args.orgName ?? "Organization")}" class="brand-logo brand-logo--org" width="40" height="40" />
+       <span class="brand-sep" aria-hidden="true">·</span>`
+    : "";
+
   mount.innerHTML = `
     <header class="topbar">
       <span class="brand">
+        ${orgBrandHtml}
         <img src="${baseSlash}axiolo-logo.svg" alt="Axiolo" class="brand-logo" width="84" height="23" />
         <span class="brand-sep" aria-hidden="true">·</span>
         Pulse
@@ -761,7 +779,6 @@ function dispatch(
       return;
     }
     case "toggle-multi": {
-      const opt = btn.dataset.option ?? "";
       // Toggle visual state in-place. The set of selected options is
       // re-read from the DOM at submit time, so no re-render is needed.
       const isSelected = btn.classList.toggle("selected");

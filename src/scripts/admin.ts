@@ -2,18 +2,24 @@ import {
   adminApi,
   ApiError,
   authApi,
-  type ApiKeySummary,
+  orgsApi,
   type AuthUser,
   type Card,
   type Client,
   type ClientResponse,
   type EngagementDetail,
   type EngagementSummary,
-  type OAuthIdentitySummary,
+  type OrgDetails,
+  type OrgSummary,
   type ResponseType,
   type UploadRow,
 } from "../lib/api";
 import { formatTimestamp } from "../lib/format-time";
+import { renderOrgSwitcher } from "./org-switcher";
+import {
+  renderSettings as renderSettingsPage,
+  type SettingsTab,
+} from "./settings";
 import {
   STATUS_VALUES,
   suggestStatus,
@@ -58,6 +64,22 @@ async function main(): Promise<void> {
     return renderResetPassword(mount, resetToken);
   }
 
+  // OAuth callbacks may include `?error=invitation_required` when an
+  // unknown email signs in via Google/Microsoft without a pending invite.
+  // Render an actionable message instead of a bare login form.
+  const errParam = params.get("error");
+  if (errParam === "invitation_required") {
+    renderLogin(
+      mount,
+      "You need an invitation to use Pulse. Ask an org owner to invite you, then click the link in the email.",
+    );
+    // Strip the query param so a refresh doesn't repeat the message.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("error");
+    window.history.replaceState({}, "", url.toString());
+    return;
+  }
+
   let me: AuthUser | null = null;
   try {
     me = await authApi.me();
@@ -69,8 +91,15 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  if (!me.is_admin) {
-    renderLogin(mount, "This account doesn't have admin access.");
+  // Post multi-tenant migration: admin access is gated by org membership.
+  // A signed-in user with no active org cannot reach any `/api/admin/*`
+  // route; show a friendlier message than the bare 403 the API would
+  // return on the first protected call.
+  if (!me.active_org_id) {
+    renderLogin(
+      mount,
+      "Your account isn't a member of any organization yet. Ask an org owner to invite you.",
+    );
     return;
   }
 
@@ -121,8 +150,11 @@ function renderLogin(mount: HTMLElement, errorMsg?: string): void {
 
     try {
       const user = await authApi.login(email, password);
-      if (!user.is_admin) {
-        renderLogin(mount, "This account doesn't have admin access.");
+      if (!user.active_org_id) {
+        renderLogin(
+          mount,
+          "Your account isn't a member of any organization yet. Ask an org owner to invite you.",
+        );
         return;
       }
       void runAdmin(mount, user);
@@ -307,6 +339,7 @@ interface RouteDetail {
 }
 interface RouteSettings {
   kind: "settings";
+  tab: SettingsTab;
 }
 type Route = RouteList | RouteDetail | RouteSettings;
 
@@ -314,24 +347,74 @@ function parseRoute(): Route {
   const hash = window.location.hash.replace(/^#/, "");
   const m = hash.match(/^client\/([0-9a-f-]+)$/i);
   if (m) return { kind: "detail", clientId: m[1] };
-  if (hash === "settings") return { kind: "settings" };
+  // Bare `#settings` redirects to `#settings/personal`; the explicit
+  // `#settings/organization` path opens the second tab. Anything else
+  // we treat as Personal so a typo doesn't dead-end the user.
+  if (hash === "settings/organization") {
+    return { kind: "settings", tab: "organization" };
+  }
+  if (hash === "settings" || hash.startsWith("settings/")) {
+    return { kind: "settings", tab: "personal" };
+  }
   return { kind: "list" };
 }
 
-async function runAdmin(mount: HTMLElement, _user: AuthUser): Promise<void> {
+// Shared state for the admin shell — orgs (for the switcher) and the
+// active org's details (logo + name). Fetched once on boot and refreshed
+// whenever the user switches or changes org settings.
+interface ShellState {
+  user: AuthUser;
+  orgs: OrgSummary[];
+  activeOrg: OrgDetails;
+}
+
+async function loadShellState(user: AuthUser): Promise<ShellState> {
+  const [orgs, activeOrg] = await Promise.all([
+    orgsApi.listMine(),
+    orgsApi.me(),
+  ]);
+  return { user, orgs, activeOrg };
+}
+
+async function runAdmin(mount: HTMLElement, user: AuthUser): Promise<void> {
+  // Normalize a bare `#settings` hash to `#settings/personal` once on
+  // boot so the back button skips the redirect step instead of
+  // ping-ponging between the two.
+  if (window.location.hash === "#settings") {
+    window.history.replaceState({}, "", "#settings/personal");
+  }
+
+  let state: ShellState;
+  try {
+    state = await loadShellState(user);
+  } catch (err) {
+    if (
+      err instanceof ApiError &&
+      (err.status === 401 || err.status === 403)
+    ) {
+      renderLogin(mount, "Your session expired. Please sign in again.");
+      return;
+    }
+    throw err;
+  }
+
   mount.innerHTML = renderShell();
-  attachShellHandlers(mount);
+  attachShellHandlers(mount, state);
+  renderShellOrg(mount, state);
 
   const container = mount.querySelector<HTMLElement>(".admin-container")!;
 
   let route = parseRoute();
   setActiveNav(mount, route);
-  await draw(container, route);
+  await draw(container, route, state);
 
   window.addEventListener("hashchange", async () => {
+    if (window.location.hash === "#settings") {
+      window.history.replaceState({}, "", "#settings/personal");
+    }
     route = parseRoute();
     setActiveNav(mount, route);
-    await draw(container, route);
+    await draw(container, route, state);
   });
 }
 
@@ -339,18 +422,21 @@ function renderShell(): string {
   const baseSlash = BASE_URL.endsWith("/") ? BASE_URL : `${BASE_URL}/`;
   return `
     <div class="admin-page">
-      <header class="admin-header">
-        <span class="brand">
-          <img src="${escape(baseSlash)}axiolo-logo.svg" alt="Axiolo" class="brand-logo" width="84" height="23" />
-          <span class="brand-sep" aria-hidden="true">·</span>
-          Pulse
-          <span class="admin-title" style="margin-left:8px">Admin</span>
-        </span>
-        <div class="admin-header-actions">
-          <a class="admin-header-link" href="#" id="nav-engagements">Engagements</a>
-          <a class="admin-header-link" href="#settings" id="nav-settings">Settings</a>
-          <button class="admin-logout" type="button" id="logout">Sign out</button>
+      <header class="admin-header" role="banner">
+        <div class="admin-header-brand">
+          <span class="brand">
+            <img src="${escape(baseSlash)}axiolo-logo.svg" alt="Axiolo" class="brand-logo" width="84" height="23" />
+            <span class="brand-sep" aria-hidden="true">·</span>
+            Pulse
+            <span class="admin-title" style="margin-left:8px">Admin</span>
+          </span>
+          <div class="admin-header-org" id="admin-header-org" aria-label="Active organization"></div>
         </div>
+        <nav class="admin-header-actions" aria-label="Primary">
+          <a class="admin-header-link" href="#" id="nav-engagements">Engagements</a>
+          <a class="admin-header-link" href="#settings/personal" id="nav-settings">Settings</a>
+          <button class="admin-logout" type="button" id="logout">Sign out</button>
+        </nav>
       </header>
       <div class="admin-container">
         <div class="loading">Loading...</div>
@@ -359,19 +445,56 @@ function renderShell(): string {
   `;
 }
 
-function attachShellHandlers(mount: HTMLElement): void {
-  mount.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", async () => {
-    try {
-      await authApi.logout();
-    } catch {
-      // ignore — best-effort
-    }
-    window.location.hash = "";
-    renderLogin(mount);
-  });
-  mount.querySelector<HTMLAnchorElement>("#nav-engagements")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    window.location.hash = "";
+function attachShellHandlers(mount: HTMLElement, state: ShellState): void {
+  mount
+    .querySelector<HTMLButtonElement>("#logout")
+    ?.addEventListener("click", async () => {
+      try {
+        await authApi.logout();
+      } catch {
+        // ignore — best-effort
+      }
+      window.location.hash = "";
+      renderLogin(mount);
+    });
+  mount
+    .querySelector<HTMLAnchorElement>("#nav-engagements")
+    ?.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.location.hash = "";
+    });
+  void state;
+}
+
+function renderShellOrg(mount: HTMLElement, state: ShellState): void {
+  const slot = mount.querySelector<HTMLElement>("#admin-header-org");
+  if (!slot) return;
+  renderOrgSwitcher(slot, {
+    orgs: state.orgs,
+    activeOrgId: state.activeOrg.id,
+    onSwitch: async (orgId) => {
+      try {
+        await orgsApi.switchOrg(orgId);
+      } catch (err) {
+        console.error("switch org:", err);
+        const detail =
+          err instanceof ApiError ? err.detail : "Could not switch";
+        toast(detail);
+        return;
+      }
+      // Reload everything: the engagement list, the active org details,
+      // the switcher. Easiest correct way is to re-run `loadShellState`
+      // and then re-render the current route.
+      const refreshed = await loadShellState(state.user);
+      state.orgs = refreshed.orgs;
+      state.activeOrg = refreshed.activeOrg;
+      renderShellOrg(mount, state);
+      const container = mount.querySelector<HTMLElement>(".admin-container");
+      if (container) {
+        await draw(container, parseRoute(), state);
+      }
+      toast(`Switched to ${state.activeOrg.name}`);
+    },
   });
 }
 
@@ -383,7 +506,11 @@ function setActiveNav(mount: HTMLElement, route: Route): void {
   setActive("nav-settings", route.kind === "settings");
 }
 
-async function draw(container: HTMLElement, route: Route): Promise<void> {
+async function draw(
+  container: HTMLElement,
+  route: Route,
+  state: ShellState,
+): Promise<void> {
   if (route.kind === "list") {
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
     try {
@@ -399,12 +526,53 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
   if (route.kind === "settings") {
     container.innerHTML = `<div class="loading">Loading settings...</div>`;
     try {
-      const [me, identities, apiKeys] = await Promise.all([
-        authApi.me(),
-        authApi.listIdentities(),
-        authApi.listApiKeys(),
-      ]);
-      renderSettings(container, me, identities, apiKeys);
+      // Fetch in parallel. The invites list returns [] for non-owners,
+      // but the endpoint is open to any member of the org, so we can
+      // always call it — owner-gating happens at the UI layer.
+      const [me, identities, apiKeys, org, members, invites] =
+        await Promise.all([
+          authApi.me(),
+          authApi.listIdentities(),
+          authApi.listApiKeys(),
+          orgsApi.me(),
+          orgsApi.listMembers(),
+          orgsApi.listInvites().catch((err) => {
+            // A 403 here would mean the user is somehow scoped to an
+            // org they don't belong to; surface an empty list rather
+            // than crashing the whole settings page.
+            if (err instanceof ApiError && err.status === 403) return [];
+            throw err;
+          }),
+        ]);
+      // Keep ShellState's activeOrg in sync after settings re-fetches it.
+      state.activeOrg = org;
+      const mountRoot = document.getElementById("admin");
+      renderSettingsPage({
+        container,
+        tab: route.tab,
+        user: me,
+        org,
+        identities,
+        apiKeys,
+        members,
+        invites,
+        helpers: {
+          toast,
+          confirm: openConfirmModal,
+          onOrgChanged: async () => {
+            // Refresh the switcher + header logo without re-running
+            // the entire settings page draw.
+            try {
+              const fresh = await loadShellState(state.user);
+              state.orgs = fresh.orgs;
+              state.activeOrg = fresh.activeOrg;
+              if (mountRoot) renderShellOrg(mountRoot, state);
+            } catch (err) {
+              console.warn("refresh shell after org change:", err);
+            }
+          },
+        },
+      });
     } catch (err) {
       console.error("load settings:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
@@ -426,385 +594,11 @@ async function draw(container: HTMLElement, route: Route): Promise<void> {
   }
 }
 
-// ── settings view ───────────────────────────────────────────────────────
-
-const PROVIDER_LABELS: Record<string, string> = {
-  google: "Google",
-  microsoft: "Microsoft 365",
-};
-
-function renderSettings(
-  container: HTMLElement,
-  user: AuthUser,
-  identities: OAuthIdentitySummary[],
-  apiKeys: ApiKeySummary[],
-): void {
-  const hasPw = user.has_password;
-  const pwTitle = hasPw ? "Change password" : "Set a password";
-  const pwIntro = hasPw
-    ? "Update the password you use to sign in."
-    : "You signed in with a third-party provider. Set a password to enable email/password sign-in (useful for CLI or API access).";
-
-  const identityRows = identities.length
-    ? identities
-        .map(
-          (i) => `
-        <li class="settings-identity">
-          <span class="settings-identity-name">${escape(PROVIDER_LABELS[i.provider] ?? i.provider)}</span>
-          <span class="settings-identity-when">linked ${escape(formatTimestamp(i.linked_at))}</span>
-        </li>`,
-        )
-        .join("")
-    : `<li class="settings-identity empty">No third-party accounts linked.</li>`;
-
-  container.innerHTML = `
-    <div class="settings-page">
-      <h2 class="settings-h">Settings</h2>
-
-      <section class="settings-section">
-        <h3 class="settings-section-h">Profile</h3>
-        <form class="settings-form" id="profile-form" novalidate>
-          <label class="edit-field">
-            <span class="edit-label">Email</span>
-            <input class="input" type="email" value="${escape(user.email)}" disabled />
-          </label>
-          <label class="edit-field">
-            <span class="edit-label">Display name</span>
-            <input id="profile-name" class="input" type="text" autocomplete="name"
-                   value="${escape(user.name ?? "")}" />
-          </label>
-          <div class="settings-form-actions">
-            <button class="btn btn-primary" type="submit">Save profile</button>
-            <span class="settings-form-msg" id="profile-msg"></span>
-          </div>
-        </form>
-      </section>
-
-      <section class="settings-section">
-        <h3 class="settings-section-h">${escape(pwTitle)}</h3>
-        <p class="settings-section-p">${escape(pwIntro)}</p>
-        <form class="settings-form" id="password-form" novalidate>
-          ${
-            hasPw
-              ? `<label class="edit-field">
-                   <span class="edit-label">Current password</span>
-                   <input id="pw-current" class="input" type="password"
-                          autocomplete="current-password" required />
-                 </label>`
-              : ""
-          }
-          <label class="edit-field">
-            <span class="edit-label">New password (8+ characters)</span>
-            <input id="pw-new" class="input" type="password"
-                   autocomplete="new-password" minlength="8" required />
-          </label>
-          <label class="edit-field">
-            <span class="edit-label">Confirm new password</span>
-            <input id="pw-confirm" class="input" type="password"
-                   autocomplete="new-password" minlength="8" required />
-          </label>
-          <div class="settings-form-actions">
-            <button class="btn btn-primary" type="submit">${escape(hasPw ? "Update password" : "Set password")}</button>
-            <span class="settings-form-msg" id="password-msg"></span>
-          </div>
-        </form>
-      </section>
-
-      <section class="settings-section">
-        <h3 class="settings-section-h">Linked accounts</h3>
-        <ul class="settings-identity-list">${identityRows}</ul>
-      </section>
-
-      <section class="settings-section" id="api-keys-section">
-        <h3 class="settings-section-h">API keys</h3>
-        <p class="settings-section-p">Use these to authenticate non-browser clients — CLI scripts, CI, Claude / MCP integrations. Each key has the same admin access this account has.</p>
-        <div id="api-keys-list" class="api-key-list">${renderApiKeyRows(apiKeys)}</div>
-        <div class="api-keys-actions">
-          <button class="btn-primary-sm" type="button" id="create-api-key">+ Create new key</button>
-        </div>
-      </section>
-    </div>
-  `;
-
-  // Profile form
-  const profileForm = container.querySelector<HTMLFormElement>("#profile-form")!;
-  const profileMsg = container.querySelector<HTMLElement>("#profile-msg")!;
-  profileForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    profileMsg.textContent = "";
-    profileMsg.classList.remove("error", "success");
-    const nameVal = (container.querySelector<HTMLInputElement>("#profile-name")?.value ?? "").trim();
-    try {
-      const updated = await authApi.updateProfile({ name: nameVal || null });
-      profileMsg.textContent = "Saved";
-      profileMsg.classList.add("success");
-      // Reflect in the input in case the server normalized it
-      const input = container.querySelector<HTMLInputElement>("#profile-name");
-      if (input) input.value = updated.name ?? "";
-    } catch (err) {
-      profileMsg.textContent =
-        err instanceof ApiError ? err.detail : "Could not save";
-      profileMsg.classList.add("error");
-    }
-  });
-
-  // Password form
-  const pwForm = container.querySelector<HTMLFormElement>("#password-form")!;
-  const pwMsg = container.querySelector<HTMLElement>("#password-msg")!;
-  pwForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    pwMsg.textContent = "";
-    pwMsg.classList.remove("error", "success");
-    const newPw = container.querySelector<HTMLInputElement>("#pw-new")?.value ?? "";
-    const confirmPw = container.querySelector<HTMLInputElement>("#pw-confirm")?.value ?? "";
-    const currentPw = hasPw
-      ? container.querySelector<HTMLInputElement>("#pw-current")?.value ?? ""
-      : null;
-
-    if (newPw.length < 8) {
-      pwMsg.textContent = "Password must be at least 8 characters.";
-      pwMsg.classList.add("error");
-      return;
-    }
-    if (newPw !== confirmPw) {
-      pwMsg.textContent = "Passwords do not match.";
-      pwMsg.classList.add("error");
-      return;
-    }
-
-    try {
-      await authApi.changePassword({
-        current_password: currentPw,
-        new_password: newPw,
-      });
-      // Re-render so the form switches from "Set password" to
-      // "Change password" mode and the inputs clear.
-      const refreshed = await authApi.me();
-      renderSettings(container, refreshed, identities, apiKeys);
-      toast("Password updated");
-    } catch (err) {
-      pwMsg.textContent =
-        err instanceof ApiError ? err.detail : "Could not update password";
-      pwMsg.classList.add("error");
-    }
-  });
-
-  // ── API keys section ──
-  const refreshApiKeys = async (): Promise<void> => {
-    try {
-      const fresh = await authApi.listApiKeys();
-      apiKeys.splice(0, apiKeys.length, ...fresh);
-      const listEl = container.querySelector<HTMLElement>("#api-keys-list");
-      if (listEl) listEl.innerHTML = renderApiKeyRows(fresh);
-      bindApiKeyRowHandlers(container, refreshApiKeys);
-    } catch (err) {
-      console.error("refresh api keys:", err);
-      toast("Could not refresh API keys");
-    }
-  };
-
-  container.querySelector<HTMLButtonElement>("#create-api-key")?.addEventListener("click", () => {
-    openCreateApiKeyModal(refreshApiKeys);
-  });
-  bindApiKeyRowHandlers(container, refreshApiKeys);
-}
-
-// ── API keys section helpers ────────────────────────────────────────────
-
-function renderApiKeyRows(keys: ApiKeySummary[]): string {
-  if (keys.length === 0) {
-    return `<p class="api-key-empty">No API keys yet.</p>`;
-  }
-  return keys
-    .map(
-      (k) => `
-      <div class="api-key-row" data-key-id="${escape(k.id)}" data-key-label="${escape(k.label)}">
-        <div class="api-key-info">
-          <div class="api-key-label">${escape(k.label)}</div>
-          <div class="api-key-prefix">pulse_${escape(k.prefix)}…</div>
-          <div class="api-key-meta">
-            <span>Last used ${escape(k.last_used_at ? formatTimestamp(k.last_used_at) : "Never used")}</span>
-            <span class="api-key-meta-sep">·</span>
-            <span>Created ${escape(formatTimestamp(k.created_at))}</span>
-          </div>
-        </div>
-        <button class="btn-ghost-sm danger" type="button" data-action="revoke-api-key">Revoke</button>
-      </div>`,
-    )
-    .join("");
-}
-
-function bindApiKeyRowHandlers(
-  container: HTMLElement,
-  refresh: () => Promise<void>,
-): void {
-  for (const row of container.querySelectorAll<HTMLElement>(".api-key-row")) {
-    const btn = row.querySelector<HTMLButtonElement>("[data-action='revoke-api-key']");
-    if (!btn) continue;
-    btn.addEventListener("click", () => {
-      const id = row.dataset.keyId!;
-      const label = row.dataset.keyLabel ?? "this key";
-      openConfirmModal({
-        title: "Revoke API key",
-        body: `Revoke '${label}'? Any client using this key will stop working immediately. This cannot be undone.`,
-        confirmLabel: "Revoke",
-        danger: true,
-        onConfirm: async () => {
-          await authApi.revokeApiKey(id);
-          toast("API key revoked");
-          await refresh();
-        },
-      });
-    });
-  }
-}
-
-function openCreateApiKeyModal(refresh: () => Promise<void>): void {
-  // Reentrancy guard: never stack two create-key modals.
-  if (document.body.querySelector(".modal.create-api-key-modal")) return;
-
-  const modalEl = document.createElement("div");
-  modalEl.className = "modal create-api-key-modal";
-  modalEl.innerHTML = `
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-panel confirm-panel" id="create-api-key-panel">
-      <header class="modal-header">
-        <span class="modal-title">Create API key</span>
-        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
-      </header>
-      <div class="confirm-body" id="create-api-key-body">
-        <form class="settings-form" id="create-api-key-form" novalidate style="max-width:none">
-          <label class="edit-field">
-            <span class="edit-label">Label</span>
-            <input class="input" id="api-key-label-input" type="text"
-                   placeholder="e.g. MCP — Claude Code" maxlength="100" autofocus required />
-            <span class="settings-section-p" style="margin:6px 0 0">So you remember what this key is for.</span>
-          </label>
-          <span class="settings-form-msg" id="api-key-form-msg"></span>
-        </form>
-      </div>
-      <div class="confirm-actions" id="create-api-key-actions">
-        <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
-        <button class="btn-primary-sm" type="button" id="api-key-submit">Create</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modalEl);
-
-  let createdKeyForCleanup: string | null = null;
-  const close = (): void => {
-    modalEl.remove();
-    document.removeEventListener("keydown", onKey);
-    // Defensive: clear closure-held raw key from memory.
-    createdKeyForCleanup = null;
-    void createdKeyForCleanup;
-  };
-  const onKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape") close();
-  };
-  document.addEventListener("keydown", onKey);
-
-  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
-    el.addEventListener("click", close);
-  }
-
-  const labelInput = modalEl.querySelector<HTMLInputElement>("#api-key-label-input")!;
-  const msgEl = modalEl.querySelector<HTMLElement>("#api-key-form-msg")!;
-  const submitBtn = modalEl.querySelector<HTMLButtonElement>("#api-key-submit")!;
-
-  const showError = (msg: string): void => {
-    msgEl.textContent = msg;
-    msgEl.classList.remove("success");
-    msgEl.classList.add("error");
-  };
-  const clearError = (): void => {
-    msgEl.textContent = "";
-    msgEl.classList.remove("error", "success");
-  };
-
-  labelInput.addEventListener("input", clearError);
-
-  const submit = async (): Promise<void> => {
-    clearError();
-    const label = labelInput.value.trim();
-    if (!label) {
-      showError("Label is required.");
-      labelInput.focus();
-      return;
-    }
-    submitBtn.disabled = true;
-    const originalText = submitBtn.textContent;
-    submitBtn.textContent = "Creating...";
-    try {
-      const created = await authApi.createApiKey({ label });
-      showReveal(created);
-      // Refresh underlying list so the row appears once the modal is closed.
-      await refresh();
-    } catch (err) {
-      const detail = err instanceof ApiError ? err.detail : "Could not create API key";
-      showError(detail);
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = originalText;
-    }
-  };
-
-  submitBtn.addEventListener("click", () => void submit());
-  modalEl.querySelector<HTMLFormElement>("#create-api-key-form")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    void submit();
-  });
-
-  function showReveal(created: ApiKeyWithSecretShape): void {
-    const bodyEl = modalEl.querySelector<HTMLElement>("#create-api-key-body")!;
-    const actionsEl = modalEl.querySelector<HTMLElement>("#create-api-key-actions")!;
-    const titleEl = modalEl.querySelector<HTMLElement>(".modal-title")!;
-    titleEl.textContent = "Key created — copy it now";
-
-    bodyEl.innerHTML = `
-      <div class="api-key-reveal">
-        <div class="api-key-warning">This is the only time you'll see the full key. Store it somewhere safe.</div>
-        <div class="api-key-reveal-row">
-          <input class="input api-key-reveal-input" id="api-key-reveal-input" type="text" readonly value="${escape(created.key)}" />
-          <button class="btn-secondary-sm" type="button" id="api-key-copy" aria-label="Copy API key">Copy</button>
-        </div>
-      </div>
-    `;
-    actionsEl.innerHTML = `
-      <button class="btn-primary-sm" type="button" id="api-key-done">Done</button>
-    `;
-
-    const revealInput = modalEl.querySelector<HTMLInputElement>("#api-key-reveal-input")!;
-    revealInput.addEventListener("focus", () => revealInput.select());
-    revealInput.focus();
-
-    const copyBtn = modalEl.querySelector<HTMLButtonElement>("#api-key-copy")!;
-    copyBtn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(created.key);
-        flashCopied(copyBtn, "Copied!");
-      } catch (err) {
-        console.error("copy api key:", err);
-        toast("Could not copy — select the field and copy manually.");
-      }
-    });
-
-    modalEl.querySelector<HTMLButtonElement>("#api-key-done")?.addEventListener("click", () => {
-      close();
-    });
-  }
-}
-
-// Internal shape mirror — avoids importing the secret-bearing type more
-// broadly than necessary.
-interface ApiKeyWithSecretShape {
-  id: string;
-  label: string;
-  prefix: string;
-  key: string;
-  last_used_at: string | null;
-  created_at: string;
-}
+// ── settings view ──
+// The settings page (Personal + Organization tabs) lives in
+// `./settings.ts`. The admin shell loads `orgsApi.me()` + members +
+// invites alongside the personal data and routes both tabs through
+// `renderSettingsPage`.
 
 // ── list view ───────────────────────────────────────────────────────────
 
@@ -929,7 +723,7 @@ function renderList(container: HTMLElement, summaries: EngagementSummary[]): voi
           onConfirm: async () => {
             await adminApi.deleteEngagement(summary.id);
             toast("Engagement deleted");
-            await draw(container, { kind: "list" });
+            await reloadList(container);
           },
         });
         return;
@@ -1210,7 +1004,22 @@ async function rotateToken(container: HTMLElement, clientId: string): Promise<vo
     toast("Could not rotate token");
     return;
   }
-  await draw(container, { kind: "list" });
+  await reloadList(container);
+}
+
+// Re-fetch + re-render the engagement list in place. Used by handlers
+// that mutate the list (rotate token, delete) and don't have a
+// `ShellState` handle to pass to `draw`. The list view is self-contained
+// — it doesn't need org switcher state because the shell header is
+// untouched.
+async function reloadList(container: HTMLElement): Promise<void> {
+  try {
+    const summaries = await adminApi.listClients();
+    renderList(container, summaries);
+  } catch (err) {
+    console.error("reload list:", err);
+    container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
+  }
 }
 
 // ── detail view ──────────────────────────────────────────────────────────
