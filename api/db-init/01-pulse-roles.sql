@@ -2,9 +2,10 @@
 -- Mounted into /docker-entrypoint-initdb.d/ by docker-compose. Executes as
 -- the Postgres superuser (POSTGRES_USER from .env).
 --
--- Creates the two restricted DB roles used by the FastAPI app:
---   pulse_anon  — used by client-facing routes; RLS applies
---   pulse_admin — used by admin routes; bypasses RLS
+-- Creates the restricted DB roles used by the FastAPI app:
+--   pulse_anon   — used by client-facing routes; RLS applies (per-token)
+--   pulse_admin  — used by superadmin routes + migrations; bypasses RLS
+--   pulse_member — used by admin routes; RLS applies (per-org_id GUC)
 --
 -- In production these roles + their passwords are created by Ansible's
 -- postgres-pulse role from vaulted vars, not from this file.
@@ -19,6 +20,10 @@ begin
 
   if not exists (select 1 from pg_roles where rolname = 'pulse_admin') then
     create role pulse_admin with login password 'devpass' nosuperuser bypassrls;
+  end if;
+
+  if not exists (select 1 from pg_roles where rolname = 'pulse_member') then
+    create role pulse_member with login password 'devpass' nosuperuser nobypassrls;
   end if;
 end
 $$;

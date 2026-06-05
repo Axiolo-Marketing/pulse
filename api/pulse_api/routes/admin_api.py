@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import storage
@@ -116,13 +117,35 @@ async def get_engagement(
 async def create_engagement(
     req: CreateClientRequest,
     session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    user: User = Depends(get_current_admin),
 ) -> dict[str, Any]:
+    """Create a new engagement under the operator's active organization.
+
+    PR 1 sources ``org_id`` from ``users.last_active_org_id``. The data
+    migration backfills this for every existing admin user, so the path
+    is always populated in production. The fallback (look up the Axiolo
+    org by slug) handles the narrow window where a freshly-created
+    admin hasn't been written into ``last_active_org_id`` yet — PR 2
+    replaces this branch with the active-org from the session payload.
+    """
+    org_id = user.last_active_org_id
+    if org_id is None:
+        result = await session.execute(
+            text("select id from public.organizations where slug = 'axiolo' limit 1"),
+        )
+        row_org = result.scalar_one_or_none()
+        if row_org is None:
+            raise HTTPException(
+                status_code=500, detail="no organization available for this user"
+            )
+        org_id = row_org
+
     row = await clients_repo.create_engagement(
         session,
         name=req.name,
         org_name=req.org_name,
         engagement_name=req.engagement_name,
+        org_id=str(org_id),
     )
     await session.commit()
     return row
