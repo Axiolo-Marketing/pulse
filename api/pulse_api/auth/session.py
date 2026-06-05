@@ -31,6 +31,18 @@ class InvalidSessionError(Exception):
     """Raised when a cookie is missing, tampered, or expired."""
 
 
+def cookie_secure_flag() -> bool:
+    """Return True iff cookies should be set Secure-only (HTTPS only).
+
+    Defaults to True in every environment except ``development`` so
+    staging and production never accidentally ship cookies over HTTP.
+    Tests use the default ``settings.environment = "development"``,
+    keeping the existing assertions intact while production gets the
+    Secure flag automatically.
+    """
+    return settings.environment != "development"
+
+
 def _serializer() -> URLSafeTimedSerializer:
     if not settings.session_secret:
         raise RuntimeError("SESSION_SECRET is not set; refusing to sign sessions.")
@@ -148,7 +160,8 @@ def write_session(
         max_age=settings.session_max_age_seconds,
         httponly=True,
         samesite="lax",
-        secure=False,  # TODO: True in production once HTTPS is the only origin
+        # Secure-only in production; HTTP cookies allowed in dev for local testing
+        secure=cookie_secure_flag(),
         path="/",
     )
 

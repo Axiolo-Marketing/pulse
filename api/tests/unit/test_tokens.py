@@ -18,7 +18,12 @@ def test_roundtrip_returns_payload() -> None:
 
 def test_tampered_token_rejected() -> None:
     t = issue_token("email-verify", {"user_id": "abc"})
-    tampered = t[:-1] + ("A" if t[-1] != "A" else "B")
+    # Replace the entire HMAC signature segment with a same-length string
+    # of `X`s. A single-char flip occasionally lands on a position where
+    # itsdangerous still accepts the token; corrupting the whole sig
+    # avoids that flakiness.
+    head, _, sig = t.rpartition(".")
+    tampered = f"{head}.{'X' * len(sig)}"
     with pytest.raises(InvalidSessionError):
         consume_token("email-verify", tampered, 3600)
 

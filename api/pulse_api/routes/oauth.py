@@ -23,21 +23,25 @@ tenant refactor):
 from __future__ import annotations
 
 import secrets
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pulse_api.auth.invites import attach_invite_to_user as _attach_invite_to_user
 from pulse_api.auth.oauth import OAuthProviderError, get_provider
 from pulse_api.auth.session import (
     InvalidSessionError,
+    cookie_secure_flag,
     encode_session,
 )
 from pulse_api.auth.tokens import consume_token, issue_token
 from pulse_api.config import settings
 from pulse_api.db import get_admin_session
 from pulse_api.models._helpers import utcnow_naive
+from pulse_api.repos import invites as invites_repo
 from pulse_api.repos import users as users_repo
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -77,6 +81,7 @@ async def _find_pending_invite(
             "select id::text, org_id::text, role from public.organization_invites "
             "where lower(email) = lower(:e) "
             "  and accepted_at is null "
+            "  and revoked_at is null "
             "  and expires_at > now() "
             "order by created_at "
             "limit 1 "
@@ -119,49 +124,29 @@ async def _accept_oauth_invite(
     return str(user.id)
 
 
-async def _attach_invite_to_user(
-    session: AsyncSession, *, invite: dict[str, Any], user_id: str
-) -> None:
-    """Insert the org membership, set ``last_active_org_id``, and mark
-    the invite accepted. Idempotent on ``(org_id, user_id)``.
-
-    Used by both the create-from-invite path (new user) and the
-    existing-user OAuth path (already-registered user clicked their
-    invite, then signed in via Google/Microsoft — we still accept).
-    """
-    await session.execute(
-        text(
-            "insert into public.organization_memberships "
-            "(org_id, user_id, role) "
-            "values (cast(:o as uuid), cast(:u as uuid), :r) "
-            "on conflict (org_id, user_id) do nothing"
-        ),
-        {"o": invite["org_id"], "u": user_id, "r": invite["role"]},
-    )
-    await session.execute(
-        text(
-            "update public.users set last_active_org_id = cast(:o as uuid) "
-            "where id = cast(:u as uuid)"
-        ),
-        {"o": invite["org_id"], "u": user_id},
-    )
-    await session.execute(
-        text(
-            "update public.organization_invites set accepted_at = now() "
-            "where id = cast(:i as uuid)"
-        ),
-        {"i": invite["id"]},
-    )
-
-
 @router.get("/{provider}/authorize")
-async def oauth_authorize(provider: str) -> RedirectResponse:
+async def oauth_authorize(
+    provider: str, invite_token: str | None = None
+) -> RedirectResponse:
+    """Start the OAuth dance.
+
+    The optional ``invite_token`` query param is the raw signed invite
+    token from an emailed invite link. When present, we stash it inside
+    the signed state cookie so the callback can resolve it after the
+    provider hands us back an OAuth-verified identity. This is what
+    powers "Accept invite with Google/Microsoft" — the explicit token
+    proves the inviter trusts this identity even if the invite was
+    sent to a different email than what the provider returns.
+    """
     config = get_provider(provider)
     if config is None:
         raise HTTPException(status_code=404, detail="unknown provider")
 
     state = secrets.token_urlsafe(16)
-    state_cookie = issue_token(f"oauth-state-{provider}", {"state": state})
+    state_payload: dict[str, str] = {"state": state}
+    if invite_token:
+        state_payload["invite_token"] = invite_token
+    state_cookie = issue_token(f"oauth-state-{provider}", state_payload)
     authorize_url = config.build_authorize_url(state)
 
     redirect = RedirectResponse(url=authorize_url, status_code=302)
@@ -171,10 +156,43 @@ async def oauth_authorize(provider: str) -> RedirectResponse:
         max_age=OAUTH_STATE_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=False,  # TODO: True in production
+        # Secure-only in production; HTTP cookies allowed in dev for local testing
+        secure=cookie_secure_flag(),
         path="/",
     )
     return redirect
+
+
+async def _resolve_invite_from_raw_token(
+    session: AsyncSession, raw_token: str
+) -> dict[str, Any] | None:
+    """Resolve a raw signed invite token to its row, if still acceptable.
+
+    Returns ``None`` for any of:
+    * malformed/tampered/expired signed token,
+    * no matching ``token_hash`` row,
+    * invite already accepted (``accepted_at is not null``),
+    * invite past ``expires_at``.
+
+    Caller maps the ``None`` to a frontend error redirect.
+    """
+    try:
+        consume_token(
+            "org-invite", raw_token, settings.invite_token_max_age_seconds
+        )
+    except InvalidSessionError:
+        return None
+
+    invite = await invites_repo.find_invite_by_token_hash(
+        session, invites_repo.hash_invite_token(raw_token)
+    )
+    if invite is None:
+        return None
+    if invite["accepted_at"] is not None:
+        return None
+    if invites_repo.invite_status(invite) != "pending":
+        return None
+    return invite
 
 
 @router.get("/{provider}/callback")
@@ -218,6 +236,24 @@ async def oauth_callback(
     if not email or not sub:
         raise HTTPException(status_code=400, detail="provider returned incomplete userinfo")
 
+    # 2b. Explicit invite-token-in-state branch.
+    # If the authorize step stashed a raw invite token in the signed
+    # state cookie, we resolve it now. A valid, still-pending token
+    # wins over the email-lookup path — the inviter explicitly trusted
+    # this provider identity by linking to the OAuth authorize URL
+    # from the invite acceptance page. An invalid/expired token here
+    # falls back to error-redirect rather than silently switching to
+    # the email-lookup invite path (the user clicked a specific link;
+    # we shouldn't accept a different invite under their nose).
+    explicit_invite: dict[str, Any] | None = None
+    raw_invite_token = cookie_payload.get("invite_token")
+    if raw_invite_token:
+        explicit_invite = await _resolve_invite_from_raw_token(
+            session, raw_invite_token
+        )
+        if explicit_invite is None:
+            return _admin_redirect(error="invite_invalid")
+
     # 3. Link or create. The invite-acceptance branch replaces the old
     #    "create new user out of thin air" path — self-signup is gone.
     identity = await users_repo.find_oauth_identity(session, provider, sub)
@@ -227,10 +263,16 @@ async def oauth_callback(
         if user is None:
             # Identity row points to a deleted user — bail rather than fix silently.
             raise HTTPException(status_code=500, detail="dangling oauth identity")
-        active_org_id = (
-            str(user.last_active_org_id) if user.last_active_org_id else None
-        )
         user_id = str(user.id)
+        if explicit_invite is not None:
+            await _attach_invite_to_user(
+                session, invite=explicit_invite, user_id=user_id
+            )
+            active_org_id = explicit_invite["org_id"]
+        else:
+            active_org_id = (
+                str(user.last_active_org_id) if user.last_active_org_id else None
+            )
     else:
         existing = await users_repo.get_user_by_email(session, email)
         if existing is not None:
@@ -238,22 +280,28 @@ async def oauth_callback(
                 session, user_id=existing.id, provider=provider, provider_user_id=sub
             )
             user_id = str(existing.id)
-            # An existing user with a pending invite should still join
-            # the inviting org on this sign-in. Accept it transactionally.
-            pending = await _find_pending_invite(session, email)
-            if pending is not None:
+            if explicit_invite is not None:
                 await _attach_invite_to_user(
-                    session, invite=pending, user_id=user_id
+                    session, invite=explicit_invite, user_id=user_id
                 )
-                active_org_id = pending["org_id"]
+                active_org_id = explicit_invite["org_id"]
             else:
-                active_org_id = (
-                    str(existing.last_active_org_id)
-                    if existing.last_active_org_id
-                    else None
-                )
+                # An existing user with a pending invite should still join
+                # the inviting org on this sign-in. Accept it transactionally.
+                pending = await _find_pending_invite(session, email)
+                if pending is not None:
+                    await _attach_invite_to_user(
+                        session, invite=pending, user_id=user_id
+                    )
+                    active_org_id = pending["org_id"]
+                else:
+                    active_org_id = (
+                        str(existing.last_active_org_id)
+                        if existing.last_active_org_id
+                        else None
+                    )
         else:
-            invite = await _find_pending_invite(session, email)
+            invite = explicit_invite or await _find_pending_invite(session, email)
             if invite is None:
                 # Hard 302 back to the frontend with an error code. The
                 # SPA renders "you need an invitation" — see plan PR 4
@@ -283,7 +331,8 @@ async def oauth_callback(
         max_age=settings.session_max_age_seconds,
         httponly=True,
         samesite="lax",
-        secure=False,  # TODO: True in production (matches authorize-cookie TODO above)
+        # Secure-only in production; HTTP cookies allowed in dev for local testing
+        secure=cookie_secure_flag(),
         path="/",
     )
     return redirect
