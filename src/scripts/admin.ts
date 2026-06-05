@@ -352,10 +352,14 @@ function parseRoute(): Route {
   const m = hash.match(/^client\/([0-9a-f-]+)$/i);
   if (m) return { kind: "detail", clientId: m[1] };
   // Bare `#settings` redirects to `#settings/personal`; the explicit
-  // `#settings/organization` path opens the second tab. Anything else
-  // we treat as Personal so a typo doesn't dead-end the user.
+  // `#settings/organization` and `#settings/activity` paths open the
+  // matching tab. Anything else we treat as Personal so a typo doesn't
+  // dead-end the user.
   if (hash === "settings/organization") {
     return { kind: "settings", tab: "organization" };
+  }
+  if (hash === "settings/activity") {
+    return { kind: "settings", tab: "activity" };
   }
   if (hash === "settings" || hash.startsWith("settings/")) {
     return { kind: "settings", tab: "personal" };

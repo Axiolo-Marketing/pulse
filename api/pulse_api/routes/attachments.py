@@ -17,9 +17,14 @@ purely as the auth gate.
 """
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import storage
-from pulse_api.auth.middleware import get_current_org_member
+from pulse_api.audit import record_audit
+from pulse_api.auth.middleware import (
+    get_current_org_member,
+    get_org_scoped_session,
+)
 from pulse_api.config import settings
 from pulse_api.models import OrganizationMembership, User
 
@@ -34,8 +39,12 @@ public_router = APIRouter(prefix="/api", tags=["client"])
 @admin_router.post("/attachments", status_code=201)
 async def upload_attachment(
     file: UploadFile = File(...),
-    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    session: AsyncSession = Depends(get_org_scoped_session),
 ) -> dict[str, str]:
+    user, membership = org_member
     content = await file.read()
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="empty file")
@@ -50,6 +59,25 @@ async def upload_attachment(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     storage.write_upload(relative_path=relative_path, content=content)
+    # Audit + commit on the org-scoped session. The on-disk write
+    # already happened above; if the audit insert (or its commit) trips
+    # RLS or another constraint, the DB rolls back the audit row but
+    # the file remains as an orphan — acceptable because attachments
+    # are publicly-fetchable-by-UUID, not org-scoped on disk.
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="attachment.upload",
+        target_type="attachment",
+        target_id=relative_path,
+        metadata={
+            "filename": file.filename or "",
+            "mime_type": mime_type,
+            "size_bytes": len(content),
+        },
+    )
+    await session.commit()
     return {"path": relative_path, "mime_type": mime_type}
 
 

@@ -80,6 +80,12 @@ Token primitives all use `itsdangerous.URLSafeTimedSerializer` with per-purpose 
 
 OAuth state: cookie-based CSRF. The authorize endpoint generates a random state, signs it as a `oauth_state_{provider}` cookie, builds the provider URL with the same state. The callback verifies the cookie matches the URL state before doing any work. **Self-signup is disabled**: when an OAuth callback resolves to an unknown email, the route looks up a pending `organization_invites` row for that email and accepts it transactionally (creates user + membership, marks the invite accepted). With no pending invite, the callback redirects to `/admin/?error=invitation_required` and creates no user.
 
+### Audit log + activity feed
+
+Every mutating admin route writes a row to `audit_logs` via the small `record_audit(session, …)` helper in `api/pulse_api/audit.py`. The insert runs on the same session as the user action and commits atomically with it — a failed audit insert rolls the user action back too (correct behavior; don't try/except around it). Action names are a stable dotted enum (`client.create`, `member.invite`, `api_key.revoke`, etc.); the full set is the docstring of `audit.py` and the module-level `AUDIT_ACTIONS` frozenset. Tests assert both sides agree.
+
+Read path is `GET /api/orgs/me/activity` — paginated, RLS-scoped, filterable by actor and action. The Activity tab on `/admin/#settings/activity` surfaces the feed inline; member-readable (no owner gate). Cross-org isolation is enforced by the same `pulse_member` + `pulse.org_id` policy as every other tenant table.
+
 ### API keys + MCP (non-browser callers)
 
 Same operator identity, different credential. API keys are per-`(user, org)` Bearer tokens that let scripts and the MCP server reach the admin surface without holding a browser session.

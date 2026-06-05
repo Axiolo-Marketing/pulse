@@ -1,5 +1,6 @@
 from pulse_api.repos import (
     api_keys,
+    audit_logs,
     cards,
     clients,
     invites,
@@ -12,6 +13,7 @@ from pulse_api.repos import (
 
 __all__ = [
     "api_keys",
+    "audit_logs",
     "cards",
     "clients",
     "invites",
