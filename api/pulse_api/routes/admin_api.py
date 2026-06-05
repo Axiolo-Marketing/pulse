@@ -21,7 +21,6 @@ from pulse_api.auth.middleware import (
     get_org_scoped_session,
 )
 from pulse_api.card_import import CardImportError, parse_markdown
-from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
@@ -230,8 +229,10 @@ async def delete_engagement(
 @router.post("/clients/{client_id}/reset")
 async def reset_engagement(
     client_id: str,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, int]:
     """Reset an engagement for a clean restart: wipe every response and
     every upload (rows + on-disk files), returning all cards to an
@@ -241,11 +242,24 @@ async def reset_engagement(
 
     Use when multiple people need to take the deck, or a client wants to
     start over."""
+    user, membership = org_member
     if (await clients_repo.get_by_id(session, client_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
     removed_uploads = await uploads_repo.delete_all_for_client(session, client_id)
     responses_cleared = await responses_repo.delete_all_for_client(session, client_id)
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.reset",
+        target_type="client",
+        target_id=client_id,
+        metadata={
+            "responses_cleared": responses_cleared,
+            "uploads_cleared": len(removed_uploads),
+        },
+    )
     await session.commit()
 
     # Files removed after the DB change is durable, mirroring delete: a

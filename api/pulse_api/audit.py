@@ -24,6 +24,7 @@ string emitted by the route layer appears in this list.
 * ``client.update``         — engagement field change
 * ``client.delete``         — engagement permanently removed
 * ``client.rotate_token``   — engagement's pulse token rotated
+* ``client.reset``          — engagement responses + uploads wiped for re-run
 * ``card.create``           — single card added to an engagement
 * ``card.update``           — card field change
 * ``card.delete``           — card removed
@@ -60,6 +61,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "client.update",
         "client.delete",
         "client.rotate_token",
+        "client.reset",
         # Card lifecycle
         "card.create",
         "card.update",
