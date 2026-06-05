@@ -47,7 +47,10 @@
 
 - name: Grant CONNECT on pulse database to anon + admin + member roles
   community.postgresql.postgresql_privs:
-    database: "{{ pulse_db_name }}"
+    # `login_db` replaces the deprecated `database` alias; both refer to the
+    # target db that the GRANT applies to. See community.postgresql 5.0
+    # deprecation notice.
+    login_db: "{{ pulse_db_name }}"
     type: database
     privs: CONNECT
     roles: "{{ pulse_db_anon }},{{ pulse_db_admin }},{{ pulse_db_member }}"
@@ -57,6 +60,7 @@
 - name: Ensure pgcrypto extension is enabled in the pulse database
   community.postgresql.postgresql_ext:
     name: pgcrypto
-    db: "{{ pulse_db_name }}"
+    # `login_db` replaces the deprecated `db` alias.
+    login_db: "{{ pulse_db_name }}"
     login_user: postgres
   become_user: postgres

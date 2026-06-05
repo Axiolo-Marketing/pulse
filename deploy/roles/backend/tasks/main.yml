@@ -103,7 +103,8 @@
 #     list never demotes (consistent with the v2 task's "doesn't wipe" rule).
 - name: Seed superadmin users + Axiolo org owner memberships
   community.postgresql.postgresql_query:
-    db: "{{ pulse_db_name }}"
+    # `login_db` replaces the deprecated `db` alias.
+    login_db: "{{ pulse_db_name }}"
     login_user: "{{ pulse_db_owner }}"
     login_password: "{{ vault_pulse_db_owner_password }}"
     login_host: "{{ pulse_db_host }}"
