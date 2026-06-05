@@ -1,6 +1,12 @@
 # Postgres-pulse: uses the system's existing Postgres install. Creates the
-# `pulse` database + 3 roles. Never touches postgresql.conf, never modifies
+# `pulse` database + 4 roles. Never touches postgresql.conf, never modifies
 # any other database.
+#
+# Roles must exist BEFORE alembic runs — migration 0004 references
+# pulse_member in column-scoped GRANTs and the migration's CREATE ROLE
+# fallback can't fire here because pulse_owner has no CREATEROLE attribute
+# on prod (correctly scoped). The system `postgres` superuser provisions
+# them via this role instead.
 
 - name: Ensure community.postgresql collection is available
   ansible.builtin.command: ansible-galaxy collection list community.postgresql
@@ -21,9 +27,10 @@
     login_user: postgres
   become_user: postgres
   loop:
-    - { name: "{{ pulse_db_owner }}", password: "{{ vault_pulse_db_owner_password }}", flags: "LOGIN,CREATEDB" }
-    - { name: "{{ pulse_db_anon }}",  password: "{{ vault_pulse_db_anon_password }}",  flags: "LOGIN,NOSUPERUSER,NOBYPASSRLS" }
-    - { name: "{{ pulse_db_admin }}", password: "{{ vault_pulse_db_admin_password }}", flags: "LOGIN,NOSUPERUSER,BYPASSRLS" }
+    - { name: "{{ pulse_db_owner }}",  password: "{{ vault_pulse_db_owner_password }}",  flags: "LOGIN,CREATEDB" }
+    - { name: "{{ pulse_db_anon }}",   password: "{{ vault_pulse_db_anon_password }}",   flags: "LOGIN,NOSUPERUSER,NOBYPASSRLS" }
+    - { name: "{{ pulse_db_admin }}",  password: "{{ vault_pulse_db_admin_password }}",  flags: "LOGIN,NOSUPERUSER,BYPASSRLS" }
+    - { name: "{{ pulse_db_member }}", password: "{{ vault_pulse_db_member_password }}", flags: "LOGIN,NOSUPERUSER,NOBYPASSRLS" }
   no_log: true
 
 - name: Create pulse database (owned by pulse_owner)
@@ -38,12 +45,12 @@
     login_user: postgres
   become_user: postgres
 
-- name: Grant CONNECT on pulse database to anon + admin roles
+- name: Grant CONNECT on pulse database to anon + admin + member roles
   community.postgresql.postgresql_privs:
     database: "{{ pulse_db_name }}"
     type: database
     privs: CONNECT
-    roles: "{{ pulse_db_anon }},{{ pulse_db_admin }}"
+    roles: "{{ pulse_db_anon }},{{ pulse_db_admin }},{{ pulse_db_member }}"
     login_user: postgres
   become_user: postgres
 

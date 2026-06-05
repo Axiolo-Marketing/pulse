@@ -46,6 +46,9 @@ pulse_db_name: pulse
 pulse_db_owner: pulse_owner
 pulse_db_anon: pulse_anon
 pulse_db_admin: pulse_admin
+# pulse_member runs admin routes with no BYPASSRLS, RLS scopes by pulse.org_id.
+# Added in the v3 multi-tenant migration (PR 1 / Alembic 0004).
+pulse_db_member: pulse_member
 pulse_db_host: 127.0.0.1
 pulse_db_port: 5432
 
@@ -65,14 +68,22 @@ pulse_smtp_port: 587
 pulse_smtp_from: "noreply@{{ pulse_domain }}"
 
 # ── App config ────────────────────────────────────────────────────────────
-# Admins. Each email here gets seeded into public.users with is_admin=true on
-# every deploy (ON CONFLICT DO NOTHING — adding a new email here grants admin
-# to a brand-new account, but doesn't downgrade or wipe an existing user).
-# Each operator then signs in at /admin/ via Google/Microsoft using one of
-# these addresses; the OAuth callback links their identity to the seeded row.
+# Superadmins. Each email here is stamped is_superadmin=true by migration
+# 0004's data migration (the env var is read at execution time). In v3 this
+# replaces the v2 is_admin column — per-org admin powers come from
+# organization_memberships.role='owner' instead.
+# Adding an email here does NOT promote an existing user retroactively;
+# run a one-shot SQL UPDATE for that case.
 pulse_admin_emails:
   - gabriel@axiolo.com
   - tom@axiolo.com
+# Production is invite-only — the legacy POST /api/auth/signup returns 404.
+# Override to true only if you genuinely want public signup back.
+pulse_signup_enabled: false
+# Flips the Secure flag on session + state cookies. Set to "development" only
+# on the dev compose stack — anything else (or unset) treats cookies as
+# production-grade.
+pulse_environment: production
 pulse_max_upload_bytes: 26214400             # 25 MB
 pulse_session_max_age_seconds: 2592000       # 30 days
 
@@ -101,6 +112,15 @@ vault_pulse_db_admin_password: !vault |
           39393138306630396634353035653764633235336661633731383633336433386437343131303066
           3532616338383234650a613131313535616136313461366634333234303162353364626261313433
           36643162623738396461356262396239383834323265393264306430376163303137
+# TODO operator: generate a strong password and replace this !vault block with
+# the output of:
+#   openssl rand -hex 32 | ansible-vault encrypt_string --vault-password-file vault_secret \
+#     --stdin-name vault_pulse_db_member_password
+# Then re-run the playbook so postgres-pulse provisions the pulse_member role
+# and the backend role re-templates /etc/pulse/pulse.env with MEMBER_DATABASE_URL.
+vault_pulse_db_member_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          REPLACE_ME_WITH_REAL_ENCRYPTED_PASSWORD
 vault_pulse_session_secret: !vault |
           $ANSIBLE_VAULT;1.1;AES256
           38343264383964656337303265326562666565366636316236306331373634623737376639326165
