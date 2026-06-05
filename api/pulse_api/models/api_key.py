@@ -7,17 +7,21 @@ from pulse_api.models._helpers import utcnow_naive
 
 
 class ApiKey(SQLModel, table=True):
-    """Per-user Bearer token row.
+    """Per-(user, org) Bearer token row.
 
-    `org_id` is nullable in PR 1. PR 2 makes it NOT NULL and binds each
-    key to a `(user, org)` pair so non-browser callers (CLI, CI, MCP)
-    can authenticate against a specific tenant. PR 1 backfills existing
-    rows to the Axiolo org via the data migration.
+    Each key authenticates as a ``(user_id, org_id)`` pair. The owning
+    user must be a member of ``org_id`` at creation time; revoking the
+    membership does NOT auto-revoke the key (that's a separate operator
+    action), but a key with no matching active membership will fail
+    membership lookup at request time and return 403.
+
+    Migration 0005 makes ``org_id`` NOT NULL; 0004 backfilled every
+    pre-existing row to the Axiolo org.
 
     Attributes:
         id: UUID primary key.
         user_id: Owning user.
-        org_id: Owning organization (nullable in PR 1, NOT NULL in PR 2).
+        org_id: Owning organization. NOT NULL — every key is scoped.
         prefix: First 8 hex chars of the raw key — indexed for cheap
             lookup before the constant-time hash compare.
         key_hash: SHA-256 of the raw key value.
@@ -31,9 +35,7 @@ class ApiKey(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
-    org_id: uuid.UUID | None = Field(
-        default=None, foreign_key="organizations.id", index=True
-    )
+    org_id: uuid.UUID = Field(foreign_key="organizations.id", index=True)
     prefix: str = Field(max_length=8, index=True)
     key_hash: str
     label: str

@@ -85,18 +85,28 @@ async def test_authorize_unknown_provider_returns_404(client: AsyncClient) -> No
     assert r.status_code == 404
 
 
-# ── callback: new user creation ───────────────────────────────────────────
+# ── callback: unknown email with NO invite must NOT create a user ─────────
 
 
 @pytest.mark.parametrize("provider", ["google", "microsoft"])
-async def test_callback_creates_new_user(
+async def test_callback_with_unknown_email_no_invite_redirects_with_error(
     client: AsyncClient,
     db: AsyncSession,
     respx_mock: respx.Router,
     provider: str,
 ) -> None:
+    """Self-signup is disabled in PR 2: an OAuth callback for an
+    unknown email with no pending invite must redirect to
+    ``/admin/?error=invitation_required`` and create no user.
+    """
     state, state_cookie = await _do_authorize(client, provider)
-    _stub_provider(respx_mock, provider, sub="provider-sub-1", email="new@example.com", name="New User")
+    _stub_provider(
+        respx_mock,
+        provider,
+        sub="provider-sub-1",
+        email="stranger@example.com",
+        name="Stranger",
+    )
 
     client.cookies.set(f"oauth_state_{provider}", state_cookie)
     r = await client.get(
@@ -105,33 +115,104 @@ async def test_callback_creates_new_user(
         follow_redirects=False,
     )
     assert r.status_code == 302
-    assert r.headers["location"].rstrip("/").endswith("/admin")
+    assert "error=invitation_required" in r.headers["location"]
+    # Session cookie must NOT be set — the user was never signed in.
+    assert r.cookies.get(settings.session_cookie_name) is None
+
+    # And the users table is unchanged.
+    user_count = (
+        await db.execute(
+            text(
+                "select count(*) from public.users where email = 'stranger@example.com'"
+            )
+        )
+    ).scalar()
+    assert user_count == 0
+
+
+@pytest.mark.parametrize("provider", ["google", "microsoft"])
+async def test_callback_with_pending_invite_creates_user_and_membership(
+    client: AsyncClient,
+    db: AsyncSession,
+    respx_mock: respx.Router,
+    axiolo_org: dict[str, str],
+    provider: str,
+) -> None:
+    """Unknown email + pending invite → user created, identity linked,
+    membership inserted, invite marked accepted, session cookie set."""
+    # Seed an invite for the OAuth-verified email.
+    invite_id = (
+        await db.execute(
+            text(
+                "insert into public.organization_invites "
+                "(org_id, email, role, token_hash, expires_at) "
+                "values (cast(:o as uuid), :e, 'member', :h, now() + interval '7 days') "
+                "returning id::text"
+            ),
+            {
+                "o": axiolo_org["id"],
+                "e": "invitee@example.com",
+                "h": "test-hash-oauth-1",
+            },
+        )
+    ).mappings().one()["id"]
+    await db.flush()
+
+    state, state_cookie = await _do_authorize(client, provider)
+    _stub_provider(
+        respx_mock,
+        provider,
+        sub="provider-sub-1",
+        email="invitee@example.com",
+        name="Invitee",
+    )
+
+    client.cookies.set(f"oauth_state_{provider}", state_cookie)
+    r = await client.get(
+        f"/api/auth/{provider}/callback",
+        params={"code": "fake-code", "state": state},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    assert "error=" not in r.headers["location"]
     assert r.cookies.get(settings.session_cookie_name)
 
     user_row = (
         await db.execute(
             text(
-                "select id, email, email_verified_at, password_hash, name from public.users "
-                "where email='new@example.com'"
+                "select id, email, email_verified_at, password_hash, name "
+                "from public.users where email='invitee@example.com'"
             )
         )
     ).mappings().one_or_none()
     assert user_row is not None
-    assert user_row["email_verified_at"] is not None  # provider verified
-    assert user_row["password_hash"] is None          # OAuth-only
-    assert user_row["name"] == "New User"
+    assert user_row["email_verified_at"] is not None
+    assert user_row["password_hash"] is None
+    assert user_row["name"] == "Invitee"
 
-    identity_row = (
+    membership = (
         await db.execute(
             text(
-                "select user_id, provider, provider_user_id from public.oauth_identities "
-                "where provider=:p and provider_user_id='provider-sub-1'"
+                "select role, org_id::text from public.organization_memberships "
+                "where user_id = cast(:u as uuid)"
             ),
-            {"p": provider},
+            {"u": str(user_row["id"])},
         )
     ).mappings().one_or_none()
-    assert identity_row is not None
-    assert str(identity_row["user_id"]) == str(user_row["id"])
+    assert membership is not None
+    assert membership["role"] == "member"
+    assert membership["org_id"] == axiolo_org["id"]
+
+    accepted = (
+        await db.execute(
+            text(
+                "select accepted_at from public.organization_invites "
+                "where id = cast(:i as uuid)"
+            ),
+            {"i": invite_id},
+        )
+    ).scalar()
+    assert accepted is not None
 
 
 # ── callback: link to existing email ──────────────────────────────────────

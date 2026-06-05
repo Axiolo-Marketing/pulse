@@ -25,7 +25,7 @@ import secrets
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api.db import admin_engine
-from pulse_api.models import User
+from pulse_api.models import ApiKey, User
 from pulse_api.repos import api_keys as api_keys_repo
 from pulse_api.repos import users as users_repo
 
@@ -99,15 +99,19 @@ async def _touch_last_used(api_key_id) -> None:  # type: ignore[no-untyped-def]
 async def verify_bearer(
     authorization: str,
     session: AsyncSession,
-) -> User | None:
-    """Resolve `Authorization: Bearer pulse_<key>` to a User row, or None.
+) -> tuple[User, ApiKey] | None:
+    """Resolve ``Authorization: Bearer pulse_<key>`` to (User, ApiKey), or None.
 
-    Single source of truth for bearer validation — both the REST middleware
-    and the MCP server call into this. Constant-time hash compare with a
-    dummy 64-char hex on the prefix-miss path so timing observers can't
-    distinguish unknown prefix from wrong hash. On success, schedules
-    last_used_at on a fresh short-lived session so the caller's session
-    is never committed.
+    Returns the ApiKey alongside the user so the auth layer can read
+    ``api_key.org_id`` for the role-flip — the key, not the cookie,
+    determines which org a Bearer-authenticated request is scoped to.
+
+    Single source of truth for bearer validation — both the REST
+    middleware and the MCP server call into this. Constant-time hash
+    compare with a dummy 64-char hex on the prefix-miss path so timing
+    observers can't distinguish unknown prefix from wrong hash. On
+    success, schedules ``last_used_at`` on a fresh short-lived session
+    so the caller's session is never committed.
     """
     if not authorization.startswith(_BEARER_PREFIX):
         return None
@@ -141,4 +145,4 @@ async def verify_bearer(
     # the caller's session which a route handler or MCP tool will continue
     # to use. Committing it here would close that transaction prematurely.
     await _touch_last_used(api_key.id)
-    return user
+    return user, api_key

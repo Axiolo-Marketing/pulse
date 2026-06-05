@@ -79,8 +79,8 @@ async def seed_admin_user(
     Operations performed (all idempotent):
 
     1. Upsert the Axiolo organization by slug.
-    2. Insert or update the user (password, name, is_admin, verified).
-    3. Insert (or no-op) the owner membership row.
+    2. Insert or update the user (password, name, verified).
+    3. Insert (or no-op) the owner membership row on Axiolo.
     4. Set ``users.last_active_org_id`` to the Axiolo org.
     5. Promote the user to ``is_superadmin = true`` if their email is in
        the ``SUPERADMIN_EMAILS`` env var.
@@ -135,10 +135,10 @@ async def seed_admin_user(
                     await conn.execute(
                         text(
                             "insert into public.users "
-                            "(email, password_hash, name, is_admin, "
+                            "(email, password_hash, name, "
                             " is_superadmin, last_active_org_id, "
                             " email_verified_at) "
-                            "values (:e, :h, :n, true, :su, cast(:org as uuid), now()) "
+                            "values (:e, :h, :n, :su, cast(:org as uuid), now()) "
                             "returning id::text"
                         ),
                         {
@@ -157,7 +157,6 @@ async def seed_admin_user(
                         "update public.users set "
                         "  password_hash = :h, "
                         "  name = :n, "
-                        "  is_admin = true, "
                         "  is_superadmin = case when :su then true else is_superadmin end, "
                         "  last_active_org_id = coalesce(last_active_org_id, cast(:org as uuid)), "
                         "  email_verified_at = coalesce(email_verified_at, now()) "

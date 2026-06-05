@@ -48,19 +48,27 @@ async def create_card(
     default_value: str | None,
     skip_allowed: bool,
     attachment_path: str | None,
+    org_id: str,
 ) -> dict | None:
+    """Insert one card. ``org_id`` is NOT NULL on the table (0005), so
+    every call must thread the active org's id through. Callers running
+    on a ``pulse_member`` session pull this from the resolved
+    membership; ``pulse_admin`` callers (none in current code, reserved
+    for superadmin work) must pick the right org explicitly.
+    """
     try:
         result = await session.execute(
             text(
                 f"""
                 insert into public.cards
                   (client_id, order_index, category, title, context, question,
-                   response_type, options, default_value, skip_allowed, attachment_path)
+                   response_type, options, default_value, skip_allowed,
+                   attachment_path, org_id)
                 values
                   (cast(:cid as uuid),
                    coalesce((select max(order_index) from public.cards where client_id = cast(:cid as uuid)), 0) + 1,
                    :cat, :title, :ctx, :q, :rt,
-                   cast(:opts as jsonb), :dv, :sa, :ap)
+                   cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid))
                 returning {CARD_COLS}
                 """
             ),
@@ -75,6 +83,7 @@ async def create_card(
                 "dv": default_value,
                 "sa": skip_allowed,
                 "ap": attachment_path,
+                "org": org_id,
             },
         )
     except Exception:

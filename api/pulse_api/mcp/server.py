@@ -33,12 +33,13 @@ from typing import TYPE_CHECKING
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
 from mcp.server.transport_security import TransportSecuritySettings
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api.auth import api_keys as api_keys_lib
 from pulse_api.config import settings as app_settings
-from pulse_api.db import admin_engine
-from pulse_api.models import User
+from pulse_api.db import admin_engine, member_engine
+from pulse_api.models import ApiKey, User
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
@@ -65,30 +66,68 @@ async def _open_admin_session() -> AsyncIterator[AsyncSession]:
     just the context manager that wraps create/close. Tests monkeypatch
     this function to redirect through the test's rolled-back connection
     (see `tests/test_mcp.py`); production talks to the admin pool.
+
+    PR 2 swap: ``authenticate_request`` now returns ``(user, api_key)``
+    and tool handlers open a member-scoped session via
+    ``_open_member_session(api_key.org_id)`` instead. ``_open_admin_session``
+    is retained for the auth path (looking up the api key row itself)
+    and for tests that monkeypatch the session factory.
     """
     async with AsyncSession(admin_engine, expire_on_commit=False) as session:
         yield session
 
 
+@asynccontextmanager
+async def _open_member_session(org_id: str) -> AsyncIterator[AsyncSession]:
+    """Open a short-lived ``pulse_member`` session with ``pulse.org_id`` set.
+
+    Mirrors the REST ``get_org_scoped_session`` dep — the role has no
+    BYPASSRLS and the GUC is set per request. A tool handler that
+    forgets a ``where org_id = ...`` therefore cannot leak across
+    tenants; Postgres refuses the row.
+
+    Tests monkeypatch this to bind through the rolled-back test
+    connection.
+    """
+    async with member_engine.connect() as conn:
+        trans = await conn.begin()
+        try:
+            await conn.execute(
+                text("select set_config('pulse.org_id', :org_id, true)"),
+                {"org_id": str(org_id)},
+            )
+            async with AsyncSession(bind=conn, expire_on_commit=False) as session:
+                yield session
+            await trans.commit()
+        except Exception:
+            await trans.rollback()
+            raise
+
+
 # ── Authentication ────────────────────────────────────────────────────────
 
 
-async def authenticate_request(ctx: Context) -> User:
-    """Resolve the calling MCP request to an admin User row.
+async def authenticate_request(ctx: Context) -> tuple[User, ApiKey]:
+    """Resolve the calling MCP request to (User, ApiKey).
 
-    Delegates the actual bearer-string → User resolution to
-    `auth.api_keys.verify_bearer` — the single source of truth shared
+    Returns the ApiKey alongside the user so each tool handler can pull
+    ``api_key.org_id`` and open a member-scoped session against the
+    right tenant — the key, not the cookie (MCP has no cookies anyway),
+    determines org context.
+
+    Delegates the actual bearer-string → (User, ApiKey) resolution to
+    ``auth.api_keys.verify_bearer`` — the single source of truth shared
     with the REST middleware. The MCP path adds two MCP-specific things:
 
-      1. Extracting the `Authorization` header off the Starlette request
-         that FastMCP exposes via `ctx.request_context.request`.
-      2. The `is_admin` gate (MCP is admin-only). The REST layer enforces
-         this separately via the `get_current_admin` dependency; for MCP
-         we inline it here so a non-admin key produces the MCP-shaped
-         tool-error rather than an HTTP 403.
+      1. Extracting the ``Authorization`` header off the Starlette
+         request that FastMCP exposes via ``ctx.request_context.request``.
+      2. Membership-existence check on the resolved ``(user, org_id)``
+         pair — a key whose owning user was removed from the org should
+         stop working immediately (the REST layer reaches the same
+         outcome through ``get_current_org_member``).
 
-    Raises `MCPAuthError` for any failure mode. FastMCP turns that into
-    a tool-error response the client surfaces to the model.
+    Raises ``MCPAuthError`` for any failure mode. FastMCP turns that
+    into a tool-error response the client surfaces to the model.
     """
     request = getattr(ctx.request_context, "request", None)
     if request is None:
@@ -99,13 +138,25 @@ async def authenticate_request(ctx: Context) -> User:
         raise MCPAuthError("missing Authorization header")
 
     async with _open_admin_session() as session:
-        user = await api_keys_lib.verify_bearer(authorization, session)
-        if user is None:
+        resolved = await api_keys_lib.verify_bearer(authorization, session)
+        if resolved is None:
             raise MCPAuthError("invalid API key")
-        if not user.is_admin:
-            raise MCPAuthError("admin only")
+        user, api_key = resolved
+        # Membership existence check — keys outlive memberships only as
+        # tombstones; an active key whose user lost their seat must
+        # stop working immediately.
+        result = await session.execute(
+            text(
+                "select 1 from public.organization_memberships "
+                "where user_id = cast(:u as uuid) "
+                "  and org_id  = cast(:o as uuid) limit 1"
+            ),
+            {"u": str(user.id), "o": str(api_key.org_id)},
+        )
+        if result.scalar() is None:
+            raise MCPAuthError("user is not a member of the key's organization")
 
-    return user
+    return user, api_key
 
 
 # ── FastMCP instance ──────────────────────────────────────────────────────

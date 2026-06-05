@@ -90,12 +90,21 @@ export type ResponseState =
 export interface Client {
   id: string;
   name: string;
+  /** Legacy free-form customer-org text on the client row (kept for
+   * backwards compat). The post-multi-tenant operator-side org is
+   * surfaced separately via `org_logo_path` + the brand wordmark. */
   org_name: string | null;
   engagement_name: string | null;
   token?: string;       // present in admin views, omitted from /api/me
   brief: string | null;
   created_at: string;
   last_active_at: string | null;
+  /** Optional brand logo path for the operator's organization. When
+   * `/api/me` returns this, the client-facing deck renders it in the
+   * top-bar instead of the default Axiolo wordmark. Backend wires this
+   * through in a follow-up — frontend already handles the field
+   * gracefully when absent (treats it as `null`). */
+  org_logo_path?: string | null;
 }
 
 export interface Card {
@@ -191,11 +200,16 @@ export function fileUrl(uploadId: string): string {
 
 // ── Admin auth + admin API (session cookie via credentials: include) ──────
 
+/** Shape of `/api/auth/me`. Post multi-tenant migration the operator's
+ * admin-ness is implicit in their org membership (a user with no active
+ * org cannot reach any `/api/admin/*` route). `is_superadmin` is the
+ * separate cross-org tier (PR 5). */
 export interface AuthUser {
   id: string;
   email: string;
   name: string | null;
-  is_admin: boolean;
+  is_superadmin: boolean;
+  active_org_id: string | null;
   email_verified_at: string | null;
   has_password: boolean;
 }
@@ -209,6 +223,10 @@ export interface ApiKeySummary {
   id: string;
   label: string;
   prefix: string;
+  /** Org the key is scoped to. Bearer auth always flips the request
+   * into a `pulse_member` session against this org — never the cookie's
+   * `active_org_id`. */
+  org_id: string;
   last_used_at: string | null;
   created_at: string;
 }
@@ -217,6 +235,106 @@ export interface ApiKeyWithSecret extends ApiKeySummary {
   /** Full `pulse_<32-hex>` raw key. ONLY returned by POST /api/auth/me/api-keys
    * once at creation; never persisted, never re-fetchable from the list. */
   key: string;
+}
+
+// ── Org / membership / invite types (PR 4) ────────────────────────────────
+
+/** Slim org row returned by `/api/me/orgs` and `/api/me/switch-org`. */
+export interface OrgSummary {
+  id: string;
+  name: string;
+  slug: string;
+  /** The caller's role in this org: `"owner"` or `"member"`. */
+  role: string;
+  logo_path: string | null;
+}
+
+/** Full org payload from `/api/orgs/me`. Drives the Organization tab header. */
+export interface OrgDetails {
+  id: string;
+  name: string;
+  slug: string;
+  logo_path: string | null;
+  /** The caller's role in this org: `"owner"` or `"member"`. */
+  role: string;
+  member_count: number;
+  pending_invite_count: number;
+}
+
+export interface MemberRow {
+  user_id: string;
+  email: string;
+  name: string | null;
+  /** `"owner"` or `"member"`. */
+  role: string;
+  joined_at: string;
+}
+
+export interface InviteSummary {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+  expires_at: string;
+  invited_by_email: string | null;
+}
+
+/** Actor sub-payload of an activity entry. Each field can be `null` when
+ * the row was emitted without a user (system maintenance) or when the
+ * user was removed after the action — the row stays via
+ * `ON DELETE SET NULL` on `audit_logs.user_id`. */
+export interface ActivityActor {
+  user_id: string | null;
+  email: string | null;
+  name: string | null;
+}
+
+/** One row of the activity feed. `action` is a stable enum string;
+ * the UI maps it to a human-readable label via `formatActivityRow`
+ * in `activity-tab.ts`. */
+export interface ActivityEntry {
+  id: string;
+  created_at: string;
+  actor: ActivityActor;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+/** Paginated payload returned by `GET /api/orgs/me/activity`. */
+export interface ActivityPage {
+  entries: ActivityEntry[];
+  /** Opaque cursor — pass it back as `cursor` to fetch the next page.
+   * `null` when the current page is the last one. */
+  next_cursor: string | null;
+}
+
+export interface ListActivityArgs {
+  limit?: number;
+  cursor?: string | null;
+  actor_user_id?: string | null;
+  action?: string | null;
+}
+
+/** Public invite-acceptance metadata from `GET /api/invites/{token}`. */
+export interface InviteMetadata {
+  org_name: string;
+  email: string;
+  role: string;
+  expires_at: string;
+  /** Resolved status; the acceptance UI branches on this. */
+  status: "pending" | "expired" | "accepted" | "revoked";
+}
+
+export interface PasswordAcceptResponse {
+  user_id: string;
+  org_id: string;
+  role: string;
+}
+
+export interface OAuthAcceptResponse {
+  redirect_url: string;
 }
 
 export interface EngagementSummary {
@@ -321,7 +439,10 @@ export const authApi = {
   listApiKeys: (): Promise<ApiKeySummary[]> =>
     request("/api/auth/me/api-keys"),
 
-  createApiKey: (args: { label: string }): Promise<ApiKeyWithSecret> =>
+  createApiKey: (args: {
+    label: string;
+    org_id?: string | null;
+  }): Promise<ApiKeyWithSecret> =>
     request("/api/auth/me/api-keys", {
       method: "POST",
       body: JSON.stringify(args),
@@ -402,3 +523,185 @@ export const adminApi = {
   uploadDownloadUrl: (uploadId: string): string =>
     `${API_BASE}/api/admin/uploads/${uploadId}/download`,
 };
+
+// ── Org switching, details, members, invites (operator surface) ───────────
+
+/** Org-scoped admin surface — every endpoint resolves the active org
+ * from the session cookie (or API key). Mirrors the backend split in
+ * `api/pulse_api/routes/orgs.py`. */
+export const orgsApi = {
+  listMine: (): Promise<OrgSummary[]> => request("/api/me/orgs"),
+
+  switchOrg: (orgId: string): Promise<OrgSummary> =>
+    request("/api/me/switch-org", {
+      method: "POST",
+      body: JSON.stringify({ org_id: orgId }),
+    }),
+
+  me: (): Promise<OrgDetails> => request("/api/orgs/me"),
+
+  updateMe: (args: { name?: string }): Promise<OrgDetails> =>
+    request("/api/orgs/me", {
+      method: "PATCH",
+      body: JSON.stringify(args),
+    }),
+
+  uploadLogo: (file: File): Promise<{ logo_path: string }> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request("/api/orgs/me/logo", { method: "POST", body: fd });
+  },
+
+  deleteLogo: (): Promise<void> =>
+    request("/api/orgs/me/logo", { method: "DELETE" }),
+
+  listMembers: (): Promise<MemberRow[]> => request("/api/orgs/me/members"),
+
+  updateMemberRole: (userId: string, role: string): Promise<MemberRow> =>
+    request(`/api/orgs/me/members/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    }),
+
+  removeMember: (userId: string): Promise<void> =>
+    request(`/api/orgs/me/members/${userId}`, { method: "DELETE" }),
+
+  listInvites: (): Promise<InviteSummary[]> =>
+    request("/api/orgs/me/invites"),
+
+  createInvite: (args: {
+    email: string;
+    role: string;
+  }): Promise<InviteSummary> =>
+    request("/api/orgs/me/invites", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  revokeInvite: (inviteId: string): Promise<void> =>
+    request(`/api/orgs/me/invites/${inviteId}`, { method: "DELETE" }),
+
+  /** Paginated activity feed for the active org. Pass `cursor` (from a
+   * previous page's `next_cursor`) to load more. Filters by actor user
+   * id and/or exact action enum string. */
+  listActivity: (args: ListActivityArgs = {}): Promise<ActivityPage> => {
+    const params = new URLSearchParams();
+    if (args.limit) params.set("limit", String(args.limit));
+    if (args.cursor) params.set("cursor", args.cursor);
+    if (args.actor_user_id) params.set("actor_user_id", args.actor_user_id);
+    if (args.action) params.set("action", args.action);
+    const qs = params.toString();
+    return request(`/api/orgs/me/activity${qs ? `?${qs}` : ""}`);
+  },
+};
+
+/** Public invite-acceptance flow. The token IS the auth — no cookie sent. */
+export const invitesApi = {
+  resolve: (token: string): Promise<InviteMetadata> =>
+    request(`/api/invites/${encodeURIComponent(token)}`),
+
+  acceptWithPassword: (
+    token: string,
+    args: { password: string; name?: string | null },
+  ): Promise<PasswordAcceptResponse> =>
+    request(`/api/invites/${encodeURIComponent(token)}/accept`, {
+      method: "POST",
+      body: JSON.stringify({ auth: "password", ...args }),
+    }),
+
+  acceptWithOAuth: (
+    token: string,
+    provider: "google" | "microsoft",
+  ): Promise<OAuthAcceptResponse> =>
+    request(`/api/invites/${encodeURIComponent(token)}/accept`, {
+      method: "POST",
+      body: JSON.stringify({ auth: provider }),
+    }),
+};
+
+// ── Superadmin surface (cross-tenant — PR 5) ──────────────────────────────
+
+/** Row in the superadmin org listing. The `owner_emails` field is a
+ * denormalized top-3 owners by joined date — the table can render
+ * "managed by Jane, Bob" without a per-row members fetch. */
+export interface SuperadminOrgRow {
+  id: string;
+  name: string;
+  slug: string;
+  member_count: number;
+  pending_invite_count: number;
+  created_at: string;
+  owner_emails: string[];
+}
+
+export interface SuperadminInviteSummary {
+  id: string;
+  email: string;
+  expires_at: string;
+}
+
+export interface SuperadminOrgPayload {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+}
+
+export interface CreateOrgResult {
+  org: SuperadminOrgPayload;
+  invite: SuperadminInviteSummary;
+}
+
+export interface SuperadminMemberRow {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  joined_at: string;
+}
+
+/** Cross-tenant org management — gated by `users.is_superadmin` server-side.
+ * The UI also hides the entry point unless `me.is_superadmin`, but the
+ * backend is the source of truth. */
+export const superadminApi = {
+  listOrgs: (opts: { limit?: number } = {}): Promise<SuperadminOrgRow[]> => {
+    const q = opts.limit ? `?limit=${encodeURIComponent(opts.limit)}` : "";
+    return request(`/api/superadmin/orgs${q}`);
+  },
+
+  createOrg: (args: {
+    name: string;
+    slug: string;
+    owner_email: string;
+  }): Promise<CreateOrgResult> =>
+    request("/api/superadmin/orgs", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  deleteOrg: (orgId: string): Promise<void> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}`, {
+      method: "DELETE",
+    }),
+
+  listOrgMembers: (orgId: string): Promise<SuperadminMemberRow[]> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}/members`),
+};
+
+/** Build an absolute URL for an org logo served by
+ * `GET /api/orgs/me/logo/{filename}`. The endpoint authenticates with
+ * the session cookie (`credentials: include` on fetches works for
+ * cross-origin only when the API base is same-origin, which is the
+ * production setup behind nginx). Returns `null` if `logo_path` is empty
+ * or doesn't match the expected `org-logos/{org_id}/{filename}` shape —
+ * an unrecognized path keeps the call out of the network entirely. */
+export function orgLogoUrl(logoPath: string | null | undefined): string | null {
+  if (!logoPath) return null;
+  // Stored as `org-logos/{org_id}/{filename}`; the backend route ignores
+  // the org_id prefix in the URL — it's resolved from the auth context.
+  const parts = logoPath.split("/");
+  if (parts.length < 3 || parts[0] !== "org-logos") return null;
+  const filename = parts[parts.length - 1];
+  if (!filename) return null;
+  return `${API_BASE}/api/orgs/me/logo/${encodeURIComponent(filename)}`;
+}

@@ -1,29 +1,38 @@
-"""Admin-only endpoints. Every route is gated by `Depends(get_current_admin)`
-which requires a valid session cookie AND `users.is_admin = true`.
+"""Admin-only endpoints. Every route is gated by the
+``get_current_org_member`` dep and runs queries on the ``pulse_member``
+session yielded by ``get_org_scoped_session``.
 
-The DB session here is the BYPASSRLS one (`get_admin_session`) — admin
-operations need to read and write across all clients, which RLS would
-otherwise block.
+The role-flip happens at dep injection: the session has no BYPASSRLS
+and the ``pulse.org_id`` GUC is set to the operator's active org. A
+forgotten ``where org_id = ...`` in a route handler therefore cannot
+leak — RLS narrows every query down to the active org's rows.
 """
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import storage
-from pulse_api.auth.middleware import get_current_admin
+from pulse_api.audit import record_audit
+from pulse_api.auth.middleware import (
+    get_current_org_member,
+    get_org_scoped_session,
+)
 from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.db import get_admin_session
-from pulse_api.models import User
+from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 
-router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[Depends(get_current_org_member)],
+)
 
 
 # ── Request/response models ────────────────────────────────────────────────
@@ -90,17 +99,18 @@ class ImportMarkdownRequest(BaseModel):
 
 @router.get("/clients")
 async def list_engagements(
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> list[dict[str, Any]]:
+    """List engagements visible to the active org — RLS handles the scope."""
     return await clients_repo.list_all_with_counts(session)
 
 
 @router.get("/clients/{client_id}")
 async def get_engagement(
     client_id: str,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> dict[str, Any]:
     client = await clients_repo.get_by_id(session, client_id)
     if client is None:
@@ -116,36 +126,32 @@ async def get_engagement(
 @router.post("/clients", status_code=201)
 async def create_engagement(
     req: CreateClientRequest,
-    session: AsyncSession = Depends(get_admin_session),
-    user: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, Any]:
     """Create a new engagement under the operator's active organization.
 
-    PR 1 sources ``org_id`` from ``users.last_active_org_id``. The data
-    migration backfills this for every existing admin user, so the path
-    is always populated in production. The fallback (look up the Axiolo
-    org by slug) handles the narrow window where a freshly-created
-    admin hasn't been written into ``last_active_org_id`` yet — PR 2
-    replaces this branch with the active-org from the session payload.
+    ``org_id`` comes from the resolved membership — never from the wire
+    body. RLS WITH CHECK would reject any other value anyway.
     """
-    org_id = user.last_active_org_id
-    if org_id is None:
-        result = await session.execute(
-            text("select id from public.organizations where slug = 'axiolo' limit 1"),
-        )
-        row_org = result.scalar_one_or_none()
-        if row_org is None:
-            raise HTTPException(
-                status_code=500, detail="no organization available for this user"
-            )
-        org_id = row_org
-
+    user, membership = org_member
     row = await clients_repo.create_engagement(
         session,
         name=req.name,
         org_name=req.org_name,
         engagement_name=req.engagement_name,
-        org_id=str(org_id),
+        org_id=str(membership.org_id),
+    )
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.create",
+        target_type="client",
+        target_id=row["id"],
+        metadata={"name": row.get("name")},
     )
     await session.commit()
     return row
@@ -155,13 +161,28 @@ async def create_engagement(
 async def update_engagement(
     client_id: str,
     req: UpdateClientRequest,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, Any]:
+    user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
     row = await clients_repo.update_engagement(session, client_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.update",
+        target_type="client",
+        target_id=client_id,
+        metadata={
+            "changed_fields": sorted(fields.keys()),
+            "name": row.get("name"),
+        },
+    )
     await session.commit()
     return row
 
@@ -169,16 +190,34 @@ async def update_engagement(
 @router.delete("/clients/{client_id}", status_code=204)
 async def delete_engagement(
     client_id: str,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> None:
     """Permanent delete. FK cascades wipe cards/responses/uploads in the
     same transaction; on-disk upload files are removed best-effort after
-    the commit. The token's URL stops working immediately."""
-    upload_paths = await clients_repo.list_upload_paths_for_client(session, client_id)
+    the commit. The token's URL stops working immediately.
+    """
+    user, membership = org_member
+    # Capture the name before the delete so the audit log can render
+    # something more useful than a UUID once the row is gone.
+    snapshot = await clients_repo.get_by_id(session, client_id)
+    upload_paths = await clients_repo.list_upload_paths_for_client(
+        session, client_id
+    )
     deleted = await clients_repo.delete_engagement(session, client_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="engagement not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.delete",
+        target_type="client",
+        target_id=client_id,
+        metadata={"name": (snapshot or {}).get("name") if snapshot else None},
+    )
     await session.commit()
 
     # Best-effort cleanup. A failure here leaves an orphaned file under
@@ -224,12 +263,26 @@ async def reset_engagement(
 @router.post("/clients/{client_id}/rotate-token")
 async def rotate_token(
     client_id: str,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, Any]:
+    user, membership = org_member
     row = await clients_repo.rotate_token(session, client_id)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.rotate_token",
+        target_type="client",
+        target_id=client_id,
+        # Don't capture the raw token — it's the live secret. Just note
+        # the engagement name so the activity row is human-readable.
+        metadata={"name": row.get("name")},
+    )
     await session.commit()
     return row
 
@@ -241,13 +294,17 @@ async def rotate_token(
 async def add_card(
     client_id: str,
     req: CreateCardRequest,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, Any]:
-    # Verify the engagement exists; cleaner 404 than a FK violation
+    # Verify the engagement exists; cleaner 404 than a FK violation.
+    # RLS hides out-of-org engagements, so this also covers cross-org.
     if (await clients_repo.get_by_id(session, client_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
+    user, membership = org_member
     row = await cards_repo.create_card(
         session,
         client_id=client_id,
@@ -260,9 +317,23 @@ async def add_card(
         default_value=req.default_value,
         skip_allowed=req.skip_allowed,
         attachment_path=req.attachment_path,
+        org_id=str(membership.org_id),
     )
     if row is None:
         raise HTTPException(status_code=500, detail="card creation failed")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="card.create",
+        target_type="card",
+        target_id=row["id"],
+        metadata={
+            "client_id": client_id,
+            "title": row.get("title"),
+            "response_type": req.response_type,
+        },
+    )
     await session.commit()
     return row
 
@@ -271,8 +342,10 @@ async def add_card(
 async def import_cards_markdown(
     client_id: str,
     req: ImportMarkdownRequest,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, Any]:
     """Bulk-import cards from a Pulse-card markdown document.
 
@@ -293,9 +366,16 @@ async def import_cards_markdown(
         detail = "\n".join(exc.errors) if exc.errors else str(exc)
         raise HTTPException(status_code=400, detail=detail) from exc
 
+    user, membership = org_member
+    org_id = str(membership.org_id)
     created: list[dict[str, Any]] = []
     for card in parsed:
-        row = await cards_repo.create_card(session, client_id=client_id, **card.to_create_kwargs())
+        row = await cards_repo.create_card(
+            session,
+            client_id=client_id,
+            org_id=org_id,
+            **card.to_create_kwargs(),
+        )
         if row is None:
             raise HTTPException(
                 status_code=500,
@@ -303,6 +383,18 @@ async def import_cards_markdown(
             )
         created.append(row)
 
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="card.import",
+        target_type="client",
+        target_id=client_id,
+        # One audit row per import call, not per card — the bulk import
+        # is the operator's single user action. ``count`` lets the UI
+        # render "Tom imported 14 cards" without joining card rows.
+        metadata={"count": len(created)},
+    )
     await session.commit()
     return {"created": created}
 
@@ -311,13 +403,28 @@ async def import_cards_markdown(
 async def update_card(
     card_id: str,
     req: UpdateCardRequest,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> dict[str, Any]:
+    user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
     row = await cards_repo.update_card(session, card_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="card not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="card.update",
+        target_type="card",
+        target_id=card_id,
+        metadata={
+            "changed_fields": sorted(fields.keys()),
+            "title": row.get("title"),
+        },
+    )
     await session.commit()
     return row
 
@@ -325,24 +432,72 @@ async def update_card(
 @router.delete("/cards/{card_id}", status_code=204)
 async def delete_card(
     card_id: str,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
 ) -> None:
+    user, membership = org_member
+    # Snapshot the card title BEFORE deletion so the activity row can
+    # render "deleted card 'X'" instead of a stale UUID. The delete and
+    # the audit insert commit atomically below.
+    snapshot_title = await _peek_card_title(session, card_id)
     deleted = await cards_repo.delete_card(session, card_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="card not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="card.delete",
+        target_type="card",
+        target_id=card_id,
+        metadata={"title": snapshot_title},
+    )
     await session.commit()
 
 
-# ── Admin downloads (BYPASSRLS — admin can fetch any client's file) ────────
+async def _peek_card_title(
+    session: AsyncSession, card_id: str
+) -> str | None:
+    """Return the card's title, or None if the row doesn't resolve.
+
+    Used by the delete handler to capture the title BEFORE the row
+    cascades away so the audit log can render a human-readable label.
+    RLS scopes the read to the active org's cards.
+    """
+    from sqlalchemy import text as _text
+
+    try:
+        result = await session.execute(
+            _text(
+                "select title from public.cards where id = cast(:c as uuid)"
+            ),
+            {"c": card_id},
+        )
+    except Exception:
+        # A malformed UUID raises before the where evaluates; the
+        # surrounding handler will 404 on the delete anyway.
+        return None
+    row = result.mappings().one_or_none()
+    return None if row is None else row.get("title")
+
+
+# ── Admin downloads (org-scoped via RLS) ───────────────────────────────────
 
 
 @router.get("/uploads/{upload_id}/download")
 async def admin_download_upload(
     upload_id: str,
-    session: AsyncSession = Depends(get_admin_session),
-    _: User = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_org_scoped_session),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> FileResponse:
+    """Stream the file behind ``upload_id``.
+
+    The org-scoped session hides uploads tagged with a different org's
+    id, so a cross-org download attempt yields 404 even if the operator
+    knows the upload UUID.
+    """
     row = await uploads_repo.admin_get_by_id(session, upload_id)
     if row is None:
         raise HTTPException(status_code=404, detail="upload not found")

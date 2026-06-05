@@ -30,12 +30,27 @@ class Settings(BaseSettings):
     # `make seed-dev`. Empty means no superadmins (acceptable in dev).
     superadmin_emails: str = ""
 
+    # Pulse is invite-only — `POST /api/auth/signup` returns 404 unless
+    # this is explicitly enabled. Tests covering the email/password flow
+    # override it. Never set true in production.
+    signup_enabled: bool = False
+
     session_secret: str = ""
     session_cookie_name: str = "pulse_session"
     session_max_age_seconds: int = 60 * 60 * 24 * 30
 
     verify_email_token_max_age_seconds: int = 60 * 60 * 24 * 7        # 7 days
     reset_password_token_max_age_seconds: int = 60 * 60               # 1 hour
+    invite_token_max_age_seconds: int = 60 * 60 * 24 * 7              # 7 days
+
+    # Per-org logo uploads (Settings → Organization → Logo).
+    max_org_logo_bytes: int = 500_000
+    allowed_logo_mime_types: tuple[str, ...] = (
+        "image/png",
+        "image/jpeg",
+        "image/svg+xml",
+        "image/webp",
+    )
 
     password_argon2_time_cost: int = 3
     password_argon2_memory_kb: int = 65536

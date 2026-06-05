@@ -28,13 +28,15 @@ async def _insert_key(
     db: AsyncSession,
     *,
     user_id: str,
+    org_id: str,
     label: str = "test key",
     revoked: bool = False,
 ) -> tuple[str, str]:
-    """Insert an API key row directly and return (raw_key, key_id).
+    """Insert an API key row directly and return ``(raw_key, key_id)``.
 
     Bypasses the POST route so the bearer-auth tests can construct keys
-    for arbitrary users (admin + non-admin) without juggling sessions.
+    for arbitrary ``(user, org)`` pairs without juggling sessions.
+    ``org_id`` is required post-0005 — the column is NOT NULL.
     """
     raw = generate_key()
     prefix = prefix_of(raw)
@@ -42,13 +44,14 @@ async def _insert_key(
         await db.execute(
             text(
                 "insert into public.api_keys "
-                "(user_id, prefix, key_hash, label, revoked_at) "
-                "values (cast(:u as uuid), :p, :h, :l, "
+                "(user_id, org_id, prefix, key_hash, label, revoked_at) "
+                "values (cast(:u as uuid), cast(:o as uuid), :p, :h, :l, "
                 "  case when :r then now() else null end) "
                 "returning id::text"
             ),
             {
                 "u": user_id,
+                "o": org_id,
                 "p": prefix,
                 "h": hash_key(raw),
                 "l": label,
@@ -101,7 +104,9 @@ async def test_list_api_keys_omits_raw_and_hash(
 async def test_bearer_admin_key_reaches_admin_endpoint(
     client: AsyncClient, db: AsyncSession, seed_admin_user: dict[str, str]
 ) -> None:
-    raw, _ = await _insert_key(db, user_id=seed_admin_user["id"])
+    raw, _ = await _insert_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
     r = await client.get(
         "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
     )
@@ -109,11 +114,20 @@ async def test_bearer_admin_key_reaches_admin_endpoint(
     assert isinstance(r.json(), list)
 
 
-# 6. Bearer key for a non-admin user → 403 on /api/admin/clients.
+# 6. Bearer key for a user with no org membership → 403 on /api/admin/clients.
+#    Post-PR-2 there is no "non-admin" vs "admin" — only "member of the
+#    key's org" vs "not a member". We pin both cases here: minting a key
+#    for a user who is NOT a member of the named org and using it must
+#    fail with 403 because ``get_current_org_member`` rejects the lookup.
 async def test_bearer_non_admin_key_blocked_from_admin_endpoint(
-    client: AsyncClient, db: AsyncSession, seed_user: dict[str, str]
+    client: AsyncClient,
+    db: AsyncSession,
+    seed_user: dict[str, str],
+    axiolo_org: dict[str, str],
 ) -> None:
-    raw, _ = await _insert_key(db, user_id=seed_user["id"])
+    raw, _ = await _insert_key(
+        db, user_id=seed_user["id"], org_id=axiolo_org["id"]
+    )
     r = await client.get(
         "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
     )
@@ -133,7 +147,10 @@ async def test_revoked_key_returns_401(
     client: AsyncClient, db: AsyncSession, seed_admin_user: dict[str, str]
 ) -> None:
     raw, _ = await _insert_key(
-        db, user_id=seed_admin_user["id"], revoked=True
+        db,
+        user_id=seed_admin_user["id"],
+        org_id=seed_admin_user["org_id"],
+        revoked=True,
     )
     r = await client.get(
         "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
@@ -147,7 +164,9 @@ async def test_unknown_prefix_and_wrong_hash_both_return_401(
 ) -> None:
     # Right prefix, wrong hash: insert a key whose hash doesn't match
     # the raw value we send on the wire.
-    valid_raw, _ = await _insert_key(db, user_id=seed_admin_user["id"])
+    valid_raw, _ = await _insert_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
     # Build a string with the same prefix but a different body so the
     # hash differs.
     same_prefix = valid_raw[:len(KEY_PREFIX) + 8]
@@ -174,7 +193,9 @@ async def test_unknown_prefix_and_wrong_hash_both_return_401(
 async def test_last_used_at_advances_after_bearer_auth(
     client: AsyncClient, db: AsyncSession, seed_admin_user: dict[str, str]
 ) -> None:
-    raw, key_id = await _insert_key(db, user_id=seed_admin_user["id"])
+    raw, key_id = await _insert_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
 
     before = (
         await db.execute(
@@ -213,7 +234,9 @@ async def test_last_used_at_advances_after_bearer_auth(
 async def test_delete_revokes_key_and_blocks_subsequent_auth(
     client: AsyncClient, db: AsyncSession, seed_admin_user: dict[str, str]
 ) -> None:
-    raw, key_id = await _insert_key(db, user_id=seed_admin_user["id"])
+    raw, key_id = await _insert_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
 
     # Sanity: key works before revoke.
     r = await client.get(
@@ -224,7 +247,10 @@ async def test_delete_revokes_key_and_blocks_subsequent_auth(
     # Switch to the session-cookie path so DELETE doesn't have to
     # authenticate using a key it's about to nuke.
     client.cookies.set(
-        settings.session_cookie_name, encode_session(seed_admin_user["id"])
+        settings.session_cookie_name,
+        encode_session(
+            seed_admin_user["id"], seed_admin_user["org_id"]
+        ),
     )
     r = await client.delete(f"/api/auth/me/api-keys/{key_id}")
     assert r.status_code == 204
@@ -313,13 +339,21 @@ async def test_delete_another_users_key_returns_404(
     seed_user: dict[str, str],
     seed_admin_user: dict[str, str],
 ) -> None:
-    """A non-admin user must not be able to revoke an admin's key by id."""
+    """A user must not be able to revoke another user's key by id.
+
+    Cross-user attempts return 404 (not 403) so the existence of
+    someone else's key id can't be probed.
+    """
     _, admin_key_id = await _insert_key(
-        db, user_id=seed_admin_user["id"], label="admin's"
+        db,
+        user_id=seed_admin_user["id"],
+        org_id=seed_admin_user["org_id"],
+        label="admin's",
     )
 
     # Authenticate as the non-admin (seed_user) and attempt to delete the
-    # admin's key.
+    # admin's key. ``revoke_api_key`` only needs the user dependency
+    # (no org_member dep), so seed_user authenticates fine via cookie.
     client.cookies.set(
         settings.session_cookie_name, encode_session(seed_user["id"])
     )

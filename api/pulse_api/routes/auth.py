@@ -1,27 +1,39 @@
-"""Email + password auth routes.
+"""Email + password auth routes plus per-user API key management.
 
-OAuth callbacks (Google, Microsoft) get their own modules in the next phase.
-Email verification + forgot/reset password are deferred — for now, signup
-creates an unverified user and login refuses to issue a session until
-`email_verified_at` is set.
+OAuth callbacks (Google, Microsoft) live in their own module
+(``routes/oauth.py``). Email verification + forgot/reset password are
+covered here. API key management endpoints sit under ``/api/auth/me/``
+so the operator surface is one short hop from ``/api/auth/me``.
+
+The session payload carries ``(user_id, active_org_id)`` after the PR 2
+auth refactor. ``encode_session`` now takes the active org id; we
+backfill it from ``users.last_active_org_id`` whenever the user has one
+so single-org operators never need to "pick an org" before they can
+work.
 """
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api.audit import record_audit
 from pulse_api.auth import api_keys as api_keys_lib
 from pulse_api.auth.email_messages import password_reset_email, verification_email
-from pulse_api.auth.middleware import get_current_user
+from pulse_api.auth.middleware import get_current_org_member, get_current_user
 from pulse_api.auth.password import hash_password, verify_password
-from pulse_api.auth.session import InvalidSessionError, encode_session
+from pulse_api.auth.session import (
+    InvalidSessionError,
+    clear_session,
+    write_session,
+)
 from pulse_api.auth.tokens import consume_token, issue_token
 from pulse_api.config import settings
 from pulse_api.db import get_admin_session
-from pulse_api.models import ApiKey, User
+from pulse_api.models import ApiKey, OrganizationMembership, User
 from pulse_api.observability import limiter, log
 from pulse_api.repos import api_keys as api_keys_repo
 from pulse_api.repos import users as users_repo
@@ -54,10 +66,21 @@ class ResetPasswordRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
+    """Shape of the ``/api/auth/me`` payload.
+
+    ``is_superadmin`` lets the frontend gate the superadmin nav item
+    client-side; the server still enforces it independently in the
+    superadmin dep. ``active_org_id`` is the org the operator is
+    currently scoped to (may be ``None`` for a user with no membership
+    yet — that user can sign in but can't reach any ``/api/admin/*``
+    endpoint until they accept an invite).
+    """
+
     id: str
     email: str
     name: str | None
-    is_admin: bool
+    is_superadmin: bool
+    active_org_id: str | None
     email_verified_at: datetime | None
     has_password: bool
 
@@ -67,7 +90,10 @@ class UserResponse(BaseModel):
             id=str(u.id),
             email=u.email,
             name=u.name,
-            is_admin=u.is_admin,
+            is_superadmin=u.is_superadmin,
+            active_org_id=(
+                str(u.last_active_org_id) if u.last_active_org_id else None
+            ),
             email_verified_at=u.email_verified_at,
             has_password=u.password_hash is not None,
         )
@@ -88,13 +114,22 @@ class OAuthIdentityResponse(BaseModel):
 
 
 class CreateApiKeyRequest(BaseModel):
+    """Request body for ``POST /api/auth/me/api-keys``.
+
+    ``org_id`` is optional — when omitted, defaults to the operator's
+    currently-active org. When supplied, the route verifies the operator
+    is a member of that org before minting the key.
+    """
+
     label: str = Field(min_length=1, max_length=100)
+    org_id: str | None = None
 
 
 class ApiKeySummary(BaseModel):
     id: str
     label: str
     prefix: str
+    org_id: str
     last_used_at: datetime | None
     created_at: datetime
 
@@ -106,19 +141,6 @@ class ApiKeyWithSecret(ApiKeySummary):
     key: str
 
 
-def _set_session_cookie(response: Response, user_id: str) -> None:
-    token = encode_session(user_id)
-    response.set_cookie(
-        key=settings.session_cookie_name,
-        value=token,
-        max_age=settings.session_max_age_seconds,
-        httponly=True,
-        samesite="lax",
-        secure=False,  # TODO: True in production once HTTPS is the only origin
-        path="/",
-    )
-
-
 @router.post("/signup", status_code=201, response_model=UserResponse)
 @limiter.limit(settings.rate_limit_account_enumeration)
 async def signup(
@@ -126,6 +148,8 @@ async def signup(
     req: SignupRequest,
     session: AsyncSession = Depends(get_admin_session),
 ) -> UserResponse:
+    if not settings.signup_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
     existing = await users_repo.get_user_by_email(session, req.email)
     if existing is not None:
         raise HTTPException(status_code=409, detail="email already registered")
@@ -231,13 +255,19 @@ async def login(
     await users_repo.touch_last_login(session, user.id)
     await session.commit()
 
-    _set_session_cookie(response, str(user.id))
+    # Mint a session with the user's last-active org so the next
+    # ``/api/admin/*`` call doesn't have to backfill from the user row.
+    write_session(
+        response,
+        user_id=user.id,
+        active_org_id=user.last_active_org_id,
+    )
     return UserResponse.from_model(user)
 
 
 @router.post("/logout")
 async def logout(response: Response) -> dict[str, str]:
-    response.delete_cookie(key=settings.session_cookie_name, path="/")
+    clear_session(response)
     return {"status": "ok"}
 
 
@@ -303,6 +333,7 @@ def _summary(row: ApiKey) -> ApiKeySummary:
         id=str(row.id),
         label=row.label,
         prefix=row.prefix,
+        org_id=str(row.org_id),
         last_used_at=row.last_used_at,
         created_at=row.created_at,
     )
@@ -310,12 +341,22 @@ def _summary(row: ApiKey) -> ApiKeySummary:
 
 @router.get("/me/api-keys", response_model=list[ApiKeySummary])
 async def list_api_keys(
-    user: User = Depends(get_current_user),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
     session: AsyncSession = Depends(get_admin_session),
 ) -> list[ApiKeySummary]:
-    """Active keys for the current user. Never includes the raw key or
-    `key_hash` — only what the UI needs to render the list."""
-    keys = await api_keys_repo.list_for_user(session, user.id)
+    """Active keys for the operator, scoped to their currently-active org.
+
+    Keys minted against other orgs the user belongs to are hidden until
+    the operator switches into that org. The Settings page is per-org;
+    showing every key the user has across every org would clutter the
+    UI and surface keys that aren't usable from the current context.
+    """
+    user, membership = org_member
+    keys = await api_keys_repo.list_for_user_in_org(
+        session, user_id=user.id, org_id=membership.org_id
+    )
     return [_summary(k) for k in keys]
 
 
@@ -324,26 +365,75 @@ async def list_api_keys(
 async def create_api_key(
     request: Request,
     req: CreateApiKeyRequest,
-    user: User = Depends(get_current_user),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
     session: AsyncSession = Depends(get_admin_session),
 ) -> ApiKeyWithSecret:
-    """Mint a fresh API key for the current user.
+    """Mint a fresh API key for the operator.
 
-    The raw key is returned exactly once in this response and never again
-    — the UI is expected to surface it inline and warn the operator. On
-    disk we keep only `prefix` + `key_hash`; the raw value isn't
-    recoverable from the database.
+    ``org_id`` in the request defaults to the operator's active org.
+    When the operator names a different org we verify they are a member
+    of it before minting — otherwise an owner of org A could mint a key
+    that would authenticate as anyone in org B.
+
+    The raw key is returned exactly once in this response and never
+    again — the UI surfaces it inline and warns the operator. On disk we
+    keep only ``prefix`` + ``key_hash``; the raw value isn't recoverable.
     """
+    user, active_membership = org_member
+
+    # Resolve target org. Default to the current active org.
+    target_org_id: uuid.UUID
+    if req.org_id is None:
+        target_org_id = active_membership.org_id
+    else:
+        try:
+            target_org_id = uuid.UUID(req.org_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="invalid org_id"
+            ) from exc
+
+        # If the operator named the active org, they're a member by
+        # construction (active_membership). Otherwise look it up.
+        if target_org_id != active_membership.org_id:
+            result = await session.execute(
+                text(
+                    "select 1 from public.organization_memberships "
+                    "where user_id = cast(:u as uuid) "
+                    "  and org_id  = cast(:o as uuid) limit 1"
+                ),
+                {"u": str(user.id), "o": str(target_org_id)},
+            )
+            if result.scalar() is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="user is not a member of the target organization",
+                )
+
     raw = api_keys_lib.generate_key()
     prefix = api_keys_lib.prefix_of(raw)
     key_hash = api_keys_lib.hash_key(raw)
 
-    row = await api_keys_repo.create(
+    row = await api_keys_repo.create_for_user(
         session,
         user_id=user.id,
+        org_id=target_org_id,
         prefix=prefix,
         key_hash=key_hash,
         label=req.label.strip(),
+    )
+    # NEVER record the raw key — only the prefix is safe. The Activity
+    # UI renders "Operator created API key 'CLI script' (pulse_abc1…)".
+    await record_audit(
+        session,
+        org_id=target_org_id,
+        user_id=user.id,
+        action="api_key.create",
+        target_type="api_key",
+        target_id=str(row.id),
+        metadata={"label": row.label, "prefix": row.prefix},
     )
     await session.commit()
     await session.refresh(row)
@@ -352,6 +442,7 @@ async def create_api_key(
         id=str(row.id),
         label=row.label,
         prefix=row.prefix,
+        org_id=str(row.org_id),
         last_used_at=row.last_used_at,
         created_at=row.created_at,
         key=raw,
@@ -364,21 +455,59 @@ async def revoke_api_key(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_admin_session),
 ) -> None:
-    """Hard-revoke. The key stops authenticating immediately — the partial
-    index `api_keys_prefix_idx` excludes revoked rows, so subsequent
-    bearer lookups won't even see it.
+    """Hard-revoke. The key stops authenticating immediately — the
+    partial index ``api_keys_prefix_idx`` excludes revoked rows, so
+    subsequent bearer lookups won't even see it.
 
-    Cross-user attempts return 404 (not 403) so the existence of someone
-    else's key id can't be probed.
+    Scoping is by user, NOT by active org: an owner who switched orgs
+    can still revoke any of their personal keys regardless of which org
+    they were minted against. Cross-user attempts return 404 (not 403)
+    so the existence of someone else's key id can't be probed.
+
+    The audit row is written under the key's own ``org_id`` so the
+    activity feed surfaces it in the org the key was minted against —
+    not the operator's currently-active org. Cross-org owners revoking
+    a key from outside the key's org therefore still leave a trail in
+    the right place.
     """
     try:
         as_uuid = uuid.UUID(key_id)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=404, detail="api key not found") from exc
 
+    # Peek at the key BEFORE revoke so the audit log can capture its
+    # org_id + prefix (needed for the activity row and to attribute it
+    # to the right org). Same `user_id` predicate as the revoke so this
+    # also short-circuits cross-user probes.
+    snapshot = await session.execute(
+        text(
+            "select org_id::text as org_id, prefix, label "
+            "from public.api_keys "
+            "where id = cast(:k as uuid) "
+            "  and user_id = cast(:u as uuid) "
+            "  and revoked_at is null"
+        ),
+        {"k": str(as_uuid), "u": str(user.id)},
+    )
+    snapshot_row = snapshot.mappings().one_or_none()
+
     ok = await api_keys_repo.revoke(
         session, api_key_id=as_uuid, user_id=user.id
     )
     if not ok:
         raise HTTPException(status_code=404, detail="api key not found")
+
+    if snapshot_row is not None:
+        await record_audit(
+            session,
+            org_id=str(snapshot_row["org_id"]),
+            user_id=user.id,
+            action="api_key.revoke",
+            target_type="api_key",
+            target_id=str(as_uuid),
+            metadata={
+                "label": str(snapshot_row["label"]),
+                "prefix": str(snapshot_row["prefix"]),
+            },
+        )
     await session.commit()
