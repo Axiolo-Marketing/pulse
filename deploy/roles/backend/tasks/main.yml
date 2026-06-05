@@ -82,27 +82,51 @@
   register: alembic_result
   changed_when: "'Running upgrade' in alembic_result.stdout"
 
-# ── 4. Seed admin users (idempotent). password_hash is left NULL; each
-# operator signs in via Google or Microsoft OAuth using an account whose
-# email matches one of these — the callback in api/pulse_api/routes/oauth.py
-# links the OAuth identity to the seeded row and issues a session. "Forgot
-# password?" is NOT a valid first-login path here: auth.py:forgot_password
-# skips users with password_hash IS NULL by design.
-- name: Seed admin users
+# ── 4. Seed superadmin users + Axiolo org membership (idempotent).
+#
+# password_hash is left NULL; each operator signs in via Google or Microsoft
+# OAuth using an account whose email matches one of these — the callback in
+# api/pulse_api/routes/oauth.py links the OAuth identity to the seeded row
+# and issues a session. "Forgot password?" is NOT a valid first-login path
+# here: auth.py:forgot_password skips users with password_hash IS NULL by
+# design.
+#
+# v3 (multi-tenant) shape:
+#   * users.is_admin is gone — replaced by is_superadmin (cross-tenant) and
+#     by organization_memberships.role='owner' (per-org).
+#   * Migration 0004 created the Axiolo org with slug='axiolo'; we join
+#     each seeded user to it as owner here so they can immediately use
+#     /admin/ end-to-end without a second bootstrap step.
+#   * `on conflict (email) do update` lets the task retroactively promote
+#     an existing non-superadmin user — desired for upgrading an existing
+#     v2 install. It only sets the flag true; removing an email from the
+#     list never demotes (consistent with the v2 task's "doesn't wipe" rule).
+- name: Seed superadmin users + Axiolo org owner memberships
   community.postgresql.postgresql_query:
     db: "{{ pulse_db_name }}"
     login_user: "{{ pulse_db_owner }}"
     login_password: "{{ vault_pulse_db_owner_password }}"
     login_host: "{{ pulse_db_host }}"
     login_port: "{{ pulse_db_port }}"
-    query: >
-      insert into public.users (email, is_admin, email_verified_at)
-      values (%s, true, now())
-      on conflict (email) do nothing
+    query: |
+      with seeded_user as (
+        insert into public.users (email, is_superadmin, email_verified_at)
+        values (%s, true, now())
+        on conflict (email) do update
+          set is_superadmin = true
+        returning id
+      ),
+      axiolo as (
+        select id from public.organizations where slug = 'axiolo'
+      )
+      insert into public.organization_memberships (org_id, user_id, role)
+      select axiolo.id, seeded_user.id, 'owner'
+      from seeded_user, axiolo
+      on conflict (org_id, user_id) do nothing
     positional_args:
       - "{{ item }}"
   loop: "{{ pulse_admin_emails }}"
-  changed_when: false  # idempotent insert; reporting "changed" every run is noisy
+  changed_when: false  # idempotent upsert; reporting "changed" every run is noisy
 
 # ── 5. Systemd unit ───────────────────────────────────────────────────────
 - name: Drop pulse-api.service
