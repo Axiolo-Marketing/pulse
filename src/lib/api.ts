@@ -563,6 +563,75 @@ export const invitesApi = {
     }),
 };
 
+// ── Superadmin surface (cross-tenant — PR 5) ──────────────────────────────
+
+/** Row in the superadmin org listing. The `owner_emails` field is a
+ * denormalized top-3 owners by joined date — the table can render
+ * "managed by Jane, Bob" without a per-row members fetch. */
+export interface SuperadminOrgRow {
+  id: string;
+  name: string;
+  slug: string;
+  member_count: number;
+  pending_invite_count: number;
+  created_at: string;
+  owner_emails: string[];
+}
+
+export interface SuperadminInviteSummary {
+  id: string;
+  email: string;
+  expires_at: string;
+}
+
+export interface SuperadminOrgPayload {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+}
+
+export interface CreateOrgResult {
+  org: SuperadminOrgPayload;
+  invite: SuperadminInviteSummary;
+}
+
+export interface SuperadminMemberRow {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  joined_at: string;
+}
+
+/** Cross-tenant org management — gated by `users.is_superadmin` server-side.
+ * The UI also hides the entry point unless `me.is_superadmin`, but the
+ * backend is the source of truth. */
+export const superadminApi = {
+  listOrgs: (opts: { limit?: number } = {}): Promise<SuperadminOrgRow[]> => {
+    const q = opts.limit ? `?limit=${encodeURIComponent(opts.limit)}` : "";
+    return request(`/api/superadmin/orgs${q}`);
+  },
+
+  createOrg: (args: {
+    name: string;
+    slug: string;
+    owner_email: string;
+  }): Promise<CreateOrgResult> =>
+    request("/api/superadmin/orgs", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  deleteOrg: (orgId: string): Promise<void> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}`, {
+      method: "DELETE",
+    }),
+
+  listOrgMembers: (orgId: string): Promise<SuperadminMemberRow[]> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}/members`),
+};
+
 /** Build an absolute URL for an org logo served by
  * `GET /api/orgs/me/logo/{filename}`. The endpoint authenticates with
  * the session cookie (`credentials: include` on fetches works for

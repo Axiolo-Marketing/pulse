@@ -261,3 +261,244 @@ async def pending_invite_count(
         {"o": str(org_id)},
     )
     return int(result.scalar() or 0)
+
+
+async def list_all_with_summary(
+    session: AsyncSession, *, limit: int = 50
+) -> list[dict[str, object]]:
+    """List every organization with member/invite counts + top owner emails.
+
+    Superadmin-only — uses a BYPASSRLS session (``pulse_admin``) so the
+    result spans every org in the database, ordered by ``created_at``
+    descending (newest first). The ``owner_emails`` column is a
+    denormalized top-3 owners (oldest joiners first), joined to a single
+    comma-separated string so the UI can render it without an extra
+    round-trip per row.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        limit: Maximum number of org rows to return.
+
+    Returns:
+        List of dicts with keys ``id``, ``name``, ``slug``,
+        ``created_at``, ``member_count``, ``pending_invite_count``,
+        ``owner_emails`` (``list[str]``).
+    """
+    result = await session.execute(
+        text(
+            """
+            select
+                o.id::text as id,
+                o.name,
+                o.slug,
+                o.created_at,
+                coalesce((
+                    select count(*)::int
+                    from public.organization_memberships m
+                    where m.org_id = o.id
+                ), 0) as member_count,
+                coalesce((
+                    select count(*)::int
+                    from public.organization_invites i
+                    where i.org_id = o.id
+                      and i.accepted_at is null
+                      and i.revoked_at is null
+                      and i.expires_at > now()
+                ), 0) as pending_invite_count,
+                coalesce((
+                    select array_agg(t.email order by t.created_at)
+                    from (
+                        select u.email, m.created_at
+                        from public.organization_memberships m
+                        join public.users u on u.id = m.user_id
+                        where m.org_id = o.id and m.role = 'owner'
+                        order by m.created_at
+                        limit 3
+                    ) as t
+                ), array[]::text[]) as owner_emails
+            from public.organizations o
+            order by o.created_at desc
+            limit :lim
+            """
+        ),
+        {"lim": int(limit)},
+    )
+    rows: list[dict[str, object]] = []
+    for r in result.mappings().all():
+        d = dict(r)
+        # asyncpg surfaces text[] as a list[str]; normalize to plain list.
+        emails = d.get("owner_emails") or []
+        d["owner_emails"] = list(emails)
+        rows.append(d)
+    return rows
+
+
+async def get_by_id(
+    session: AsyncSession, org_id: uuid.UUID | str
+) -> dict[str, object] | None:
+    """Fetch an org by id, regardless of the caller's active org.
+
+    Uses BYPASSRLS — superadmin routes need to inspect orgs they aren't
+    members of.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        org_id: UUID of the target org.
+
+    Returns:
+        ``{id, name, slug, logo_path, created_at}`` or ``None``.
+    """
+    try:
+        as_uuid = uuid.UUID(str(org_id))
+    except (TypeError, ValueError):
+        return None
+    result = await session.execute(
+        text(
+            "select id::text as id, name, slug, logo_path, created_at "
+            "from public.organizations where id = cast(:o as uuid)"
+        ),
+        {"o": str(as_uuid)},
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def find_by_slug(
+    session: AsyncSession, slug: str
+) -> dict[str, object] | None:
+    """Return the org row whose slug matches, or ``None``.
+
+    Used by the superadmin create-org duplicate-slug gate. BYPASSRLS
+    because the slug uniqueness check spans every tenant.
+
+    Args:
+        session: ``pulse_admin`` session.
+        slug: Lower-case URL-safe slug.
+
+    Returns:
+        ``{id, name, slug}`` row dict, or ``None``.
+    """
+    result = await session.execute(
+        text(
+            "select id::text as id, name, slug "
+            "from public.organizations where slug = :s limit 1"
+        ),
+        {"s": slug},
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def create_org(
+    session: AsyncSession, *, name: str, slug: str
+) -> dict[str, object]:
+    """Insert a new organization row and return it.
+
+    Caller commits. BYPASSRLS because the row by definition doesn't yet
+    belong to any active-org context.
+
+    Args:
+        session: ``pulse_admin`` session.
+        name: Display name (already validated).
+        slug: Lower-case URL-safe slug (already validated + uniqueness
+            checked).
+
+    Returns:
+        ``{id, name, slug, created_at}`` row dict.
+    """
+    result = await session.execute(
+        text(
+            "insert into public.organizations (name, slug) "
+            "values (:n, :s) "
+            "returning id::text as id, name, slug, created_at, logo_path"
+        ),
+        {"n": name, "s": slug},
+    )
+    return dict(result.mappings().one())
+
+
+async def client_count(
+    session: AsyncSession, org_id: uuid.UUID | str
+) -> int:
+    """Return the number of ``clients`` rows for ``org_id``.
+
+    Used by the superadmin delete-org safety gate — deleting an org that
+    has clients would cascade-wipe customer data, so the route refuses
+    with 409 when this is non-zero.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        org_id: UUID of the org to check.
+
+    Returns:
+        Integer count of clients in the org.
+    """
+    result = await session.execute(
+        text(
+            "select count(*)::int from public.clients "
+            "where org_id = cast(:o as uuid)"
+        ),
+        {"o": str(org_id)},
+    )
+    return int(result.scalar() or 0)
+
+
+async def delete_org(
+    session: AsyncSession, org_id: uuid.UUID | str
+) -> bool:
+    """Hard-delete an organization and its memberships + invites.
+
+    Order matters: explicitly remove memberships, then invites, then
+    audit logs, then the org row itself. The FK on
+    ``users.last_active_org_id`` is ``on delete set null`` so it
+    self-cleans. Tenant tables (``clients``, ``cards``, etc.) are FK'd
+    ``on delete cascade``, but the route enforces a stricter "no
+    clients" precondition before this is called — see
+    :func:`client_count`.
+
+    Caller commits.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        org_id: UUID of the org to delete.
+
+    Returns:
+        ``True`` if the org row was removed, ``False`` if no org with
+        that id existed.
+    """
+    as_str = str(org_id)
+    # Memberships first — there's a unique (org_id, user_id) so a stray
+    # row would block reuse of the slug + email pair.
+    await session.execute(
+        text(
+            "delete from public.organization_memberships "
+            "where org_id = cast(:o as uuid)"
+        ),
+        {"o": as_str},
+    )
+    # Invites (pending and historical) — no cascade from organizations
+    # would touch these on its own without on-delete-cascade, but we
+    # have it. Explicit delete keeps the order deterministic.
+    await session.execute(
+        text(
+            "delete from public.organization_invites "
+            "where org_id = cast(:o as uuid)"
+        ),
+        {"o": as_str},
+    )
+    # Audit logs are scoped to the org too — they would cascade, but
+    # mention them in the order chain for the next person reading this.
+    await session.execute(
+        text(
+            "delete from public.audit_logs where org_id = cast(:o as uuid)"
+        ),
+        {"o": as_str},
+    )
+    result = await session.execute(
+        text(
+            "delete from public.organizations "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": as_str},
+    )
+    return result.rowcount > 0
