@@ -2,26 +2,31 @@
 cards link to via `cards.attachment_path`.
 
 Two routes:
-- POST /api/admin/attachments — admin-only multipart upload. The wire body
-  carries the filename; we keep only the extension and mint a UUID-based
-  name so the public GET URL is unguessable.
+- POST /api/admin/attachments — admin-only multipart upload. The wire
+  body carries the filename; we keep only the extension and mint a
+  UUID-based name so the public GET URL is unguessable.
 - GET /api/attachments/{filename} — public. The filename must match the
-  `<uuid>.<ext>` shape we minted; arbitrary names are rejected so this
+  ``<uuid>.<ext>`` shape we minted; arbitrary names are rejected so this
   endpoint can't be turned into a directory walk.
 
-Storage lives under `settings.upload_dir/attachments/` — the same dir
-as client-uploaded files but a distinct prefix.
+Storage lives under ``settings.upload_dir/attachments/`` — the same dir
+as client-uploaded files but a distinct prefix. Attachments are not
+org-scoped on disk (they're public via the unguessable URL once
+uploaded), so the admin upload route uses ``get_current_org_member``
+purely as the auth gate.
 """
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from pulse_api import storage
-from pulse_api.auth.middleware import get_current_admin
+from pulse_api.auth.middleware import get_current_org_member
 from pulse_api.config import settings
-from pulse_api.models import User
+from pulse_api.models import OrganizationMembership, User
 
 admin_router = APIRouter(
-    prefix="/api/admin", tags=["admin"], dependencies=[Depends(get_current_admin)]
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[Depends(get_current_org_member)],
 )
 public_router = APIRouter(prefix="/api", tags=["client"])
 
@@ -29,7 +34,7 @@ public_router = APIRouter(prefix="/api", tags=["client"])
 @admin_router.post("/attachments", status_code=201)
 async def upload_attachment(
     file: UploadFile = File(...),
-    _: User = Depends(get_current_admin),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> dict[str, str]:
     content = await file.read()
     if len(content) == 0:

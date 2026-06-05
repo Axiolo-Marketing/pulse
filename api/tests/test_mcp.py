@@ -63,39 +63,11 @@ MCP_HEADERS = {
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="session")
-async def _mcp_session_manager() -> AsyncIterator[None]:
-    """Run the FastMCP session manager for the whole test session.
-
-    The session manager's `.run()` builds an anyio task group internally
-    and the cancel scope must be entered/exited inside the same task. A
-    pytest-asyncio fixture's setup and teardown can land in different
-    tasks, so we host the `async with` inside a dedicated background
-    task and signal shutdown via an asyncio.Event.
-    """
-    _ = mcp_server.mcp.session_manager  # force lazy init
-    started = asyncio.Event()
-    shutdown = asyncio.Event()
-
-    async def _host() -> None:
-        async with mcp_server.mcp.session_manager.run():
-            started.set()
-            await shutdown.wait()
-
-    task = asyncio.create_task(_host(), name="mcp-session-manager")
-    await started.wait()
-    try:
-        yield
-    finally:
-        shutdown.set()
-        await task
-
-
 @pytest.fixture
 async def mcp_runtime(
     db_conn: AsyncConnection,
     monkeypatch: pytest.MonkeyPatch,
-    _mcp_session_manager: None,
+    mcp_session_manager: None,  # shared session-scoped fixture in conftest
 ) -> None:
     """Patch tool session factories to bind through the test's connection.
 
@@ -115,12 +87,31 @@ async def mcp_runtime(
         async with factory() as session:
             yield session
 
+    @asynccontextmanager
+    async def _override_member_session(org_id: str) -> AsyncIterator[AsyncSession]:
+        # After PR 2 the tools open a ``pulse_member`` session per call;
+        # in tests we route those through the same db_conn (the rollback
+        # transaction). Flip the role + set the GUC, then yield. The
+        # outer test transaction wipes everything at teardown.
+        await db_conn.execute(text("reset role"))
+        await db_conn.execute(text("set local role pulse_member"))
+        await db_conn.execute(
+            text("select set_config('pulse.org_id', :o, true)"),
+            {"o": str(org_id)},
+        )
+        factory = async_sessionmaker(
+            bind=db_conn, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as session:
+            yield session
+
     monkeypatch.setattr(mcp_server, "_open_admin_session", _override_session)
-    # `tools.py` captured `_open_admin_session` at import time, so patch
-    # the name there too — both modules use it.
+    monkeypatch.setattr(mcp_server, "_open_member_session", _override_member_session)
+    # `tools.py` captured these at import time, so patch the name there
+    # too — both modules use them.
     from pulse_api.mcp import tools as mcp_tools
 
-    monkeypatch.setattr(mcp_tools, "_open_admin_session", _override_session)
+    monkeypatch.setattr(mcp_tools, "_open_member_session", _override_member_session)
 
     # Patch _touch_last_used through the same conn (mirrors the override
     # in conftest's `client` fixture). Lives on `auth.api_keys` after the
@@ -154,17 +145,24 @@ async def mcp_client(
 
 
 async def _insert_admin_key(
-    db: AsyncSession, *, user_id: str, revoked: bool = False
+    db: AsyncSession,
+    *,
+    user_id: str,
+    org_id: str,
+    revoked: bool = False,
 ) -> str:
+    """Insert an MCP-test API key for ``(user, org)`` and return its raw value."""
     raw = generate_key()
     await db.execute(
         text(
-            "insert into public.api_keys (user_id, prefix, key_hash, label, revoked_at) "
-            "values (cast(:u as uuid), :p, :h, :l, "
+            "insert into public.api_keys "
+            "(user_id, org_id, prefix, key_hash, label, revoked_at) "
+            "values (cast(:u as uuid), cast(:o as uuid), :p, :h, :l, "
             "  case when :r then now() else null end)"
         ),
         {
             "u": user_id,
+            "o": org_id,
             "p": prefix_of(raw),
             "h": hash_key(raw),
             "l": "mcp test",
@@ -249,7 +247,9 @@ async def test_create_then_delete_engagement_roundtrip(
     db: AsyncSession,
     seed_admin_user: dict[str, str],
 ) -> None:
-    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"])
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
 
     create_resp = await _mcp_call(
         mcp_client,
@@ -315,7 +315,10 @@ async def test_revoked_key_returns_tool_error(
     seed_admin_user: dict[str, str],
 ) -> None:
     raw = await _insert_admin_key(
-        db, user_id=seed_admin_user["id"], revoked=True
+        db,
+        user_id=seed_admin_user["id"],
+        org_id=seed_admin_user["org_id"],
+        revoked=True,
     )
     resp = await _mcp_call(
         mcp_client,
@@ -328,13 +331,20 @@ async def test_revoked_key_returns_tool_error(
     assert "invalid" in txt
 
 
-# 5. Non-admin valid key → tool-error (forbidden).
-async def test_non_admin_key_returns_tool_error(
+# 5. Valid key on a user who is NOT a member of the key's org → tool-error.
+#    Post-PR-2 "admin only" is gone — what matters is membership in the
+#    org the key was minted against.
+async def test_non_member_key_returns_tool_error(
     mcp_client: AsyncClient,
     db: AsyncSession,
     seed_user: dict[str, str],
+    axiolo_org: dict[str, str],
 ) -> None:
-    raw = await _insert_admin_key(db, user_id=seed_user["id"])
+    # seed_user has no membership on Axiolo; the key authenticates the
+    # user but membership lookup at the auth gate fails.
+    raw = await _insert_admin_key(
+        db, user_id=seed_user["id"], org_id=axiolo_org["id"]
+    )
     resp = await _mcp_call(
         mcp_client,
         "tools/call",
@@ -343,7 +353,7 @@ async def test_non_admin_key_returns_tool_error(
     )
     assert resp["result"]["isError"] is True
     txt = resp["result"]["content"][0]["text"].lower()
-    assert "admin" in txt
+    assert "member" in txt
 
 
 # 6. create_engagement + import_deck chain.
@@ -352,7 +362,7 @@ async def test_create_engagement_then_import_deck_orders_cards(
     db: AsyncSession,
     seed_admin_user: dict[str, str],
 ) -> None:
-    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"])
+    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"])
 
     create_resp = await _mcp_call(
         mcp_client,
@@ -419,7 +429,7 @@ async def test_upload_attachment_then_add_card_links_path(
     db: AsyncSession,
     seed_admin_user: dict[str, str],
 ) -> None:
-    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"])
+    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"])
 
     # 1x1 transparent PNG (smallest valid PNG)
     png_bytes = bytes.fromhex(
@@ -492,7 +502,7 @@ async def test_remaining_tool_surface_roundtrip(
     db: AsyncSession,
     seed_admin_user: dict[str, str],
 ) -> None:
-    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"])
+    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"])
 
     # list_engagements (empty path)
     listed = _structured(
@@ -611,7 +621,7 @@ async def test_oversize_attachment_rejected_before_disk_write(
     seed_admin_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"])
+    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"])
 
     # Shrink the limit way down so the test payload doesn't need to be
     # megabytes long.

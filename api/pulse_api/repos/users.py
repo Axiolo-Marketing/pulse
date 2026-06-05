@@ -31,14 +31,19 @@ async def create_user(
     email: str,
     password_hash: str | None,
     name: str | None = None,
-    is_admin: bool = False,
     email_verified_at: datetime | None = None,
 ) -> User:
+    """Insert a new operator user row and return it.
+
+    Admin powers are not on the user row anymore (PR 2 dropped
+    ``is_admin``). Per-org operator status comes from a
+    ``organization_memberships`` row inserted separately — the OAuth
+    invite-acceptance path is the canonical example.
+    """
     user = User(
         email=email.lower(),
         password_hash=password_hash,
         name=name,
-        is_admin=is_admin,
         email_verified_at=email_verified_at,
     )
     session.add(user)

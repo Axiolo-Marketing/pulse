@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # `make seed-dev`. Empty means no superadmins (acceptable in dev).
     superadmin_emails: str = ""
 
+    # Pulse is invite-only — `POST /api/auth/signup` returns 404 unless
+    # this is explicitly enabled. Tests covering the email/password flow
+    # override it. Never set true in production.
+    signup_enabled: bool = False
+
     session_secret: str = ""
     session_cookie_name: str = "pulse_session"
     session_max_age_seconds: int = 60 * 60 * 24 * 30

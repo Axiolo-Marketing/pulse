@@ -11,6 +11,13 @@ from httpx import AsyncClient
 from pulse_api.config import settings
 
 
+@pytest.fixture(autouse=True)
+def _enable_signup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The signup parametrize case below probes the rate limiter, not the
+    invite-only gate; opt in to the open endpoint."""
+    monkeypatch.setattr(settings, "signup_enabled", True)
+
+
 def _parse_per_minute(rule: str) -> int:
     return int(rule.split("/")[0])
 

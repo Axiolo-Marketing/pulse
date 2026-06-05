@@ -15,7 +15,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pulse_api.config import settings
 
 
+@pytest.fixture(autouse=True)
+def _enable_signup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Open the signup gate for this module.
+
+    Production is invite-only (`settings.signup_enabled = False`). The
+    email+password tests below predate the gate; they exercise the
+    signup path itself, so they opt in.
+    """
+    monkeypatch.setattr(settings, "signup_enabled", True)
+
+
 # ── signup ────────────────────────────────────────────────────────────────
+
+
+async def test_signup_disabled_returns_404(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invite-only default. Locks in the production policy."""
+    monkeypatch.setattr(settings, "signup_enabled", False)
+    r = await client.post(
+        "/api/auth/signup",
+        json={"email": "x@example.com", "password": "long-enough-password"},
+    )
+    assert r.status_code == 404
 
 
 async def test_signup_creates_unverified_user(client: AsyncClient, db: AsyncSession) -> None:
@@ -27,7 +50,7 @@ async def test_signup_creates_unverified_user(client: AsyncClient, db: AsyncSess
     body = r.json()
     assert body["email"] == "new@example.com"
     assert body["name"] == "New"
-    assert body["is_admin"] is False
+    assert body["is_superadmin"] is False
     assert body["email_verified_at"] is None
 
     row = (
@@ -152,7 +175,10 @@ async def test_me_with_valid_cookie_returns_user(
     body = r.json()
     assert body["id"] == seed_admin_user["id"]
     assert body["email"] == seed_admin_user["email"]
-    assert body["is_admin"] is True
+    # The admin role moved off the user row onto org membership in PR 2;
+    # ``/api/auth/me`` no longer surfaces it. Membership role + active
+    # org are exposed in PR 3's ``/api/me/orgs`` instead.
+    assert body["active_org_id"] == seed_admin_user["org_id"]
 
 
 @pytest.mark.parametrize(
@@ -356,8 +382,8 @@ async def test_oauth_only_user_can_set_initial_password(
         await db.execute(
             text(
                 "insert into public.users "
-                "(email, password_hash, is_admin, email_verified_at) "
-                "values ('oauth@example.com', null, true, now()) "
+                "(email, password_hash, email_verified_at) "
+                "values ('oauth@example.com', null, now()) "
                 "returning id::text"
             )
         )

@@ -1,12 +1,12 @@
 """MCP tool implementations.
 
 Every tool here is a thin wrapper over an existing
-`pulse_api.repos.*` helper or `pulse_api.storage` function. The MCP layer
-holds zero business logic — if you find yourself reaching for a new
-behaviour, fix it in the REST endpoint first and re-export it here.
+``pulse_api.repos.*`` helper or ``pulse_api.storage`` function. The MCP
+layer holds zero business logic — if you find yourself reaching for a
+new behaviour, fix it in the REST endpoint first and re-export it here.
 
-Mappings to the REST routes (see `routes/admin_api.py` and
-`routes/attachments.py`):
+Mappings to the REST routes (see ``routes/admin_api.py`` and
+``routes/attachments.py``):
 
     pulse_list_engagements      ←  GET    /api/admin/clients
     pulse_get_engagement        ←  GET    /api/admin/clients/{id}
@@ -20,9 +20,12 @@ Mappings to the REST routes (see `routes/admin_api.py` and
     pulse_delete_card           ←  DELETE /api/admin/cards/{id}
     pulse_upload_attachment     ←  POST   /api/admin/attachments
 
-Each tool authenticates first via `authenticate_request`. A missing /
-invalid / revoked / non-admin key raises `MCPAuthError` before any work
-happens — same gate as the REST middleware.
+Each tool authenticates first via ``authenticate_request``, which
+returns ``(user, api_key)``. The tool then opens a member-scoped
+session against ``api_key.org_id`` so every query is RLS-narrowed to
+the right tenant. A missing / invalid / revoked key, or a key whose
+user lost their membership, raises ``MCPAuthError`` before any work
+happens — same outcome as the REST middleware's 403.
 """
 from __future__ import annotations
 
@@ -30,13 +33,15 @@ import base64
 from typing import Any
 
 from mcp.server.fastmcp.server import Context
-from sqlalchemy import text
 
 from pulse_api import storage
 from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.config import settings
-from pulse_api.mcp.server import _open_admin_session, authenticate_request, mcp
-from pulse_api.models import User
+from pulse_api.mcp.server import (
+    _open_member_session,
+    authenticate_request,
+    mcp,
+)
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import responses as responses_repo
@@ -54,8 +59,8 @@ from pulse_api.repos import uploads as uploads_repo
     ),
 )
 async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         return await clients_repo.list_all_with_counts(session)
 
 
@@ -69,8 +74,8 @@ async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
 async def pulse_get_engagement(
     ctx: Context, client_id: str
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         client = await clients_repo.get_by_id(session, client_id)
         if client is None:
             raise ValueError("engagement not found")
@@ -95,38 +100,17 @@ async def pulse_create_engagement(
     org_name: str | None = None,
     engagement_name: str | None = None,
 ) -> dict[str, Any]:
-    user = await authenticate_request(ctx)
-    async with _open_admin_session() as session:
-        org_id = await _resolve_org_id(session, user)
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         row = await clients_repo.create_engagement(
             session,
             name=name,
             org_name=org_name,
             engagement_name=engagement_name,
-            org_id=str(org_id),
+            org_id=str(api_key.org_id),
         )
         await session.commit()
         return row
-
-
-async def _resolve_org_id(session: Any, user: User) -> Any:
-    """Resolve the org_id to use for a create operation.
-
-    PR 1 mirrors the REST admin route's behaviour: prefer the user's
-    ``last_active_org_id`` (always populated for admin users by the
-    0004 data migration), else fall back to the Axiolo org by slug for
-    freshly-created admins. PR 2 replaces this with the active org
-    threaded through the auth dependency.
-    """
-    if user.last_active_org_id is not None:
-        return user.last_active_org_id
-    result = await session.execute(
-        text("select id from public.organizations where slug = 'axiolo' limit 1")
-    )
-    row_org = result.scalar_one_or_none()
-    if row_org is None:
-        raise ValueError("no organization available for this user")
-    return row_org
 
 
 @mcp.tool(
@@ -145,7 +129,7 @@ async def pulse_update_engagement(
     engagement_name: str | None = None,
     brief: str | None = None,
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
+    _, api_key = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
     if name is not None:
         fields["name"] = name
@@ -156,7 +140,7 @@ async def pulse_update_engagement(
     if brief is not None:
         fields["brief"] = brief
 
-    async with _open_admin_session() as session:
+    async with _open_member_session(api_key.org_id) as session:
         row = await clients_repo.update_engagement(session, client_id, fields)
         if row is None:
             raise ValueError("engagement not found")
@@ -176,8 +160,8 @@ async def pulse_update_engagement(
 async def pulse_delete_engagement(
     ctx: Context, client_id: str
 ) -> dict[str, bool]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         upload_paths = await clients_repo.list_upload_paths_for_client(
             session, client_id
         )
@@ -203,8 +187,8 @@ async def pulse_delete_engagement(
 async def pulse_rotate_token(
     ctx: Context, client_id: str
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         row = await clients_repo.rotate_token(session, client_id)
         if row is None:
             raise ValueError("engagement not found")
@@ -226,8 +210,8 @@ async def pulse_rotate_token(
 async def pulse_import_deck(
     ctx: Context, client_id: str, markdown: str
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         if (await clients_repo.get_by_id(session, client_id)) is None:
             raise ValueError("engagement not found")
         try:
@@ -236,10 +220,14 @@ async def pulse_import_deck(
             detail = "\n".join(exc.errors) if exc.errors else str(exc)
             raise ValueError(detail) from exc
 
+        org_id = str(api_key.org_id)
         created: list[dict[str, Any]] = []
         for card in parsed:
             row = await cards_repo.create_card(
-                session, client_id=client_id, **card.to_create_kwargs()
+                session,
+                client_id=client_id,
+                org_id=org_id,
+                **card.to_create_kwargs(),
             )
             if row is None:
                 raise ValueError(f"failed to insert card {card.title!r}")
@@ -269,8 +257,8 @@ async def pulse_add_card(
     skip_allowed: bool = True,
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         if (await clients_repo.get_by_id(session, client_id)) is None:
             raise ValueError("engagement not found")
         row = await cards_repo.create_card(
@@ -285,6 +273,7 @@ async def pulse_add_card(
             default_value=default_value,
             skip_allowed=skip_allowed,
             attachment_path=attachment_path,
+            org_id=str(api_key.org_id),
         )
         if row is None:
             raise ValueError("card creation failed")
@@ -311,7 +300,7 @@ async def pulse_update_card(
     skip_allowed: bool | None = None,
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
-    await authenticate_request(ctx)
+    _, api_key = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
     if category is not None:
         fields["category"] = category
@@ -330,7 +319,7 @@ async def pulse_update_card(
     if attachment_path is not None:
         fields["attachment_path"] = attachment_path
 
-    async with _open_admin_session() as session:
+    async with _open_member_session(api_key.org_id) as session:
         row = await cards_repo.update_card(session, card_id, fields)
         if row is None:
             raise ValueError("card not found")
@@ -345,8 +334,8 @@ async def pulse_update_card(
 async def pulse_delete_card(
     ctx: Context, card_id: str
 ) -> dict[str, bool]:
-    await authenticate_request(ctx)
-    async with _open_admin_session() as session:
+    _, api_key = await authenticate_request(ctx)
+    async with _open_member_session(api_key.org_id) as session:
         deleted = await cards_repo.delete_card(session, card_id)
         if not deleted:
             raise ValueError("card not found")
@@ -370,6 +359,8 @@ async def pulse_delete_card(
 async def pulse_upload_attachment(
     ctx: Context, filename: str, content_base64: str
 ) -> dict[str, str]:
+    # Auth runs purely as the gate — attachments are not org-scoped on
+    # disk (unguessable URL), so we don't need a member session here.
     await authenticate_request(ctx)
     try:
         content = base64.b64decode(content_base64, validate=True)

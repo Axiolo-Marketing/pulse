@@ -47,12 +47,13 @@ The frontend and backend communicate over HTTP, but **RLS is still the multi-ten
 
 ### The role-flip pattern (read this before writing tests)
 
-Three Postgres roles:
+Four Postgres roles:
 - `pulse_owner` — schema owner; runs migrations; bypasses RLS by virtue of ownership.
-- `pulse_anon` — no `BYPASSRLS`. The middleware (`get_anon_session` in `api/pulse_api/db.py`) connects as this role and sets the `pulse.token` GUC per request. RLS policies fire.
-- `pulse_admin` — `BYPASSRLS`. Used by admin routes after the session-cookie auth gate (`get_current_admin`).
+- `pulse_anon` — no `BYPASSRLS`. `get_anon_session` in `api/pulse_api/db.py` connects as this role and sets the `pulse.token` + `pulse.org_id` GUCs per request. RLS policies fire on every client-facing query.
+- `pulse_member` — no `BYPASSRLS`. `get_org_scoped_session` connects as this role with `pulse.org_id` set to the active org. Owns the `/api/admin/*` surface — a forgotten `where org_id = ...` in a handler can't leak across tenants because RLS refuses.
+- `pulse_admin` — `BYPASSRLS`. Reserved for `/api/superadmin/*` (PR 5), the OAuth/invite resolution paths that must cross orgs, and migrations.
 
-Tests can't easily use three separate connections (they wouldn't see each other's uncommitted seed data inside the rollback transaction). Instead, `tests/conftest.py` opens **one** connection as the owner role and flips it mid-transaction via `SET LOCAL ROLE pulse_anon` + `select set_config('pulse.token', ...)`. The override of `get_anon_session` in `client` fixture does exactly this; tests that want to exercise RLS directly (`tests/test_rls_isolation.py`) call the `become_anon(conn, token=...)` helper after seeding.
+Tests can't easily use four separate connections (they wouldn't see each other's uncommitted seed data inside the rollback transaction). Instead, `tests/conftest.py` opens **one** connection as the owner role and flips it mid-transaction via `SET LOCAL ROLE pulse_anon` (or `pulse_member`) + `select set_config('pulse.token', ...)` / `set_config('pulse.org_id', ...)`. The override of `get_anon_session` in the `client` fixture does exactly this; tests that want to exercise RLS directly (`tests/test_rls_isolation.py`, `tests/test_multi_tenant_isolation.py`) call the `become_anon(conn, token=...)` / `become_member(conn, org_id=...)` helpers after seeding.
 
 **Three gotchas the test pattern catches that you'll re-discover otherwise:**
 
@@ -62,21 +63,31 @@ Tests can't easily use three separate connections (they wouldn't see each other'
 
 ## Auth subsystems (two of them, share zero code)
 
-- **Client** (the consultant's customer): magic URL `?t=<16-hex>`. Frontend sends it as `X-Pulse-Token`. Backend middleware sets `pulse.token` on a `pulse_anon` connection; RLS does the rest.
-- **User** (operator — Tom, future teammates): email+password OR Google OAuth OR Microsoft 365 OAuth, signed-cookie session via `itsdangerous`. Session middleware (`get_current_admin`) loads the user record on a `pulse_admin` connection. `is_admin=true` required for `/api/admin/*` routes.
+- **Client** (the consultant's customer): magic URL `?t=<16-hex>`. Frontend sends it as `X-Pulse-Token`. Backend middleware sets `pulse.token` and `pulse.org_id` (resolved from the client row) on a `pulse_anon` connection; RLS does the rest.
+- **User** (operator — Tom, future teammates): email+password OR Google OAuth OR Microsoft 365 OAuth, signed-cookie session via `itsdangerous`. Session payload is `{user_id, active_org_id}`. Middleware (`get_current_org_member`) loads the `(user, membership)` pair, then `get_org_scoped_session` opens a `pulse_member` connection with `pulse.org_id` set. The `pulse_member` role has no BYPASSRLS, so a forgotten `where org_id = ...` in a handler can't leak cross-tenant. `users.is_admin` is gone — admin powers come from `organization_memberships.role = 'owner'`, and the cross-org superadmin tier comes from `users.is_superadmin`.
+
+`get_current_user` resolves cookie OR `Authorization: Bearer pulse_<key>`. Cookie wins if both are present, EXCEPT for org attribution: a Bearer call always uses the key's `org_id`, never the cookie's. The corresponding deps:
+
+- `get_current_user` — User only, no org context.
+- `get_current_org_member` — `(user, membership)` for the active org.
+- `require_owner` — 403 if membership.role != owner. Mount on owner-gated routes.
+- `get_current_superadmin` — 403 unless `is_superadmin`. Uses `pulse_admin` (BYPASSRLS) by definition.
+- `get_org_scoped_session` — yields the `pulse_member` session every `/api/admin/*` route depends on.
+
+Active-org priority order: API key `org_id` → session `active_org_id` → `users.last_active_org_id` → 403. Pre-PR-2 cookies (no `active_org_id`) keep working by backfilling from the user row; the next sign-in mints a fresh cookie with the right shape.
 
 Token primitives all use `itsdangerous.URLSafeTimedSerializer` with per-purpose salts (`pulse-session`, `pulse-email-verify`, `pulse-password-reset`, `pulse-oauth-state-google`, `pulse-oauth-state-microsoft`). A token signed for one purpose can never redeem as another even with the same `SESSION_SECRET` — explicit tests lock this in (`tests/unit/test_tokens.py`).
 
-OAuth state: cookie-based CSRF. The authorize endpoint generates a random state, signs it as a `oauth_state_{provider}` cookie, builds the provider URL with the same state. The callback verifies the cookie matches the URL state before doing any work.
+OAuth state: cookie-based CSRF. The authorize endpoint generates a random state, signs it as a `oauth_state_{provider}` cookie, builds the provider URL with the same state. The callback verifies the cookie matches the URL state before doing any work. **Self-signup is disabled**: when an OAuth callback resolves to an unknown email, the route looks up a pending `organization_invites` row for that email and accepts it transactionally (creates user + membership, marks the invite accepted). With no pending invite, the callback redirects to `/admin/?error=invitation_required` and creates no user.
 
 ### API keys + MCP (non-browser callers)
 
-Same operator identity, different credential. API keys are per-user Bearer tokens that let scripts and the MCP server reach the admin surface without holding a browser session.
+Same operator identity, different credential. API keys are per-`(user, org)` Bearer tokens that let scripts and the MCP server reach the admin surface without holding a browser session.
 
 - **Format**: `pulse_<32-hex>` (128 bits of entropy, `pulse_` prefix makes leaks greppable). On disk: SHA-256 of the raw key plus an indexed 8-char `prefix` column for cheap lookup. Constant-time hash compare. Argon2 is overkill — keys already have full entropy.
-- **Creation**: Settings page (`/admin/#settings`) → "API keys" section → Create. Raw key is shown **once** in the create modal; subsequent list views only show `pulse_<prefix>…`. Revoking sets `revoked_at` and stops the key immediately.
-- **Auth path**: `get_current_user` accepts cookie OR `Authorization: Bearer pulse_<key>`. Cookie wins if both are present, so existing browser flows are untouched. The same `is_admin` gate then runs — API keys grant exactly the admin access the owning user already has, nothing more.
-- **MCP endpoint**: mounted at `/api/mcp/` (trailing slash matters — FastMCP's `streamable_http_path="/"` resolves the sub-app's single route at the mount point; `/api/mcp` without the slash 307-redirects). Streamable HTTP transport (POST returns JSON or SSE depending on the call). Same `Authorization: Bearer pulse_<key>` header. Per-tool auth via `authenticate_request(ctx)`; `tools/list` is intentionally unauthenticated because tool names + descriptions are documentation, not secrets, and gating discovery breaks every standard MCP client.
+- **Scope**: each key is bound to an org (`api_keys.org_id`, NOT NULL post-0005). Bearer auth flips the request into a `pulse_member` session against the key's org — never the operator's session active org. This is what lets a developer hold one shell session against org A while running a script for org B via a key minted there.
+- **Creation**: Settings page (`/admin/#settings`) → "API keys" section → Create. Defaults to the operator's active org; an `org_id` body field lets owners-of-multiple-orgs target a specific tenant (verified at create time). Raw key is shown **once** in the create modal; subsequent list views only show `pulse_<prefix>…`. Revoking sets `revoked_at` and stops the key immediately.
+- **MCP endpoint**: mounted at `/api/mcp/` (trailing slash matters — FastMCP's `streamable_http_path="/"` resolves the sub-app's single route at the mount point; `/api/mcp` without the slash 307-redirects). Streamable HTTP transport (POST returns JSON or SSE depending on the call). Same `Authorization: Bearer pulse_<key>` header. Per-tool auth via `authenticate_request(ctx)` which returns `(user, api_key)` so each tool can open a member-scoped session against `api_key.org_id`; `tools/list` is intentionally unauthenticated because tool names + descriptions are documentation, not secrets, and gating discovery breaks every standard MCP client.
 
 Client config (Claude Code / claude.ai), production:
 

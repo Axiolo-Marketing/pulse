@@ -143,8 +143,8 @@ async def _seed_one_set(
         await db.execute(
             text(
                 "insert into public.users "
-                "(email, password_hash, name, is_admin, email_verified_at) "
-                "values (:e, 'x', :n, true, now()) returning id::text"
+                "(email, password_hash, name, email_verified_at) "
+                "values (:e, 'x', :n, now()) returning id::text"
             ),
             {"e": f"{label}@example.com", "n": f"{label} User"},
         )
