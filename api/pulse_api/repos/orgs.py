@@ -149,11 +149,14 @@ async def get_for_member(
         org_id: UUID of the active org (matches the GUC).
 
     Returns:
-        ``{id, name, slug, logo_path, created_at}`` or ``None``.
+        ``{id, name, slug, logo_path, branding, created_at}`` or
+        ``None``. ``branding`` is the JSONB dict (asyncpg decodes it to a
+        ``dict``) or ``None`` when unset.
     """
     result = await session.execute(
         text(
-            "select id::text as id, name, slug, logo_path, created_at "
+            "select id::text as id, name, slug, logo_path, branding, "
+            "created_at "
             "from public.organizations where id = cast(:o as uuid)"
         ),
         {"o": str(org_id)},
@@ -182,7 +185,7 @@ async def update_name(
         text(
             "update public.organizations set name = :n "
             "where id = cast(:o as uuid) "
-            "returning id::text as id, name, slug, logo_path, created_at"
+            "returning id::text as id, name, slug, logo_path, branding, created_at"
         ),
         {"n": name, "o": str(org_id)},
     )
@@ -210,6 +213,51 @@ async def set_logo_path(
         ),
         {"p": logo_path, "o": str(org_id)},
     )
+
+
+async def set_branding(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID | str,
+    branding: dict | None,
+) -> dict[str, object] | None:
+    """Set or clear the ``branding`` JSONB column on the org row.
+
+    RLS WITH CHECK on the org-scoped session refuses any other ``id`` so
+    a forgotten predicate in the SQL can't update a different org. Pass
+    ``branding=None`` to store SQL NULL (reset the deck to its built-in
+    defaults).
+
+    The dict is serialized to a JSON string and cast to ``jsonb`` so
+    asyncpg can bind it without a server-side type-inference ambiguity —
+    the same pattern :func:`pulse_api.audit.record_audit` uses for its
+    ``metadata`` column.
+
+    Args:
+        session: ``pulse_member`` session with ``pulse.org_id`` set.
+        org_id: UUID of the active org.
+        branding: Branding override dict, or ``None`` to clear it.
+
+    Returns:
+        Refreshed row dict
+        (``{id, name, slug, logo_path, branding, created_at}``), or
+        ``None`` if the org was not found.
+    """
+    import json
+
+    encoded = json.dumps(branding) if branding else None
+    result = await session.execute(
+        text(
+            "update public.organizations "
+            "set branding = cast(:b as jsonb) "
+            "where id = cast(:o as uuid) "
+            "returning id::text as id, name, slug, logo_path, branding, "
+            "created_at"
+        ),
+        {"b": encoded, "o": str(org_id)},
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
 
 
 async def member_count(

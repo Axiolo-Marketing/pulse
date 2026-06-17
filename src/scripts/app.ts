@@ -6,6 +6,7 @@ import {
   type ClientResponse,
   type ResponseState,
 } from "../lib/api";
+import { applyBranding } from "../lib/branding";
 import {
   renderCard,
   renderComplete,
@@ -56,7 +57,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  runApp({ mount, token, ...boot });
+  // Theme the deck to the operator org before the first paint so the
+  // client never sees the default Axiolo blue flash to the brand colour.
+  applyBranding(boot.client.org_branding);
+
+  // Resolve the org logo once (the bytes need the token in a header, so
+  // we fetch a Blob → object URL rather than a plain <img src>). One URL
+  // for the whole session — reused on every draw.
+  const orgLogoSrc = boot.client.org_logo_path
+    ? await clientApi.logoObjectUrl(token)
+    : null;
+
+  runApp({ mount, token, orgLogoSrc, ...boot });
 }
 
 async function loadBootData(token: string): Promise<BootData | null> {
@@ -95,10 +107,14 @@ async function loadBootData(token: string): Promise<BootData | null> {
 interface RunCtx extends BootData {
   mount: HTMLElement;
   token: string;
+  /** Object URL for the operator org's logo, resolved once on boot, or
+   * `null` when the org has no logo. Passed to every `renderCard` so the
+   * top-bar shows the org mark instead of the Axiolo wordmark. */
+  orgLogoSrc: string | null;
 }
 
 function runApp(ctx: RunCtx): void {
-  const { mount, token, client, cards, responses, uploads } = ctx;
+  const { mount, token, client, cards, responses, uploads, orgLogoSrc } = ctx;
 
   const bootIndex = firstUnansweredIndex(cards, responses);
   let index = bootIndex;
@@ -200,12 +216,13 @@ function runApp(ctx: RunCtx): void {
       cards,
       responses,
       handlers,
-      // Org logo rendering on the client deck is deferred until the
-      // backend exposes a public token-scoped logo URL — the existing
-      // `/api/orgs/me/logo/...` endpoint requires a session cookie the
-      // client never has. The `RenderCardArgs.orgLogoSrc` field is
-      // already wired through so the wire-up is a single line once the
-      // backend ships a token-auth equivalent.
+      // Operator-org branding on the client deck: the logo object URL was
+      // resolved once on boot (token in a header, not the URL). A null
+      // logo keeps the Axiolo wordmark. `orgName` is left unset — the
+      // `Client` payload's `org_name` is the *customer* org (legacy
+      // free-form text), not the operator org, so it would mislabel the
+      // mark; `renderCard` falls back to a generic "Organization" alt.
+      orgLogoSrc,
     });
   };
 

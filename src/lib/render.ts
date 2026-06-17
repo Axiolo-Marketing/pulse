@@ -193,24 +193,20 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
   const backDisabled = position === 1 ? "disabled" : "";
   const forwardDisabled = position === total ? "disabled" : "";
 
-  // baseUrl may or may not end with `/` depending on Astro's `base` config.
-  const baseSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-
-  // Brand row: if the operator's org has a logo, render it in front of
-  // the Axiolo wordmark; the wordmark stays as the "powered by" anchor.
-  // Falls back to the existing markup when no org logo is supplied.
+  // Brand row: the Pulse product wordmark first, optionally followed by
+  // the operator's org logo (renders as `Pulse · [org logo]`). The Axiolo
+  // wordmark lives in the page footer ("Made by Axiolo"). With no org logo
+  // the row is just the Pulse wordmark.
   const orgBrandHtml = args.orgLogoSrc
-    ? `<img src="${escapeAttr(args.orgLogoSrc)}" alt="${escapeAttr(args.orgName ?? "Organization")}" class="brand-logo brand-logo--org" width="40" height="40" />
-       <span class="brand-sep" aria-hidden="true">·</span>`
+    ? `<span class="brand-sep" aria-hidden="true">·</span>
+       <img src="${escapeAttr(args.orgLogoSrc)}" alt="${escapeAttr(args.orgName ?? "Organization")}" class="brand-logo brand-logo--org" width="40" height="40" />`
     : "";
 
   mount.innerHTML = `
     <header class="topbar">
       <span class="brand">
+        <span class="brand-mark">Pulse</span>
         ${orgBrandHtml}
-        <img src="${baseSlash}axiolo-logo.svg" alt="Axiolo" class="brand-logo" width="84" height="23" />
-        <span class="brand-sep" aria-hidden="true">·</span>
-        Pulse
       </span>
       <nav class="nav-controls" aria-label="Card navigation">
         <button class="nav-arrow" type="button" data-action="nav-back" ${backDisabled} aria-label="Previous card">‹</button>

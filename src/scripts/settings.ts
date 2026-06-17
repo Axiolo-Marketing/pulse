@@ -15,6 +15,7 @@ import {
   type ApiKeySummary,
   type ApiKeyWithSecret,
   type AuthUser,
+  type BrandingSettings,
   type InviteSummary,
   type MemberRow,
   type OAuthIdentitySummary,
@@ -22,6 +23,11 @@ import {
   orgsApi,
   orgLogoUrl,
 } from "../lib/api";
+import {
+  applyBranding,
+  BRANDING_DEFAULTS,
+  FONT_OPTIONS,
+} from "../lib/branding";
 import { formatTimestamp } from "../lib/format-time";
 import { renderActivityTab } from "./activity-tab";
 
@@ -595,6 +601,8 @@ function renderOrgTab(panel: HTMLElement, args: RenderSettingsArgs): void {
       </div>
     </section>
 
+    ${isOwner ? renderBrandingSection(org) : ""}
+
     <section class="settings-section" aria-labelledby="org-members-h">
       <h3 class="settings-section-h" id="org-members-h">Members</h3>
       <p class="settings-section-p">${escape(formatMemberCount(args.members.length))} in this organization.</p>
@@ -645,6 +653,7 @@ function bindOrgHandlers(
   if (isOwner) {
     bindOrgNameForm(panel, args);
     bindLogoUploader(panel, args);
+    bindBrandingHandlers(panel, args);
     bindInviteForm(panel, args);
   }
   bindMembersList(panel, args);
@@ -791,6 +800,248 @@ function bindLogoUploader(
         // Re-render the section so the "Remove" button vanishes and
         // "Replace logo" reverts to "Upload logo".
         renderSettings(args);
+      },
+    });
+  });
+}
+
+// ── Brand & theme ──
+
+// Resolve the three colour fields + font from the org's branding, falling
+// back to the product defaults for any unset value. Used to prefill the
+// form so the operator always sees the colours currently in effect.
+function brandingFormValues(branding: BrandingSettings | null): {
+  brand_color: string;
+  background_color: string;
+  text_color: string;
+  font: string;
+} {
+  const b = branding ?? {};
+  return {
+    brand_color: b.brand_color || BRANDING_DEFAULTS.brand_color,
+    background_color: b.background_color || BRANDING_DEFAULTS.background_color,
+    text_color: b.text_color || BRANDING_DEFAULTS.text_color,
+    font: b.font || BRANDING_DEFAULTS.font,
+  };
+}
+
+function renderBrandingSection(org: OrgDetails): string {
+  const v = brandingFormValues(org.branding);
+  const fontOpts = FONT_OPTIONS.map(
+    (f) =>
+      `<option value="${escape(f.slug)}"${f.slug === v.font ? " selected" : ""}>${escape(f.label)}</option>`,
+  ).join("");
+
+  const colorRow = (
+    id: string,
+    label: string,
+    value: string,
+  ): string => `
+    <div class="brand-color-row">
+      <span class="edit-label" id="${id}-label">${escape(label)}</span>
+      <div class="brand-color-controls">
+        <input
+          type="color"
+          class="brand-color-swatch"
+          id="${id}-picker"
+          value="${escape(value)}"
+          aria-labelledby="${id}-label"
+        />
+        <input
+          type="text"
+          class="input brand-color-hex"
+          id="${id}-hex"
+          value="${escape(value)}"
+          maxlength="7"
+          spellcheck="false"
+          autocomplete="off"
+          aria-labelledby="${id}-label"
+        />
+      </div>
+    </div>`;
+
+  return `
+    <section class="settings-section" aria-labelledby="org-branding-h">
+      <h3 class="settings-section-h" id="org-branding-h">Brand &amp; theme</h3>
+      <p class="settings-section-p">Colours and font for the client deck and this console. Leave the defaults to use the Axiolo theme.</p>
+      <form class="settings-form brand-form" id="branding-form" novalidate>
+        ${colorRow("brand-brand", "Brand colour", v.brand_color)}
+        ${colorRow("brand-bg", "Background", v.background_color)}
+        ${colorRow("brand-text", "Text", v.text_color)}
+        <label class="edit-field">
+          <span class="edit-label">Font</span>
+          <select id="brand-font" class="input">${fontOpts}</select>
+        </label>
+        <div class="brand-preview" id="brand-preview" aria-hidden="true">
+          <span class="brand-preview-title">Aa — The quick brown fox</span>
+          <span class="brand-preview-chip">Primary</span>
+        </div>
+        <p class="brand-contrast-hint" id="brand-contrast-hint" role="status" aria-live="polite" hidden></p>
+        <div class="settings-form-actions">
+          <button class="btn btn-primary" type="submit">Save branding</button>
+          <button class="btn-ghost-sm" type="button" id="branding-reset">Reset to defaults</button>
+          <span class="settings-form-msg" id="branding-msg" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+    </section>`;
+}
+
+// Relative luminance per WCAG, for the optional low-contrast hint.
+function relLuminance(hex: string): number | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const chan = (c: number): number => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const r = chan((n >> 16) & 0xff);
+  const g = chan((n >> 8) & 0xff);
+  const b = chan(n & 0xff);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(fg: string, bg: string): number | null {
+  const l1 = relLuminance(fg);
+  const l2 = relLuminance(bg);
+  if (l1 === null || l2 === null) return null;
+  const [hi, lo] = l1 >= l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function bindBrandingHandlers(
+  panel: HTMLElement,
+  args: RenderSettingsArgs,
+): void {
+  const form = panel.querySelector<HTMLFormElement>("#branding-form");
+  if (!form) return;
+
+  const fields = [
+    { picker: "brand-brand-picker", hex: "brand-brand-hex" },
+    { picker: "brand-bg-picker", hex: "brand-bg-hex" },
+    { picker: "brand-text-picker", hex: "brand-text-hex" },
+  ] as const;
+
+  const get = <T extends HTMLElement>(id: string): T | null =>
+    panel.querySelector<T>(`#${id}`);
+
+  const brandHex = get<HTMLInputElement>("brand-brand-hex")!;
+  const bgHex = get<HTMLInputElement>("brand-bg-hex")!;
+  const textHex = get<HTMLInputElement>("brand-text-hex")!;
+  const fontSelect = get<HTMLSelectElement>("brand-font")!;
+  const msg = get<HTMLElement>("branding-msg")!;
+  const preview = get<HTMLElement>("brand-preview");
+  const contrastHint = get<HTMLElement>("brand-contrast-hint");
+
+  // Build the BrandingSettings the form currently represents. Invalid hex
+  // is dropped (treated as "use default") so a half-typed value never
+  // breaks the live preview.
+  const currentValues = (): BrandingSettings => ({
+    brand_color: HEX_RE.test(brandHex.value.trim()) ? brandHex.value.trim() : null,
+    background_color: HEX_RE.test(bgHex.value.trim()) ? bgHex.value.trim() : null,
+    text_color: HEX_RE.test(textHex.value.trim()) ? textHex.value.trim() : null,
+    font: fontSelect.value || null,
+  });
+
+  const setMsg = (text: string, kind: "" | "error" | "success"): void => {
+    msg.textContent = text;
+    msg.classList.remove("error", "success");
+    if (kind) msg.classList.add(kind);
+  };
+
+  // Live-apply to the document so the operator sees the theme change as
+  // they edit. The preview element + contrast hint update alongside.
+  const livePreview = (): void => {
+    const values = currentValues();
+    applyBranding(values);
+    // Resolve nulls → defaults once for the preview swatches and contrast.
+    const v = brandingFormValues(values);
+    if (preview) {
+      preview.style.background = v.background_color;
+      preview.style.color = v.text_color;
+      const chip = preview.querySelector<HTMLElement>(".brand-preview-chip");
+      if (chip) {
+        chip.style.background = v.brand_color;
+        chip.style.color = "#FFFFFF";
+      }
+    }
+    if (contrastHint) {
+      const ratio = contrastRatio(v.text_color, v.background_color);
+      if (ratio !== null && ratio < 4.5) {
+        contrastHint.textContent = `Low contrast (${ratio.toFixed(1)}:1) — text may be hard to read on this background.`;
+        contrastHint.hidden = false;
+      } else {
+        contrastHint.textContent = "";
+        contrastHint.hidden = true;
+      }
+    }
+  };
+
+  // Keep each color picker ↔ hex text input in sync, then live-preview.
+  for (const { picker, hex } of fields) {
+    const pickerEl = get<HTMLInputElement>(picker);
+    const hexEl = get<HTMLInputElement>(hex);
+    if (!pickerEl || !hexEl) continue;
+    pickerEl.addEventListener("input", () => {
+      hexEl.value = pickerEl.value.toUpperCase();
+      livePreview();
+    });
+    hexEl.addEventListener("input", () => {
+      const val = hexEl.value.trim();
+      if (HEX_RE.test(val)) pickerEl.value = val;
+      livePreview();
+    });
+  }
+  fontSelect.addEventListener("change", livePreview);
+
+  // Initial preview render from the prefilled values.
+  livePreview();
+
+  // Save: persist, sync local state, re-apply the canonical result.
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setMsg("", "");
+    const submitBtn = form.querySelector<HTMLButtonElement>(
+      "button[type='submit']",
+    );
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const updated = await orgsApi.updateBranding(currentValues());
+      args.org = updated;
+      applyBranding(updated.branding);
+      setMsg("Saved", "success");
+      args.helpers.toast("Branding saved");
+      await args.helpers.onOrgChanged();
+    } catch (err) {
+      setMsg(err instanceof ApiError ? err.detail : "Could not save", "error");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+
+  // Reset: empty object clears every field back to the product defaults.
+  get<HTMLButtonElement>("branding-reset")?.addEventListener("click", () => {
+    args.helpers.confirm({
+      title: "Reset branding",
+      body: "Restore the default Axiolo colours and font? This clears your custom theme.",
+      confirmLabel: "Reset",
+      onConfirm: async () => {
+        try {
+          const updated = await orgsApi.updateBranding({});
+          args.org = updated;
+          applyBranding(null);
+          args.helpers.toast("Branding reset");
+          await args.helpers.onOrgChanged();
+          // Re-render the tab so the form fields snap back to defaults.
+          renderSettings(args);
+        } catch (err) {
+          setMsg(
+            err instanceof ApiError ? err.detail : "Could not reset",
+            "error",
+          );
+        }
       },
     });
   });

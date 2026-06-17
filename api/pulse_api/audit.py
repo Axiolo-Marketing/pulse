@@ -31,6 +31,7 @@ string emitted by the route layer appears in this list.
 * ``card.import``           — bulk markdown import (one row per call)
 * ``attachment.upload``     — admin uploaded an active-reference file
 * ``org.update``            — org name changed
+* ``org.branding``          — org branding/theme overrides changed
 * ``org.logo_set``          — org logo uploaded (new or replaced)
 * ``org.logo_remove``       — org logo cleared
 * ``org.create``            — superadmin created an org
@@ -71,6 +72,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "attachment.upload",
         # Organization
         "org.update",
+        "org.branding",
         "org.logo_set",
         "org.logo_remove",
         "org.create",

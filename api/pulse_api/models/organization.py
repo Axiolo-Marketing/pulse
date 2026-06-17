@@ -8,6 +8,8 @@ query time is set from the membership the request resolves to.
 import uuid
 from datetime import datetime
 
+from sqlalchemy import Column
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 from pulse_api.models._helpers import utcnow_naive
@@ -25,6 +27,9 @@ class Organization(SQLModel, table=True):
         name: Human-readable organization name.
         slug: URL-safe unique handle.
         logo_path: Optional path to the uploaded org logo on disk.
+        branding: Optional JSONB blob of brand overrides (``brand_color``,
+            ``background_color``, ``text_color``, ``font``). A missing
+            key means "use the built-in default".
         created_at: Insert timestamp (naive UTC).
     """
 
@@ -34,4 +39,5 @@ class Organization(SQLModel, table=True):
     name: str
     slug: str = Field(unique=True, index=True)
     logo_path: str | None = None
+    branding: dict | None = Field(default=None, sa_column=Column(JSONB))
     created_at: datetime = Field(default_factory=utcnow_naive)

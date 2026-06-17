@@ -9,16 +9,54 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def get_my_client(session: AsyncSession) -> dict | None:
-    """RLS narrows this to the token-bound client. Returns None on no match."""
+    """RLS narrows this to the token-bound client. Returns None on no match.
+
+    LEFT JOINs the owning organization so the bootstrap payload carries
+    the org's logo + branding alongside the engagement. The anon SELECT
+    policy on ``organizations`` (added in migration 0007) admits exactly
+    the row whose ``id`` matches the ``pulse.org_id`` GUC the request set,
+    so the join stays tenant-scoped. ``org_logo_path`` / ``org_branding``
+    are ``None`` when the org has no logo / branding configured.
+    """
     result = await session.execute(
         text(
-            "select id::text, name, org_name, engagement_name, brief, "
-            "created_at, last_active_at "
-            "from public.clients limit 1"
+            "select c.id::text, c.name, c.org_name, c.engagement_name, "
+            "c.brief, c.created_at, c.last_active_at, "
+            "o.logo_path as org_logo_path, o.branding as org_branding "
+            "from public.clients c "
+            "left join public.organizations o on o.id = c.org_id "
+            "limit 1"
         )
     )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
+
+
+async def get_my_org_logo_path(session: AsyncSession) -> str | None:
+    """Return the owning org's current ``logo_path`` for the token's client.
+
+    Runs on the ``pulse_anon`` session. RLS narrows ``clients`` to the
+    token-bound row, and the anon SELECT policy on ``organizations``
+    (migration 0007) admits only the matching org row, so a missing or
+    cross-tenant org yields ``None``.
+
+    Args:
+        session: ``pulse_anon`` session with ``pulse.token`` +
+            ``pulse.org_id`` set.
+
+    Returns:
+        Relative ``logo_path`` under ``settings.upload_dir``, or ``None``
+        when the org has no logo (or no resolvable org).
+    """
+    result = await session.execute(
+        text(
+            "select o.logo_path "
+            "from public.clients c "
+            "join public.organizations o on o.id = c.org_id "
+            "limit 1"
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def touch_last_active(session: AsyncSession) -> bool:

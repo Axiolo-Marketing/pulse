@@ -36,7 +36,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -95,6 +95,70 @@ class SwitchOrgRequest(BaseModel):
     org_id: str
 
 
+# ── Branding ──────────────────────────────────────────────────────────────
+
+# Hex color, exactly ``#RRGGBB``. Shared by all three color fields so the
+# frontend and backend validate the same shape.
+_HEX_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
+
+# Font slugs the client deck knows how to render. Keep this set in sync
+# with the frontend's font map — an org can only pick from these.
+ALLOWED_FONTS: frozenset[str] = frozenset(
+    {
+        "plus-jakarta-sans",
+        "inter",
+        "roboto",
+        "lora",
+        "source-serif",
+        "system-ui",
+    }
+)
+
+
+class BrandingSettings(BaseModel):
+    """Per-org brand/theme overrides for the client deck.
+
+    Every field is optional; a missing/``None`` value means "use the
+    built-in default". The same model is reused for the
+    ``PATCH /api/orgs/me/branding`` request body and the ``branding``
+    field of :class:`OrgDetails`.
+
+    Attributes:
+        brand_color: Primary accent color, ``#RRGGBB``.
+        background_color: Deck background color, ``#RRGGBB``.
+        text_color: Body text color, ``#RRGGBB``.
+        font: One of :data:`ALLOWED_FONTS`.
+    """
+
+    brand_color: str | None = Field(default=None, pattern=_HEX_COLOR_PATTERN)
+    background_color: str | None = Field(
+        default=None, pattern=_HEX_COLOR_PATTERN
+    )
+    text_color: str | None = Field(default=None, pattern=_HEX_COLOR_PATTERN)
+    font: str | None = None
+
+    @field_validator("font")
+    @classmethod
+    def _validate_font(cls, value: str | None) -> str | None:
+        """Reject any font slug outside :data:`ALLOWED_FONTS`."""
+        if value is not None and value not in ALLOWED_FONTS:
+            raise ValueError(
+                f"font must be one of {sorted(ALLOWED_FONTS)}"
+            )
+        return value
+
+    def is_empty(self) -> bool:
+        """Return True when every field is unset.
+
+        Used by the PATCH route to decide whether to store SQL NULL
+        (reset the deck to its built-in defaults) instead of an empty
+        JSON object.
+        """
+        return all(
+            getattr(self, name) is None for name in type(self).model_fields
+        )
+
+
 class OrgDetails(BaseModel):
     """Returned by ``GET /api/orgs/me`` — the Settings page header."""
 
@@ -102,6 +166,7 @@ class OrgDetails(BaseModel):
     name: str
     slug: str
     logo_path: str | None = None
+    branding: BrandingSettings | None = None
     role: str
     member_count: int
     pending_invite_count: int
@@ -189,6 +254,25 @@ def _role_str(membership: OrganizationMembership) -> str:
         if hasattr(membership.role, "value")
         else str(membership.role)
     )
+
+
+def _branding_from_row(row: dict[str, object]) -> BrandingSettings | None:
+    """Build a :class:`BrandingSettings` from a stored ``branding`` dict.
+
+    asyncpg decodes the JSONB column to a plain ``dict`` (or ``None``).
+    Returns ``None`` when the column is unset so the response omits the
+    branding object entirely.
+
+    Args:
+        row: An org row dict from ``orgs_repo`` carrying a ``branding`` key.
+
+    Returns:
+        Parsed ``BrandingSettings`` or ``None``.
+    """
+    raw = row.get("branding")
+    if not raw:
+        return None
+    return BrandingSettings.model_validate(raw)
 
 
 # ── Multi-org switching ───────────────────────────────────────────────────
@@ -301,6 +385,7 @@ async def get_my_org(
         name=str(row["name"]),
         slug=str(row["slug"]),
         logo_path=row.get("logo_path"),
+        branding=_branding_from_row(row),
         role=_role_str(membership),
         member_count=member_count,
         pending_invite_count=invite_count,
@@ -362,6 +447,76 @@ async def update_my_org(
         name=str(row["name"]),
         slug=str(row["slug"]),
         logo_path=row.get("logo_path"),
+        branding=_branding_from_row(row),
+        role=_role_str(membership),
+        member_count=member_count,
+        pending_invite_count=invite_count,
+    )
+
+
+@router.patch("/api/orgs/me/branding", response_model=OrgDetails)
+async def update_my_org_branding(
+    req: BrandingSettings,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> OrgDetails:
+    """Owner-only. Replace the active org's branding/theme overrides.
+
+    The body fully replaces the stored ``branding`` object — there is no
+    per-field merge, so the client always sends the complete desired
+    state. When every field is ``None`` (an "empty" body) the column is
+    set to SQL NULL, resetting the client deck to its built-in defaults.
+
+    Returns the refreshed :class:`OrgDetails` so the Settings UI can
+    re-render without a follow-up GET.
+    """
+    user, membership = org_member
+
+    previous = await orgs_repo.get_for_member(session, membership.org_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    # Empty body resets to defaults (SQL NULL); otherwise persist the
+    # non-null fields only so the JSON object stays compact.
+    new_branding = (
+        None
+        if req.is_empty()
+        else req.model_dump(exclude_none=True)
+    )
+
+    row = await orgs_repo.set_branding(
+        session, org_id=membership.org_id, branding=new_branding
+    )
+    if row is None:  # pragma: no cover — previous fetch above guards
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="org.branding",
+        target_type="org",
+        target_id=str(membership.org_id),
+        metadata={
+            "old": previous.get("branding"),
+            "new": new_branding,
+        },
+    )
+    await session.commit()
+
+    member_count = await orgs_repo.member_count(session, membership.org_id)
+    invite_count = await orgs_repo.pending_invite_count(
+        session, membership.org_id
+    )
+    return OrgDetails(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        slug=str(row["slug"]),
+        logo_path=row.get("logo_path"),
+        branding=_branding_from_row(row),
         role=_role_str(membership),
         member_count=member_count,
         pending_invite_count=invite_count,
@@ -385,6 +540,51 @@ _LOGO_EXT_TO_MIME: dict[str, str] = {
     ".svg": "image/svg+xml",
     ".webp": "image/webp",
 }
+
+
+def serve_logo_file(logo_path: str) -> FileResponse:
+    """Build a :class:`FileResponse` for a stored org ``logo_path``.
+
+    Shared by the member-authed ``GET /api/orgs/me/logo/{filename}`` route
+    and the token-authed ``GET /api/me/logo`` client route so the MIME
+    lookup and the SVG ``Content-Security-Policy`` hardening live in one
+    place.
+
+    The caller is responsible for the authorization decision (which org's
+    logo this is) and for confirming ``logo_path`` is the org's *current*
+    logo. This helper only resolves the path safely and serves the bytes.
+
+    Args:
+        logo_path: Relative path under ``settings.upload_dir`` taken from
+            the authenticated org row — never from the request body.
+
+    Returns:
+        A ``FileResponse`` with the right media type and, for SVGs, a
+        strict CSP header so direct-tab opens can't execute embedded
+        scripts.
+
+    Raises:
+        HTTPException: 400 if the path escapes the upload root, 404 if the
+            file is missing on disk.
+    """
+    try:
+        path = storage.resolve_within_upload_dir(logo_path)
+    except storage.StoragePathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="logo not found")
+
+    mime = _LOGO_EXT_TO_MIME.get(
+        path.suffix.lower(), "application/octet-stream"
+    )
+    headers: dict[str, str] = {}
+    if path.suffix.lower() == ".svg":
+        # SVG can embed scripts — strict CSP so direct-tab opens are safe.
+        headers["Content-Security-Policy"] = (
+            "script-src 'none'; default-src 'self' data:;"
+        )
+    return FileResponse(path=path, media_type=mime, headers=headers)
 
 
 def _validate_logo_upload(
@@ -532,29 +732,14 @@ async def serve_org_logo(
         raise HTTPException(status_code=400, detail="invalid filename")
 
     relative_path = f"org-logos/{membership.org_id}/{base_name}"
-    try:
-        path = storage.resolve_within_upload_dir(relative_path)
-    except storage.StoragePathError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Confirm this is in fact the active logo (avoids leaking old logos
     # after they were replaced — the previous-file delete is best-effort).
     row = await orgs_repo.get_for_member(session, membership.org_id)
     if row is None or row.get("logo_path") != relative_path:
         raise HTTPException(status_code=404, detail="logo not found")
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="logo not found")
 
-    mime = _LOGO_EXT_TO_MIME.get(
-        path.suffix.lower(), "application/octet-stream"
-    )
-    headers: dict[str, str] = {}
-    if path.suffix.lower() == ".svg":
-        # SVG can embed scripts — strict CSP so direct-tab opens are safe.
-        headers["Content-Security-Policy"] = (
-            "script-src 'none'; default-src 'self' data:;"
-        )
-    return FileResponse(path=path, media_type=mime, headers=headers)
+    return serve_logo_file(relative_path)
 
 
 # ── Members ───────────────────────────────────────────────────────────────

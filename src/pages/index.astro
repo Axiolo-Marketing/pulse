@@ -25,11 +25,23 @@ const baseSlash = base.endsWith("/") ? base : `${base}/`;
       <main id="app">
         <div class="loading">Loading...</div>
       </main>
-      <footer class="app-legal-footer">
-        <a href={`${baseSlash}privacy`}>Privacy Policy</a>
-        <span class="sep" aria-hidden="true">·</span>
-        <a href={`${baseSlash}terms`}>Terms of Use</a>
-      </footer>
+      <div class="app-footer">
+        <footer class="made-by-footer">
+          <span class="made-by-label">Made by</span>
+          <img
+            src={`${baseSlash}axiolo-logo.svg`}
+            alt="Axiolo"
+            class="made-by-logo"
+            width="84"
+            height="23"
+          />
+        </footer>
+        <footer class="app-legal-footer">
+          <a href={`${baseSlash}privacy`}>Privacy Policy</a>
+          <span class="sep" aria-hidden="true">·</span>
+          <a href={`${baseSlash}terms`}>Terms of Use</a>
+        </footer>
+      </div>
     </div>
 
     <script>

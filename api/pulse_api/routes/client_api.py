@@ -13,6 +13,7 @@ the client_id field on a write.
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,7 @@ from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
+from pulse_api.routes.orgs import serve_logo_file
 
 router = APIRouter(prefix="/api", tags=["client"])
 
@@ -40,7 +42,43 @@ class ViewRequest(BaseModel):
     card_id: str
 
 
-@router.get("/me")
+class ClientMe(BaseModel):
+    """Bootstrap payload for the client deck (``GET /api/me``).
+
+    Mirrors the legacy free-text fields (``org_name`` is the consultant's
+    label for their customer's company — distinct from the owning
+    organization's ``org_logo_path`` / ``org_branding``, which come from
+    the multi-tenant ``organizations`` row). Unknown/extra keys are
+    permitted so the contract can grow without a breaking change.
+
+    Attributes:
+        id: Engagement (client) UUID.
+        name: Customer-facing engagement contact name.
+        org_name: Legacy free-text customer-org label.
+        engagement_name: Optional engagement label.
+        brief: Optional engagement brief.
+        created_at: Insert timestamp.
+        last_active_at: Last client activity timestamp.
+        org_logo_path: Owning org's logo path, or ``None``. The deck
+            fetches the bytes via ``GET /api/me/logo``.
+        org_branding: Owning org's branding overrides, or ``None`` to use
+            the deck's built-in defaults.
+    """
+
+    model_config = {"extra": "allow"}
+
+    id: str
+    name: str
+    org_name: str | None = None
+    engagement_name: str | None = None
+    brief: str | None = None
+    created_at: Any | None = None
+    last_active_at: Any | None = None
+    org_logo_path: str | None = None
+    org_branding: dict[str, Any] | None = None
+
+
+@router.get("/me", response_model=ClientMe)
 @limiter.limit(settings.rate_limit_token_validation)
 async def get_me(
     request: Request,
@@ -50,6 +88,28 @@ async def get_me(
     if me is None:
         raise HTTPException(status_code=404, detail="client not found")
     return me
+
+
+@router.get("/me/logo")
+@limiter.limit(settings.rate_limit_token_validation)
+async def get_my_org_logo(
+    request: Request,
+    session: AsyncSession = Depends(get_anon_session),
+) -> FileResponse:
+    """Serve the owning org's logo for the token-bound client.
+
+    Auth: the request's ``X-Pulse-Token``. The org is resolved from the
+    token's client row (and the ``pulse.org_id`` GUC) — the client never
+    sends a filename, so there is no traversal surface. Returns 404 when
+    the org has no logo or the stored file is missing.
+
+    Rate-limited identically to ``GET /api/me`` since each call resolves
+    the token via a DB round-trip plus a disk read.
+    """
+    logo_path = await clients_repo.get_my_org_logo_path(session)
+    if not logo_path:
+        raise HTTPException(status_code=404, detail="logo not found")
+    return serve_logo_file(logo_path)
 
 
 @router.patch("/me/heartbeat")

@@ -70,6 +70,23 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
 
 // ── Domain types (canonical home — other modules import from here) ────────
 
+/** Per-org branding/theme. Every field is optional; a missing/null value
+ * means "use the product default" (see `BRANDING_DEFAULTS` in
+ * `branding.ts`). The `font` slug must be one of the `FONT_OPTIONS` slugs,
+ * which equal the backend's `ALLOWED_FONTS`. The shape is the cross-team
+ * contract — the backend returns and accepts the identical object. */
+export interface BrandingSettings {
+  /** Primary brand colour, `"#RRGGBB"`. Drives `--primary` plus two
+   * derived shades (`--primary-dark`, `--primary-soft`). */
+  brand_color?: string | null;
+  /** Page background, `"#RRGGBB"` → `--surface-muted`. */
+  background_color?: string | null;
+  /** Body text colour, `"#RRGGBB"` → `--ink`. */
+  text_color?: string | null;
+  /** A `FONT_OPTIONS` slug → `--font-sans`. */
+  font?: string | null;
+}
+
 export type ResponseType =
   | "confirm-edit"
   | "single-select"
@@ -105,6 +122,10 @@ export interface Client {
    * through in a follow-up — frontend already handles the field
    * gracefully when absent (treats it as `null`). */
   org_logo_path?: string | null;
+  /** The operator org's branding/theme. When `/api/me` returns this, the
+   * client deck applies it via `applyBranding` on boot. Absent/null →
+   * the deck keeps the product defaults. */
+  org_branding?: BrandingSettings | null;
 }
 
 export interface Card {
@@ -188,6 +209,27 @@ export const clientApi = {
 
   deleteUpload: (token: string, uploadId: string): Promise<void> =>
     request(`/api/uploads/${uploadId}`, { method: "DELETE", token }),
+
+  /** Fetch the operator org's logo as a Blob and return an object URL the
+   * client deck can use as an `<img src>`. The token rides in the
+   * `X-Pulse-Token` header (never the URL — the logo bytes are not a
+   * public asset). Returns `null` on 404 (no logo) or any error so the
+   * caller can fall back to the Axiolo wordmark without branching on
+   * status codes. Caller owns the returned object URL — create it once
+   * and reuse it; revoke when the deck tears down. */
+  logoObjectUrl: async (token: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/me/logo`, {
+        headers: { "X-Pulse-Token": token },
+        credentials: "include",
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  },
 };
 
 // ── URL helper: the streamed download endpoint goes through a regular
@@ -259,6 +301,10 @@ export interface OrgDetails {
   role: string;
   member_count: number;
   pending_invite_count: number;
+  /** The org's branding/theme, or `null` when nothing has been set (all
+   * defaults). Drives the Brand & theme settings form and the live
+   * admin-console theme via `applyBranding`. */
+  branding: BrandingSettings | null;
 }
 
 export interface MemberRow {
@@ -544,6 +590,15 @@ export const orgsApi = {
     request("/api/orgs/me", {
       method: "PATCH",
       body: JSON.stringify(args),
+    }),
+
+  /** Replace the org's branding/theme. An empty object resets every field
+   * to the product default (the backend treats absent keys as cleared).
+   * Returns the refreshed `OrgDetails` with the canonical `branding`. */
+  updateBranding: (branding: BrandingSettings): Promise<OrgDetails> =>
+    request("/api/orgs/me/branding", {
+      method: "PATCH",
+      body: JSON.stringify(branding),
     }),
 
   uploadLogo: (file: File): Promise<{ logo_path: string }> => {

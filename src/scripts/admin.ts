@@ -14,6 +14,7 @@ import {
   type ResponseType,
   type UploadRow,
 } from "../lib/api";
+import { applyBranding } from "../lib/branding";
 import { formatTimestamp } from "../lib/format-time";
 import { renderOrgSwitcher } from "./org-switcher";
 import {
@@ -395,6 +396,11 @@ async function loadShellState(user: AuthUser): Promise<ShellState> {
     orgsApi.listMine(),
     orgsApi.me(),
   ]);
+  // Apply the active org's theme to the live document. Every refresh
+  // (boot, org switch, post-settings reload) routes through here, so the
+  // console re-themes consistently — and an org with no custom branding
+  // resets cleanly to the Axiolo defaults.
+  applyBranding(activeOrg.branding);
   return { user, orgs, activeOrg };
 }
 

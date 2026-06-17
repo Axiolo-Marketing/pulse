@@ -99,9 +99,39 @@ button:focus-visible {
   color: var(--muted);
 }
 
+/* The Pulse product wordmark in the deck top-bar. Placeholder until a
+   Pulse logo replaces the text. Uses --ink so it stays legible on any
+   themed background. */
 .brand-mark {
-  color: var(--primary);
-  font-weight: 700;
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.2px;
+}
+
+/* Bottom group: brand attribution ("Made by Axiolo") above the legal
+   links, pinned to the bottom of the flex-column page. */
+.app-footer {
+  margin-top: auto;
+  width: 100%;
+}
+
+.made-by-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 16px 0;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+
+.made-by-logo {
+  height: 16px;
+  width: auto;
+  opacity: 0.75;
+  vertical-align: middle;
 }
 
 .progress {
