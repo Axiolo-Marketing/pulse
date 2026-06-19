@@ -21,11 +21,13 @@ Mappings to the REST routes (see ``routes/admin_api.py`` and
     pulse_upload_attachment     ←  POST   /api/admin/attachments
 
 Each tool authenticates first via ``authenticate_request``, which
-returns ``(user, api_key)``. The tool then opens a member-scoped
-session against ``api_key.org_id`` so every query is RLS-narrowed to
-the right tenant. A missing / invalid / revoked key, or a key whose
-user lost their membership, raises ``MCPAuthError`` before any work
-happens — same outcome as the REST middleware's 403.
+returns ``(user, org_id)`` read off the access token validated at the
+HTTP layer (a legacy ``pulse_<key>`` API key or an OAuth grant). The
+tool then opens a member-scoped session against ``org_id`` so every
+query is RLS-narrowed to the right tenant. A missing / invalid /
+revoked credential, or one whose user lost their membership, never
+reaches a tool body — ``RequireAuthMiddleware`` 401s the request first
+(same outcome as the REST middleware's 403).
 """
 from __future__ import annotations
 
@@ -59,8 +61,8 @@ from pulse_api.repos import uploads as uploads_repo
     ),
 )
 async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         return await clients_repo.list_all_with_counts(session)
 
 
@@ -74,8 +76,8 @@ async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
 async def pulse_get_engagement(
     ctx: Context, client_id: str
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         client = await clients_repo.get_by_id(session, client_id)
         if client is None:
             raise ValueError("engagement not found")
@@ -100,14 +102,14 @@ async def pulse_create_engagement(
     org_name: str | None = None,
     engagement_name: str | None = None,
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         row = await clients_repo.create_engagement(
             session,
             name=name,
             org_name=org_name,
             engagement_name=engagement_name,
-            org_id=str(api_key.org_id),
+            org_id=org_id,
         )
         await session.commit()
         return row
@@ -129,7 +131,7 @@ async def pulse_update_engagement(
     engagement_name: str | None = None,
     brief: str | None = None,
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
+    _, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
     if name is not None:
         fields["name"] = name
@@ -140,7 +142,7 @@ async def pulse_update_engagement(
     if brief is not None:
         fields["brief"] = brief
 
-    async with _open_member_session(api_key.org_id) as session:
+    async with _open_member_session(org_id) as session:
         row = await clients_repo.update_engagement(session, client_id, fields)
         if row is None:
             raise ValueError("engagement not found")
@@ -160,8 +162,8 @@ async def pulse_update_engagement(
 async def pulse_delete_engagement(
     ctx: Context, client_id: str
 ) -> dict[str, bool]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         upload_paths = await clients_repo.list_upload_paths_for_client(
             session, client_id
         )
@@ -187,8 +189,8 @@ async def pulse_delete_engagement(
 async def pulse_rotate_token(
     ctx: Context, client_id: str
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         row = await clients_repo.rotate_token(session, client_id)
         if row is None:
             raise ValueError("engagement not found")
@@ -210,8 +212,8 @@ async def pulse_rotate_token(
 async def pulse_import_deck(
     ctx: Context, client_id: str, markdown: str
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         if (await clients_repo.get_by_id(session, client_id)) is None:
             raise ValueError("engagement not found")
         try:
@@ -220,7 +222,6 @@ async def pulse_import_deck(
             detail = "\n".join(exc.errors) if exc.errors else str(exc)
             raise ValueError(detail) from exc
 
-        org_id = str(api_key.org_id)
         created: list[dict[str, Any]] = []
         for card in parsed:
             row = await cards_repo.create_card(
@@ -257,8 +258,8 @@ async def pulse_add_card(
     skip_allowed: bool = True,
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         if (await clients_repo.get_by_id(session, client_id)) is None:
             raise ValueError("engagement not found")
         row = await cards_repo.create_card(
@@ -273,7 +274,7 @@ async def pulse_add_card(
             default_value=default_value,
             skip_allowed=skip_allowed,
             attachment_path=attachment_path,
-            org_id=str(api_key.org_id),
+            org_id=org_id,
         )
         if row is None:
             raise ValueError("card creation failed")
@@ -300,7 +301,7 @@ async def pulse_update_card(
     skip_allowed: bool | None = None,
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
-    _, api_key = await authenticate_request(ctx)
+    _, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
     if category is not None:
         fields["category"] = category
@@ -319,7 +320,7 @@ async def pulse_update_card(
     if attachment_path is not None:
         fields["attachment_path"] = attachment_path
 
-    async with _open_member_session(api_key.org_id) as session:
+    async with _open_member_session(org_id) as session:
         row = await cards_repo.update_card(session, card_id, fields)
         if row is None:
             raise ValueError("card not found")
@@ -334,8 +335,8 @@ async def pulse_update_card(
 async def pulse_delete_card(
     ctx: Context, card_id: str
 ) -> dict[str, bool]:
-    _, api_key = await authenticate_request(ctx)
-    async with _open_member_session(api_key.org_id) as session:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
         deleted = await cards_repo.delete_card(session, card_id)
         if not deleted:
             raise ValueError("card not found")

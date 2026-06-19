@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api.config import settings
 from pulse_api.db import get_session
+from pulse_api.mcp.oauth.routes import oauth_root_routes
 from pulse_api.mcp.server import lifespan as mcp_lifespan
 from pulse_api.mcp.server import mcp_app
 from pulse_api.observability import (
@@ -81,6 +82,15 @@ app.include_router(superadmin_routes.router)
 # `/api/mcp/mcp`. nginx already proxies /api/* to FastAPI in prod, so
 # no separate proxy rule is needed.
 app.mount("/api/mcp", mcp_app)
+
+# OAuth 2.1 authorization-server routes mounted at the DOMAIN ROOT (not
+# under /api/mcp): AS discovery metadata, /authorize, /token, /register,
+# /revoke, the RFC 9728 protected-resource-metadata doc, and the Pulse
+# consent page. The MCP endpoint runs in resource-server mode and its
+# 401 WWW-Authenticate header points at the root PRM doc these routes
+# serve. PR 3 adds the nginx `location` blocks that proxy these paths to
+# FastAPI in production.
+app.router.routes.extend(oauth_root_routes())
 
 
 @app.get("/healthz")

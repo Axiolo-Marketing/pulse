@@ -2,13 +2,13 @@
 
 Eight cases from the plan's Phase 2 "Tests" section:
 
-  1. tools/list returns the 11 tools.
+  1. tools/list returns the 11 tools (with a valid token — RS mode).
   2. Each tool round-trips with a valid admin key and the DB state
      matches expectations (we exercise create + delete here; the rest are
      covered structurally by tools/list shape + auth gating below).
-  3. Missing Authorization header → tool-error.
-  4. Revoked key → tool-error.
-  5. Non-admin valid key → tool-error.
+  3. Missing Authorization header → HTTP 401 (RequireAuthMiddleware).
+  4. Revoked key → HTTP 401.
+  5. Non-member valid key → HTTP 401.
   6. pulse_create_engagement + pulse_import_deck chain creates the
      expected card rows in order.
   7. pulse_upload_attachment then pulse_add_card with the returned path
@@ -113,6 +113,14 @@ async def mcp_runtime(
 
     monkeypatch.setattr(mcp_tools, "_open_member_session", _override_member_session)
 
+    # RS mode: the bearer token is validated at the HTTP layer by the
+    # `verifier` singleton, which opens its own admin session. Route that
+    # through db_conn too so key lookups + membership checks see the
+    # test's seeded rows.
+    from pulse_api.mcp.oauth import verifier as verifier_mod
+
+    monkeypatch.setattr(verifier_mod, "_admin_session", _override_session)
+
     # Patch _touch_last_used through the same conn (mirrors the override
     # in conftest's `client` fixture). Lives on `auth.api_keys` after the
     # bearer-validation extraction — both REST and MCP go through there.
@@ -172,13 +180,19 @@ async def _insert_admin_key(
     return raw
 
 
-async def _mcp_call(
+async def _mcp_post(
     mcp_client: AsyncClient,
     method: str,
     params: dict[str, Any] | None = None,
     *,
     api_key: str | None = None,
-) -> dict[str, Any]:
+):
+    """POST a JSON-RPC call and return the raw httpx response.
+
+    Used by auth-failure tests that assert on the HTTP status code:
+    after RS-mode, a missing/invalid/non-member credential is rejected
+    by ``RequireAuthMiddleware`` with a 401 before any tool body runs.
+    """
     headers = dict(MCP_HEADERS)
     if api_key is not None:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -189,7 +203,17 @@ async def _mcp_call(
     }
     if params is not None:
         body["params"] = params
-    r = await mcp_client.post(MCP_PATH, json=body, headers=headers)
+    return await mcp_client.post(MCP_PATH, json=body, headers=headers)
+
+
+async def _mcp_call(
+    mcp_client: AsyncClient,
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    r = await _mcp_post(mcp_client, method, params, api_key=api_key)
     assert r.status_code == 200, f"unexpected status {r.status_code}: {r.text}"
     return r.json()
 
@@ -216,11 +240,16 @@ def _structured(result: dict[str, Any]) -> Any:
 # ── Tests ────────────────────────────────────────────────────────────────
 
 
-# 1. tools/list returns the 11 expected tools.
+# 1. tools/list returns the 11 expected tools (RS mode requires a token).
 async def test_tools_list_returns_eleven_tools(
     mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
 ) -> None:
-    resp = await _mcp_call(mcp_client, "tools/list")
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    resp = await _mcp_call(mcp_client, "tools/list", api_key=raw)
     tools = resp["result"]["tools"]
     names = sorted(t["name"] for t in tools)
     assert names == sorted(
@@ -293,23 +322,26 @@ async def test_create_then_delete_engagement_roundtrip(
     assert gone is None
 
 
-# 3. Missing Authorization header → tool-error.
-async def test_missing_authorization_returns_tool_error(
+# 3. Missing Authorization header → HTTP 401 (RequireAuthMiddleware).
+#    RS-mode validates the bearer at the HTTP layer, so an unauthenticated
+#    call never reaches a tool body — it's rejected with 401 +
+#    WWW-Authenticate, the discovery trigger Claude Desktop relies on.
+async def test_missing_authorization_returns_401(
     mcp_client: AsyncClient,
 ) -> None:
-    resp = await _mcp_call(
+    resp = await _mcp_post(
         mcp_client,
         "tools/call",
         _tool_call_payload("pulse_list_engagements", {}),
         api_key=None,
     )
-    assert resp["result"]["isError"] is True
-    txt = resp["result"]["content"][0]["text"].lower()
-    assert "missing" in txt or "authorization" in txt
+    assert resp.status_code == 401
+    www = resp.headers.get("www-authenticate", "")
+    assert "resource_metadata=" in www
 
 
-# 4. Revoked key → tool-error.
-async def test_revoked_key_returns_tool_error(
+# 4. Revoked key → HTTP 401 (the verifier returns None for a revoked key).
+async def test_revoked_key_returns_401(
     mcp_client: AsyncClient,
     db: AsyncSession,
     seed_admin_user: dict[str, str],
@@ -320,40 +352,35 @@ async def test_revoked_key_returns_tool_error(
         org_id=seed_admin_user["org_id"],
         revoked=True,
     )
-    resp = await _mcp_call(
+    resp = await _mcp_post(
         mcp_client,
         "tools/call",
         _tool_call_payload("pulse_list_engagements", {}),
         api_key=raw,
     )
-    assert resp["result"]["isError"] is True
-    txt = resp["result"]["content"][0]["text"].lower()
-    assert "invalid" in txt
+    assert resp.status_code == 401
 
 
-# 5. Valid key on a user who is NOT a member of the key's org → tool-error.
+# 5. Valid key on a user who is NOT a member of the key's org → HTTP 401.
 #    Post-PR-2 "admin only" is gone — what matters is membership in the
-#    org the key was minted against.
-async def test_non_member_key_returns_tool_error(
+#    org the key was minted against. The verifier re-checks membership
+#    and returns None when it's missing, so the middleware 401s.
+async def test_non_member_key_returns_401(
     mcp_client: AsyncClient,
     db: AsyncSession,
     seed_user: dict[str, str],
     axiolo_org: dict[str, str],
 ) -> None:
-    # seed_user has no membership on Axiolo; the key authenticates the
-    # user but membership lookup at the auth gate fails.
     raw = await _insert_admin_key(
         db, user_id=seed_user["id"], org_id=axiolo_org["id"]
     )
-    resp = await _mcp_call(
+    resp = await _mcp_post(
         mcp_client,
         "tools/call",
         _tool_call_payload("pulse_list_engagements", {}),
         api_key=raw,
     )
-    assert resp["result"]["isError"] is True
-    txt = resp["result"]["content"][0]["text"].lower()
-    assert "member" in txt
+    assert resp.status_code == 401
 
 
 # 6. create_engagement + import_deck chain.

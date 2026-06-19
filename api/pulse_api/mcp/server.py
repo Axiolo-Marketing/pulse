@@ -1,23 +1,27 @@
-"""FastMCP server + bearer-auth wiring.
+"""FastMCP server + resource-server auth wiring.
 
 The MCP server runs as a Starlette sub-app mounted under `/api/mcp` on
-the main FastAPI app. Auth is mandatory on every tool call:
+the main FastAPI app, in OAuth 2.1 **resource-server mode**: the
+``FastMCP(...)`` constructor receives ``token_verifier`` +
+``auth=AuthSettings(...)`` (but NOT ``auth_server_provider`` — the
+authorization-server routes are mounted separately at the domain root in
+``pulse_api.mcp.oauth.routes``). That makes ``streamable_http_app()``:
 
-  • Each tool is decorated with `@mcp.tool()` and takes a `Context`
-    parameter. Inside the tool, the first thing we do is call
-    `authenticate_request(ctx)` which:
-      1. Pulls the `Authorization: Bearer pulse_<key>` header off the
-         underlying Starlette request the MCP transport exposes via
-         `ctx.request_context.request`.
-      2. Resolves the bearer string to a `User` row using the SAME
-         primitives as the REST middleware (`api_keys_repo.get_by_prefix`
-         + `api_keys_lib.hash_key` + `hmac.compare_digest`).
-      3. Updates `last_used_at` on the key best-effort, identical to
-         the REST path.
-      4. Refuses non-admin keys with an MCP-shaped error.
-  • Missing or malformed `Authorization` → `MCPAuthError("missing")`.
-  • Unknown / wrong-hash / revoked key → `MCPAuthError("invalid")`.
-  • Valid key on a non-admin user → `MCPAuthError("forbidden")`.
+  • wrap the endpoint in ``RequireAuthMiddleware`` — an unauthenticated
+    request gets an HTTP ``401`` with a ``WWW-Authenticate`` header whose
+    ``resource_metadata`` URL points at the absolute root PRM document
+    (``/.well-known/oauth-protected-resource/api/mcp``);
+  • install ``BearerAuthBackend`` + ``AuthContextMiddleware`` so a valid
+    bearer token is validated ONCE at the HTTP layer (via ``verifier``)
+    and exposed to tool handlers as an ``AccessToken`` contextvar.
+
+Two credential shapes converge in ``verifier`` (see
+``pulse_api.mcp.oauth.verifier``): a legacy ``pulse_<key>`` API key and
+an OAuth access token. Both yield an ``AccessToken`` carrying
+``subject = user_id`` and ``claims["org_id"]`` — the verifier also
+re-checks org membership on every request. Tools therefore no longer
+re-parse the header; ``authenticate_request`` reads the already-validated
+principal off the context.
 
 The session-management lifespan that FastMCP needs is installed on the
 main FastAPI app in `pulse_api.main` — we expose `mcp_app` (a Starlette
@@ -30,16 +34,19 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
 from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse_api.auth import api_keys as api_keys_lib
 from pulse_api.config import settings as app_settings
 from pulse_api.db import admin_engine, member_engine
-from pulse_api.models import ApiKey, User
+from pulse_api.mcp.oauth.verifier import verifier
+from pulse_api.models import User
+from pulse_api.repos import users as users_repo
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
@@ -60,18 +67,14 @@ class MCPAuthError(Exception):
 
 @asynccontextmanager
 async def _open_admin_session() -> AsyncIterator[AsyncSession]:
-    """Open a short-lived admin-engine session for a tool call.
+    """Open a short-lived admin-engine session.
 
-    Tools that mutate state call `session.commit()` themselves — this is
-    just the context manager that wraps create/close. Tests monkeypatch
-    this function to redirect through the test's rolled-back connection
-    (see `tests/test_mcp.py`); production talks to the admin pool.
-
-    PR 2 swap: ``authenticate_request`` now returns ``(user, api_key)``
-    and tool handlers open a member-scoped session via
-    ``_open_member_session(api_key.org_id)`` instead. ``_open_admin_session``
-    is retained for the auth path (looking up the api key row itself)
-    and for tests that monkeypatch the session factory.
+    Used by ``authenticate_request`` to load the ``User`` row for the
+    already-validated access token. (Tool bodies open member-scoped
+    sessions via ``_open_member_session(org_id)`` for their own
+    queries.) Tests monkeypatch this to redirect through the test's
+    rolled-back connection (see ``tests/test_mcp.py``); production talks
+    to the admin pool.
     """
     async with AsyncSession(admin_engine, expire_on_commit=False) as session:
         yield session
@@ -107,56 +110,50 @@ async def _open_member_session(org_id: str) -> AsyncIterator[AsyncSession]:
 # ── Authentication ────────────────────────────────────────────────────────
 
 
-async def authenticate_request(ctx: Context) -> tuple[User, ApiKey]:
-    """Resolve the calling MCP request to (User, ApiKey).
+async def authenticate_request(ctx: Context) -> tuple[User, str]:
+    """Resolve the calling MCP request to ``(User, org_id)``.
 
-    Returns the ApiKey alongside the user so each tool handler can pull
-    ``api_key.org_id`` and open a member-scoped session against the
-    right tenant — the key, not the cookie (MCP has no cookies anyway),
-    determines org context.
+    By the time a tool body runs, ``RequireAuthMiddleware`` +
+    ``BearerAuthBackend`` have already validated the bearer credential
+    against ``verifier`` (which handles both legacy ``pulse_<key>`` API
+    keys and OAuth access tokens, AND re-checks org membership). The
+    validated principal is stashed in a contextvar we read here via
+    ``get_access_token()`` — there is no header re-parse, and no second
+    membership check (the verifier already did it).
 
-    Delegates the actual bearer-string → (User, ApiKey) resolution to
-    ``auth.api_keys.verify_bearer`` — the single source of truth shared
-    with the REST middleware. The MCP path adds two MCP-specific things:
+    The token's ``subject`` is the user id and ``claims["org_id"]`` is
+    the granting org; each tool opens a member-scoped session against
+    that org id, regardless of whether the credential was a key or an
+    OAuth grant.
 
-      1. Extracting the ``Authorization`` header off the Starlette
-         request that FastMCP exposes via ``ctx.request_context.request``.
-      2. Membership-existence check on the resolved ``(user, org_id)``
-         pair — a key whose owning user was removed from the org should
-         stop working immediately (the REST layer reaches the same
-         outcome through ``get_current_org_member``).
+    Args:
+        ctx: The FastMCP tool-call context (unused — kept for signature
+            stability and because the contextvar is request-scoped).
 
-    Raises ``MCPAuthError`` for any failure mode. FastMCP turns that
-    into a tool-error response the client surfaces to the model.
+    Returns:
+        A ``(User, org_id)`` tuple. ``org_id`` is a UUID string.
+
+    Raises:
+        MCPAuthError: If no validated access token is present, the token
+            carries no ``org_id`` claim, or the user row has vanished.
     """
-    request = getattr(ctx.request_context, "request", None)
-    if request is None:
-        raise MCPAuthError("missing Authorization header")
+    access = get_access_token()
+    if access is None:
+        # Reachable only if a tool runs outside RequireAuthMiddleware
+        # (e.g. a future unauthenticated route); the middleware otherwise
+        # 401s before any tool body executes.
+        raise MCPAuthError("missing or invalid credential")
 
-    authorization = request.headers.get("authorization") if hasattr(request, "headers") else None
-    if not authorization:
-        raise MCPAuthError("missing Authorization header")
+    org_id = (access.claims or {}).get("org_id")
+    if not org_id or access.subject is None:
+        raise MCPAuthError("token is missing org context")
 
     async with _open_admin_session() as session:
-        resolved = await api_keys_lib.verify_bearer(authorization, session)
-        if resolved is None:
-            raise MCPAuthError("invalid API key")
-        user, api_key = resolved
-        # Membership existence check — keys outlive memberships only as
-        # tombstones; an active key whose user lost their seat must
-        # stop working immediately.
-        result = await session.execute(
-            text(
-                "select 1 from public.organization_memberships "
-                "where user_id = cast(:u as uuid) "
-                "  and org_id  = cast(:o as uuid) limit 1"
-            ),
-            {"u": str(user.id), "o": str(api_key.org_id)},
-        )
-        if result.scalar() is None:
-            raise MCPAuthError("user is not a member of the key's organization")
+        user = await users_repo.get_user_by_id(session, access.subject)
+    if user is None:
+        raise MCPAuthError("authenticated user no longer exists")
 
-    return user, api_key
+    return user, str(org_id)
 
 
 # ── FastMCP instance ──────────────────────────────────────────────────────
@@ -207,25 +204,42 @@ mcp = FastMCP(
     # gives the final URL `/api/mcp` (not `/api/mcp/mcp`). One endpoint,
     # no version suffix — matches the plan.
     streamable_http_path="/",
+    # Resource-server mode: validate every bearer token through `verifier`
+    # (API key OR OAuth grant). Passing `auth` (but NOT auth_server_provider)
+    # makes streamable_http_app() wrap the endpoint in RequireAuthMiddleware
+    # (401 + WWW-Authenticate pointing at the root PRM doc) and install the
+    # bearer/auth-context middleware. The authorization-server routes
+    # (/authorize, /token, /register, /revoke + AS metadata) are mounted at
+    # the domain root separately (see pulse_api.mcp.oauth.routes), so they
+    # don't mis-nest under /api/mcp.
+    token_verifier=verifier,
+    auth=AuthSettings(
+        # AnyHttpUrl fields — pydantic coerces the plain strings.
+        issuer_url=app_settings.mcp_issuer_base,
+        resource_server_url=app_settings.mcp_resource_url,
+        required_scopes=["mcp"],
+    ),
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=_allowed_hosts(),
         # Origin is only checked when present. MCP clients (Claude Code,
         # the SDK's streamable_http_client) don't send Origin by default,
-        # so an empty allowlist is fine — bearer-key auth is the real
-        # gate. Browser-MCP clients can add their domain here if needed.
+        # so an empty allowlist is fine — bearer auth is the real gate.
+        # Browser-MCP clients can add their domain here if needed.
         allowed_origins=[],
     ),
 )
 
 
 # Tool registrations live in mcp.tools — importing it has the side effect
-# of calling `@mcp.tool(...)` on each one. Each tool calls
-# `authenticate_request(ctx)` before doing any work, so the per-tool gate
-# is at the tool layer. `tools/list` (enumeration) stays unauthenticated
-# on purpose: tool names + descriptions are documentation, not secrets,
-# and gating enumeration would break the discovery shape every standard
-# MCP client expects.
+# of calling `@mcp.tool(...)` on each one. Each tool still calls
+# `authenticate_request(ctx)` to resolve the org from the validated token,
+# but the real HTTP gate is now `RequireAuthMiddleware`: under RS mode the
+# ENTIRE streamable endpoint — including `tools/list` — requires a valid
+# bearer token, so an unauthenticated request 401s with the OAuth
+# discovery challenge. That is the correct shape for the OAuth connector
+# flow (clients complete authorization, THEN list tools) and does not
+# break legacy `pulse_<key>` callers, which always send their credential.
 from pulse_api.mcp import tools as _tools  # noqa: E402, F401
 
 mcp_app: "Starlette" = mcp.streamable_http_app()

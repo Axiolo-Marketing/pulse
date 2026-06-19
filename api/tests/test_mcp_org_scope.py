@@ -5,7 +5,9 @@ API key's ``org_id``. We prove:
 
   1. ``pulse_list_engagements`` returns ONLY the key's org's clients.
   2. ``pulse_create_engagement`` lands its row in the key's org.
-  3. ``tools/list`` stays unauthenticated.
+  3. ``tools/list`` requires a token — under RS mode ``RequireAuthMiddleware``
+     gates the whole endpoint, so unauthenticated enumeration 401s (the
+     OAuth flow authenticates before listing tools).
 
 The MCP fixtures (session manager, runtime, ``mcp_client``) are
 re-defined locally — pytest does not auto-discover fixtures across
@@ -79,6 +81,14 @@ async def mcp_runtime(
     from pulse_api.mcp import tools as mcp_tools
 
     monkeypatch.setattr(mcp_tools, "_open_member_session", _override_member_session)
+
+    # RS mode validates the bearer token via the `verifier` singleton,
+    # which opens its own admin session — bind it through db_conn too.
+    from pulse_api.mcp.oauth import verifier as verifier_mod
+
+    monkeypatch.setattr(
+        verifier_mod, "_admin_session", _override_admin_session
+    )
 
     from pulse_api.auth import api_keys as _api_keys_lib
     from pulse_api.repos import api_keys as _api_keys_repo
@@ -274,15 +284,28 @@ async def test_mcp_tool_scoped_to_key_org(
         raise AssertionError(f"unknown scenario {scenario!r}")
 
 
-# ── tools/list stays unauthenticated ─────────────────────────────────────
+# ── tools/list under RS-mode auth ────────────────────────────────────────
 
 
-async def test_tools_list_does_not_require_auth(
+async def test_tools_list_requires_auth_and_returns_tools(
     mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
 ) -> None:
-    """``tools/list`` is documentation, not data — gating it would
-    break every standard MCP client's discovery flow."""
-    resp = await _mcp_call(mcp_client, "tools/list", api_key=None)
+    """RS mode gates the whole endpoint: ``tools/list`` 401s without a
+    credential and returns the tool catalog with a valid key."""
+    # Without a credential, RequireAuthMiddleware 401s before discovery.
+    r = await mcp_client.post(
+        MCP_PATH,
+        json={"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "tools/list"},
+        headers=MCP_HEADERS,
+    )
+    assert r.status_code == 401
+
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    resp = await _mcp_call(mcp_client, "tools/list", api_key=raw)
     tools = resp["result"]["tools"]
     assert isinstance(tools, list)
     assert len(tools) >= 1

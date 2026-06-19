@@ -14,24 +14,24 @@ async def test_healthz_returns_ok(client: AsyncClient) -> None:
 
 
 async def test_rest_and_mcp_share_one_verify_bearer() -> None:
-    """Both the REST middleware and the MCP server must funnel bearer
-    validation through `auth.api_keys.verify_bearer` — otherwise harden
-    one and the other quietly stays vulnerable.
+    """Both the REST middleware and the MCP resource-server must funnel
+    bearer validation through `auth.api_keys.verify_bearer` — otherwise
+    harden one and the other quietly stays vulnerable.
 
-    The REST path exposes `_user_from_bearer` (which delegates), and the
-    MCP path's `authenticate_request` reads `api_keys_lib.verify_bearer`
-    by module attribute access. Importing `api_keys_lib` from both modules
-    must yield the same module object, and the function must be the same
-    callable.
+    The REST path exposes `_user_from_bearer` (which delegates). Under RS
+    mode the MCP path validates bearers in `PulseTokenVerifier`, whose
+    legacy `pulse_<key>` branch reads `api_keys_lib.verify_bearer` by
+    module attribute access. Importing `api_keys_lib` from both modules
+    must yield the same module object and the same callable.
     """
     from pulse_api.auth import api_keys as api_keys_lib
     from pulse_api.auth import middleware as mw
-    from pulse_api.mcp import server as mcp_server
+    from pulse_api.mcp.oauth import verifier as verifier_mod
 
     assert mw.api_keys_lib is api_keys_lib
-    assert mcp_server.api_keys_lib is api_keys_lib
+    assert verifier_mod.api_keys_lib is api_keys_lib
     assert mw.api_keys_lib.verify_bearer is api_keys_lib.verify_bearer
-    assert mcp_server.api_keys_lib.verify_bearer is api_keys_lib.verify_bearer
+    assert verifier_mod.api_keys_lib.verify_bearer is api_keys_lib.verify_bearer
 
 
 async def test_cors_preflight_allows_authorization_header(
