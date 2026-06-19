@@ -62,10 +62,15 @@ pulse_google_redirect_uri: "https://{{ pulse_domain }}/api/auth/google/callback"
 pulse_microsoft_redirect_uri: "https://{{ pulse_domain }}/api/auth/microsoft/callback"
 pulse_microsoft_tenant_id: common
 
-# ── SMTP ──────────────────────────────────────────────────────────────────
-pulse_smtp_host: smtp.example.com
-pulse_smtp_port: 587
-pulse_smtp_from: "noreply@{{ pulse_domain }}"
+# ── Outbound email (Resend) ────────────────────────────────────────────────
+# Transactional mail (invites, verification, password reset) goes via Resend's
+# HTTPS API. `pulse_email_from` must be on a Resend-verified domain. We reuse
+# the already-verified `notifications.axiolo.com` domain — Resend authorizes
+# any mailbox on a verified domain, so `pulse@` needs no extra DNS. (To send
+# from a `pulse.axiolo.com` address instead, add + verify that subdomain as a
+# separate Resend domain first.) The API key is vaulted below; empty key ⇒
+# app stays in log-only mode.
+pulse_email_from: "Pulse <pulse@notifications.axiolo.com>"
 
 # ── App config ────────────────────────────────────────────────────────────
 # Superadmins. Each email here is stamped is_superadmin=true by migration
@@ -133,7 +138,7 @@ vault_pulse_session_secret: !vault |
           6338666436616535610a316638373064326666623434393434643232356462626266663164363535
           33663238306164333433363938623032356634303064383165333934373135376130
 
-# OAuth + SMTP: empty until provisioned. When you have real values, replace
+# OAuth + Resend: empty until provisioned. When you have real values, replace
 # each "" with an encrypt_string !vault block (same as the DB secrets above).
 vault_pulse_google_client_id: !vault |
           $ANSIBLE_VAULT;1.1;AES256
@@ -155,5 +160,11 @@ vault_pulse_google_client_secret: !vault |
           6464336634323634643931373235323131656137643432383864
 vault_pulse_microsoft_client_id: ""
 vault_pulse_microsoft_client_secret: ""
-vault_pulse_smtp_user: ""
-vault_pulse_smtp_password: ""
+vault_pulse_resend_api_key: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          35663931303032316437636566386335353562663265656339353762323233656139666161636138
+          3663333565633466303830656539303231623936613565340a393966643431623134316131623239
+          62306661663063613531653839643865333739323035366661386538663864376630303931303163
+          3665323837386535650a626162643935376130616165623533363433336230643330353739656136
+          35343138616437353533383731666332356665653833336564326431343337663162663963623834
+          6462346636373335623433646266393337353539333332376462
