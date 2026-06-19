@@ -46,6 +46,41 @@ const escape = (s: string): string =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+/**
+ * Return a SAFE same-origin `return_to` target from the current URL, or
+ * null. Used to bounce the operator back to the OAuth consent page after
+ * a successful sign-in. Rejects anything that isn't strictly same-origin
+ * (absolute off-origin URLs, protocol-relative `//evil.com`, etc.) so a
+ * crafted link can never redirect the browser off Pulse.
+ */
+function safeReturnTo(): string | null {
+  const raw = new URLSearchParams(window.location.search).get("return_to");
+  if (!raw) return null;
+  // Resolve against our own origin; a same-origin result is the only one
+  // we accept. `new URL(raw, origin)` resolves `/path` against origin and
+  // leaves absolute URLs (incl. `//host`) at their own origin.
+  let resolved: URL;
+  try {
+    resolved = new URL(raw, window.location.origin);
+  } catch {
+    return null;
+  }
+  if (resolved.origin !== window.location.origin) return null;
+  return resolved.pathname + resolved.search + resolved.hash;
+}
+
+/**
+ * If a valid same-origin `return_to` is present, navigate there and
+ * return true (caller should stop). Otherwise return false so the normal
+ * admin shell renders.
+ */
+function honorReturnTo(): boolean {
+  const target = safeReturnTo();
+  if (!target) return false;
+  window.location.assign(target);
+  return true;
+}
+
 // ── boot ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -104,6 +139,11 @@ async function main(): Promise<void> {
     );
     return;
   }
+
+  // Already authenticated (incl. landing back from an OAuth callback):
+  // if a same-origin `return_to` is present (e.g. the OAuth consent
+  // page), bounce there instead of rendering the admin shell.
+  if (honorReturnTo()) return;
 
   void runAdmin(mount, me);
 }
@@ -170,6 +210,9 @@ function renderLogin(mount: HTMLElement, errorMsg?: string): void {
         );
         return;
       }
+      // Honor a same-origin `return_to` (the OAuth consent page) over the
+      // normal admin landing.
+      if (honorReturnTo()) return;
       void runAdmin(mount, user);
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : "Sign-in failed";
