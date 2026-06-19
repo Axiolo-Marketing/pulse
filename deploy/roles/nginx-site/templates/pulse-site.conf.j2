@@ -23,6 +23,39 @@ proxy_request_buffering off;
 proxy_read_timeout 120s;
 {% endmacro %}
 
+{% macro oauth_root_locations() %}
+# ── OAuth 2.1 endpoints for the MCP connector (Claude Desktop) ──────────────
+# The MCP server (/api/mcp/) doubles as an OAuth resource + authorization
+# server. Its discovery docs and authorize/token/register/revoke endpoints
+# live at the domain ROOT (issuer = https://{{ pulse_domain }}), so unlike
+# everything else they sit OUTSIDE /api/ and must be proxied to the backend
+# rather than served by the Astro site. `^~`/`=` outrank the `~ /\.`
+# dotfile-deny regex below, so the .well-known docs are served, not blocked.
+location ^~ /.well-known/oauth-authorization-server {
+{{ pulse_api_proxy() | trim | indent(4, true) }}
+}
+
+location ^~ /.well-known/oauth-protected-resource {
+{{ pulse_api_proxy() | trim | indent(4, true) }}
+}
+
+location ^~ /authorize {
+{{ pulse_api_proxy() | trim | indent(4, true) }}
+}
+
+location = /token {
+{{ pulse_api_proxy() | trim | indent(4, true) }}
+}
+
+location = /register {
+{{ pulse_api_proxy() | trim | indent(4, true) }}
+}
+
+location = /revoke {
+{{ pulse_api_proxy() | trim | indent(4, true) }}
+}
+{% endmacro %}
+
 server {
     listen 80;
     listen [::]:80;
@@ -48,6 +81,8 @@ server {
     location /api/ {
 {{ pulse_api_proxy() | trim | indent(8, true) }}
     }
+
+{{ oauth_root_locations() | trim | indent(4, true) }}
 
     location ~ /\. {
         deny all;
@@ -115,6 +150,8 @@ server {
     location /api/ {
 {{ pulse_api_proxy() | trim | indent(8, true) }}
     }
+
+{{ oauth_root_locations() | trim | indent(4, true) }}
 
     location ~ /\. {
         deny all;
