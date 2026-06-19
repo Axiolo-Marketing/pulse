@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # reset links that go into outbound emails.
     frontend_base_url: str = "http://localhost:14321"
 
+    # ── MCP OAuth 2.1 authorization server ───────────────────────────────
+    # Issuer base URL for the OAuth authorization server mounted at the
+    # domain root (discovery metadata, /authorize, /token, /register,
+    # /revoke). Empty → fall back to ``frontend_base_url``. In prod both
+    # resolve to ``https://pulse.axiolo.com``. The resource identifier
+    # (audience) of issued access tokens is the MCP endpoint URL derived
+    # from this via ``mcp_resource_url``.
+    mcp_issuer_url: str = ""
+
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = ""
@@ -90,6 +99,35 @@ class Settings(BaseSettings):
     rate_limit_default: str = "60/minute"
     rate_limit_token_validation: str = "10/minute"  # /api/me + /api/auth/login
     rate_limit_account_enumeration: str = "5/minute"  # signup + forgot-password
+
+    @property
+    def mcp_issuer_base(self) -> str:
+        """Resolved OAuth issuer base URL (no trailing slash).
+
+        Prefers ``mcp_issuer_url`` when set; otherwise falls back to
+        ``frontend_base_url``. The MCP authorization server lives at the
+        domain root, so this is the same origin Pulse already serves the
+        frontend from.
+
+        Returns:
+            The issuer base URL with any trailing slash removed.
+        """
+        base = self.mcp_issuer_url or self.frontend_base_url
+        return base.rstrip("/")
+
+    @property
+    def mcp_resource_url(self) -> str:
+        """RFC 8707 resource identifier (audience) for MCP access tokens.
+
+        The MCP endpoint is mounted at ``/api/mcp`` under the issuer
+        origin. Access tokens are bound to this exact string and a token
+        presented to a different resource is rejected by
+        ``PulseOAuthProvider.load_access_token``.
+
+        Returns:
+            ``<issuer base>/api/mcp``.
+        """
+        return f"{self.mcp_issuer_base}/api/mcp"
 
 
 settings = Settings()
