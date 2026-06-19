@@ -93,7 +93,7 @@ Same operator identity, different credential. API keys are per-`(user, org)` Bea
 - **Format**: `pulse_<32-hex>` (128 bits of entropy, `pulse_` prefix makes leaks greppable). On disk: SHA-256 of the raw key plus an indexed 8-char `prefix` column for cheap lookup. Constant-time hash compare. Argon2 is overkill — keys already have full entropy.
 - **Scope**: each key is bound to an org (`api_keys.org_id`, NOT NULL post-0005). Bearer auth flips the request into a `pulse_member` session against the key's org — never the operator's session active org. This is what lets a developer hold one shell session against org A while running a script for org B via a key minted there.
 - **Creation**: Settings page (`/admin/#settings`) → "API keys" section → Create. Defaults to the operator's active org; an `org_id` body field lets owners-of-multiple-orgs target a specific tenant (verified at create time). Raw key is shown **once** in the create modal; subsequent list views only show `pulse_<prefix>…`. Revoking sets `revoked_at` and stops the key immediately.
-- **MCP endpoint**: mounted at `/api/mcp/` (trailing slash matters — FastMCP's `streamable_http_path="/"` resolves the sub-app's single route at the mount point; `/api/mcp` without the slash 307-redirects). Streamable HTTP transport (POST returns JSON or SSE depending on the call). Same `Authorization: Bearer pulse_<key>` header. Per-tool auth via `authenticate_request(ctx)` which returns `(user, api_key)` so each tool can open a member-scoped session against `api_key.org_id`; `tools/list` is intentionally unauthenticated because tool names + descriptions are documentation, not secrets, and gating discovery breaks every standard MCP client.
+- **MCP endpoint**: mounted at `/api/mcp/` (trailing slash matters — FastMCP's `streamable_http_path="/"` resolves the sub-app's single route at the mount point; `/api/mcp` without the slash 307-redirects). Streamable HTTP transport (POST returns JSON or SSE depending on the call). Accepts **either** an `Authorization: Bearer pulse_<key>` API key **or** an OAuth access token (see "OAuth 2.1" below). Auth is enforced at the HTTP layer by the SDK's `RequireAuthMiddleware` — the **whole endpoint, including `tools/list`, requires a valid token** (an unauthenticated request 401s with the OAuth discovery challenge; that's correct for the connector flow, and legacy key callers always send their credential). `authenticate_request(ctx)` reads the already-validated `AccessToken` from context (`get_access_token()`) and returns `(user, org_id)` from its claims, so each tool opens a member-scoped session against that org.
 
 Client config (Claude Code / claude.ai), production:
 
@@ -111,6 +111,17 @@ Client config (Claude Code / claude.ai), production:
 Local dev swaps the URL to `http://localhost:58000/api/mcp/`.
 
 Design notes for the whole API-keys + MCP feature live at `~/.claude/plans/piped-noodling-cook.md` — read it before reopening anything load-bearing here.
+
+#### OAuth 2.1 (Claude Desktop "custom connector")
+
+Claude Desktop's connector flow speaks OAuth 2.1, not a static bearer key, so the MCP endpoint is **also** a first-party OAuth **authorization + resource server** (Anthropic `mcp` SDK's `OAuthAuthorizationServerProvider`). The two credential shapes — `pulse_<key>` and an OAuth access token — converge in one `PulseTokenVerifier` and both yield an `AccessToken` carrying `claims["org_id"]`, so the tool layer is unchanged.
+
+- **Connect**: Claude Desktop → Settings → Connectors → Add custom connector → URL `https://pulse.axiolo.com/api/mcp`. Leave OAuth Client ID/Secret blank — Claude self-registers via Dynamic Client Registration (RFC 7591).
+- **Flow**: unauthenticated `/api/mcp/` → `401` + `WWW-Authenticate: … resource_metadata=…` → Claude fetches the PRM + AS metadata, registers (DCR), opens `/authorize` in the browser → Pulse **consent page** (reuses the `/admin` session — sign in if needed; multi-org operators pick the org) → Approve → auth code → `/token` (PKCE S256) → audience-bound access + refresh tokens → connected.
+- **Endpoints live at the domain ROOT** (issuer = `frontend_base_url`, i.e. `https://pulse.axiolo.com`), NOT under `/api/`: `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource/api/mcp`, `/authorize`, `/authorize/consent`, `/token`, `/register`, `/revoke`. nginx proxies these to the backend via `^~`/`=` `location` blocks in Pulse's own site file (they outrank the `~ /\.` dotfile-deny so `.well-known` isn't blocked).
+- **Token model**: opaque, SHA-256-hashed + 8-char prefix like API keys (instant revocation via `revoked_at`), bound to `(user, org, client)` and audience-bound to `mcp_resource_url`. Access 1h, refresh 30d (both rotated on refresh). Org membership is re-checked on every call — a removed member loses access immediately, not at token expiry.
+- **Scope**: a single `mcp` scope grants the same admin tool surface an API key does, scoped to the chosen org. Tables `oauth_clients` / `oauth_authorization_codes` / `oauth_grants` (migration 0008, app-layer gated like `api_keys`, no RLS).
+- Code: `api/pulse_api/mcp/oauth/` (`provider.py`, `verifier.py`, `tokens.py`, `routes.py`) + the RS wiring in `mcp/server.py`. Source-of-truth plan: `~/.claude/plans/bright-purring-nygaard.md`.
 
 ## Database
 
