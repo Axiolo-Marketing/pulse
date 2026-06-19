@@ -42,12 +42,14 @@ build:
 	docker compose exec frontend npm run build
 
 # ── Production deploy via Ansible ─────────────────────────────────────────
-# Both targets prompt for the ansible-vault password. `deploy-check` is the
-# safety net — always read every diff before running `deploy-apply` against
-# the shared VPS. See deploy/README.md for the full runbook.
+# The Astro + Python build runs on the VPS (git pull → uv sync → npm build),
+# so there is no local build step here. The vault password is read from
+# deploy/vault_secret (gitignored); `--ask-become-pass` prompts once for the
+# VPS sudo password. `deploy-check` is the safety net — always read every diff
+# before running `deploy-apply` against the shared VPS. See deploy/README.md.
 
-deploy-check: build
-	cd deploy && ansible-playbook deploy.yml --ask-vault-pass --check --diff
+deploy-check:
+	cd deploy && ansible-playbook deploy.yml --vault-password-file vault_secret --ask-become-pass --check --diff
 
-deploy-apply: build
-	cd deploy && ansible-playbook deploy.yml --ask-vault-pass
+deploy-apply:
+	cd deploy && ansible-playbook deploy.yml --vault-password-file vault_secret --ask-become-pass
