@@ -68,11 +68,14 @@ class Settings(BaseSettings):
     microsoft_tenant_id: str = "common"
     microsoft_redirect_uri: str = ""
 
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
-    smtp_from_email: str = ""
+    # ── Outbound email (Resend) ──────────────────────────────────────────
+    # Transactional mail (org invites, email verification, password reset)
+    # is sent via Resend's HTTPS API. Empty `resend_api_key` keeps
+    # `send_email` in log-only mode — the default for dev + tests, where no
+    # real mail should leave the box. `email_from` must be an address on a
+    # Resend-verified domain, e.g. `Pulse <noreply@pulse.axiolo.com>`.
+    resend_api_key: str = ""
+    email_from: str = ""
 
     cors_allowed_origin: str = "http://localhost:4321"
     upload_dir: Path = Path("/var/lib/pulse/uploads")

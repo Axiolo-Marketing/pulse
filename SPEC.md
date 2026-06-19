@@ -574,8 +574,9 @@ OAuth:
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID`, `MICROSOFT_REDIRECT_URI`
 
-SMTP:
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`
+Email (Resend):
+- `RESEND_API_KEY` — Resend API key; empty keeps `send_email` in log-only mode (no mail sent)
+- `EMAIL_FROM` — from-address on a Resend-verified domain, e.g. `Pulse <pulse@notifications.axiolo.com>`
 
 Misc:
 - `UPLOAD_DIR` (`/var/lib/pulse/uploads/` in prod)

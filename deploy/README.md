@@ -70,7 +70,7 @@ $EDITOR group_vars/all.yml           # domain, paths, port, etc.
 
 # Secrets live as inline ansible-vault strings at the bottom of
 # group_vars/all.yml. To set or rotate one:
-ansible-vault encrypt_string --vault-password-file vault_secret 'VALUE' --name vault_pulse_smtp_password
+ansible-vault encrypt_string --vault-password-file vault_secret 'VALUE' --name vault_pulse_resend_api_key
 # ...then paste the !vault block over the existing one in group_vars/all.yml.
 
 # Set your host:
@@ -86,6 +86,35 @@ OAuth client setup (one-time, in the provider consoles):
 
 Encrypt the resulting client ids + secrets with `ansible-vault encrypt_string`
 (as above) and paste each `!vault` block into `group_vars/all.yml`.
+
+### Outbound email (Resend)
+
+Transactional mail (org invites, email verification, password reset) is sent
+via [Resend](https://resend.com)'s HTTPS API. Setup:
+
+1. **Sending domain.** `pulse_email_from` defaults to
+   `Pulse <pulse@notifications.axiolo.com>`, reusing the already-verified
+   `notifications.axiolo.com` domain — Resend authorizes any mailbox on a
+   verified domain, so no new DNS is needed. To send from a `pulse.axiolo.com`
+   address instead, first add `pulse.axiolo.com` as a **separate** Resend domain
+   and publish the SPF/DKIM records it shows you (subject to your plan's domain
+   limit). For a quick local test before any domain is verified, send from
+   Resend's sandbox sender `onboarding@resend.dev` to your own Resend-account
+   email.
+2. **Vault the API key.** Create an API key in Resend, then:
+
+   ```bash
+   ansible-vault encrypt_string --vault-password-file vault_secret 're_...' --name vault_pulse_resend_api_key
+   ```
+
+   Paste the `!vault` block over `vault_pulse_resend_api_key: ""` in
+   `group_vars/all.yml`, and set `pulse_email_from` to an address on the
+   verified domain.
+
+Until the key is set, the app stays in **log-only** mode — `send_email` logs
+the message (recipient, subject, link) and sends nothing. Failures never raise:
+the link is always recoverable from `journalctl -u pulse-api`, so a Resend
+outage can't roll back org/invite creation.
 
 ### Multi-tenant config (v3.0)
 
@@ -246,7 +275,7 @@ None block deploys; all should land in a focused PR.
   row joining the user to the Axiolo org as `owner`. The migration's data
   migration already does this once, but the Ansible-driven re-seed on
   every deploy needs to match the new model.
-- **Per-tenant SMTP** is not in scope yet — all org invite emails go out
-  from `pulse_smtp_from` (the platform's `noreply@<pulse_domain>`). The
-  recipient sees the platform brand, not the inviting org's brand. Acceptable
-  for v3; revisit if customers ask.
+- **Per-tenant from-address** is not in scope yet — all org invite emails go
+  out from `pulse_email_from` (the platform's `pulse@notifications.axiolo.com`,
+  sent via Resend). The recipient sees the platform brand, not the inviting
+  org's brand. Acceptable for v3; revisit if customers ask.
