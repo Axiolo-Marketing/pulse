@@ -823,12 +823,10 @@ function firstUnansweredIndex(
   return cards.length;
 }
 
-if (import.meta.hot) {
-  // Refuse hot-replacement for this module entirely. Any change to app.ts
-  // or its imports forces Vite to do a full page reload, which discards
-  // every render's button listeners along with the old DOM.
-  import.meta.hot.decline();
-}
+// No HMR accept handler on purpose: any change to app.ts or its imports
+// triggers Vite's default full page reload, which is what we want — a partial
+// hot-swap would orphan the current render's button listeners. (The old
+// `import.meta.hot.decline()` that forced this was removed from Vite.)
 
 main().catch((err) => {
   console.error("Pulse boot failed:", err);

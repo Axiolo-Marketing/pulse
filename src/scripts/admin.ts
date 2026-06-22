@@ -2608,8 +2608,8 @@ function flashCopied(btn: HTMLButtonElement, label: string): void {
   }, 1200);
 }
 
-if (import.meta.hot) import.meta.hot.decline();
-
+// No HMR accept handler on purpose — changes trigger Vite's default full
+// page reload (the removed `import.meta.hot.decline()` used to force this).
 main().catch((err) => {
   console.error("Pulse admin failed:", err);
 });
