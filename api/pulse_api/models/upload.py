@@ -22,6 +22,10 @@ class Upload(SQLModel, table=True):
         file_size_bytes: Byte size as stored.
         storage_path: Relative path under `settings.upload_dir`.
         mime_type: Best-effort content type; nullable.
+        kind: Upload discriminator — ``'file'`` for answer-attachment files
+            (the default, and what the `file-upload` card type uses) or
+            ``'voice'`` for a recorded voice answer. Voice notes supplement
+            the typed answer; they never change `response_value` shapes.
         uploaded_at: Insert timestamp (naive UTC).
     """
 
@@ -37,4 +41,5 @@ class Upload(SQLModel, table=True):
     file_size_bytes: int
     storage_path: str
     mime_type: str | None = None
+    kind: str = "file"
     uploaded_at: datetime = Field(default_factory=utcnow_naive)

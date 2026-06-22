@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 UPLOAD_COLS = (
     "id::text, card_id::text, client_id::text, file_name, "
-    "file_size_bytes, storage_path, mime_type, uploaded_at"
+    "file_size_bytes, storage_path, mime_type, kind, uploaded_at"
 )
 
 
@@ -55,20 +55,24 @@ async def create_upload(
     file_size_bytes: int,
     storage_path: str,
     mime_type: str | None,
+    kind: str = "file",
 ) -> dict | None:
     """Insert an uploads row. client_id is derived server-side from
     `pulse_request_client_id()` so the wire body can't address another
-    client's uploads. Returns None if card_id is invalid (cast fails) or
-    RLS rejects the insert because the card doesn't belong to caller."""
+    client's uploads. ``kind`` discriminates answer files (``'file'``)
+    from recorded voice answers (``'voice'``). Returns None if card_id is
+    invalid (cast fails) or RLS rejects the insert because the card
+    doesn't belong to caller."""
     try:
         result = await session.execute(
             text(
                 f"""
                 insert into public.uploads
-                  (card_id, client_id, file_name, file_size_bytes, storage_path, mime_type)
+                  (card_id, client_id, file_name, file_size_bytes, storage_path,
+                   mime_type, kind)
                 values
                   (cast(:cid as uuid), public.pulse_request_client_id(),
-                   :fn, :sz, :sp, :mt)
+                   :fn, :sz, :sp, :mt, :kind)
                 returning {UPLOAD_COLS}
                 """
             ),
@@ -78,6 +82,7 @@ async def create_upload(
                 "sz": file_size_bytes,
                 "sp": storage_path,
                 "mt": mime_type,
+                "kind": kind,
             },
         )
     except Exception:

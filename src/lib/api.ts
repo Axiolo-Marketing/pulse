@@ -164,6 +164,10 @@ export interface UploadRow {
   file_size_bytes: number;
   storage_path: string;
   mime_type: string | null;
+  /** Upload discriminator: `"file"` for answer attachments (the
+   * `file-upload` card type), `"voice"` for a recorded voice answer. The
+   * operator viewer renders voice uploads as an inline `<audio>` player. */
+  kind: "file" | "voice";
   uploaded_at: string;
 }
 
@@ -200,15 +204,45 @@ export const clientApi = {
   heartbeat: (token: string): Promise<{ status: string }> =>
     request("/api/me/heartbeat", { method: "PATCH", token }),
 
-  upload: (token: string, cardId: string, file: File): Promise<UploadRow> => {
+  /** Upload a file (or recorded blob) against a card. `kind` defaults to
+   * `"file"`; voice answers pass `{ kind: "voice", filename: "voice.webm" }`.
+   * A blob has no `.name`, so the optional `filename` names the part. */
+  upload: (
+    token: string,
+    cardId: string,
+    file: Blob,
+    opts: { kind?: "file" | "voice"; filename?: string } = {},
+  ): Promise<UploadRow> => {
     const fd = new FormData();
     fd.append("card_id", cardId);
-    fd.append("file", file, file.name);
+    const name =
+      opts.filename ?? (file instanceof File ? file.name : "file");
+    fd.append("file", file, name);
+    fd.append("kind", opts.kind ?? "file");
     return request("/api/uploads", { method: "POST", token, body: fd });
   },
 
   deleteUpload: (token: string, uploadId: string): Promise<void> =>
     request(`/api/uploads/${uploadId}`, { method: "DELETE", token }),
+
+  /** Fetch an upload's bytes (token in the `X-Pulse-Token` header, never
+   * the URL) and return an object URL for inline playback/preview — used
+   * for voice answers, whose `<audio src>` can't carry the auth header.
+   * Returns `null` on any failure so the caller can fall back gracefully.
+   * The caller owns the returned object URL and must revoke it. */
+  fileObjectUrl: async (token: string, uploadId: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/files/${uploadId}`, {
+        headers: { "X-Pulse-Token": token },
+        credentials: "include",
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  },
 
   /** Fetch the operator org's logo as a Blob and return an object URL the
    * client deck can use as an `<img src>`. The token rides in the

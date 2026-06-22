@@ -28,13 +28,20 @@ from pulse_api.repos import uploads as uploads_repo
 
 router = APIRouter(prefix="/api", tags=["client"])
 
+# Upload discriminators the API accepts. `file` is an answer attachment
+# (the `file-upload` card type); `voice` is a recorded voice answer.
+ALLOWED_UPLOAD_KINDS = frozenset({"file", "voice"})
+
 
 @router.post("/uploads", status_code=201)
 async def upload_file(
     card_id: str = Form(...),
     file: UploadFile = File(...),
+    kind: str = Form("file"),
     session: AsyncSession = Depends(get_anon_session),
 ) -> dict:
+    if kind not in ALLOWED_UPLOAD_KINDS:
+        raise HTTPException(status_code=400, detail="invalid kind")
     if not await uploads_repo.card_belongs_to_caller(session, card_id):
         raise HTTPException(status_code=404, detail="card not found")
 
@@ -67,6 +74,7 @@ async def upload_file(
         file_size_bytes=len(content),
         storage_path=relative_path,
         mime_type=file.content_type,
+        kind=kind,
     )
     if row is None:
         # Belt-and-suspenders: card_belongs_to_caller already validated

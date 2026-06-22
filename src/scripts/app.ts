@@ -5,8 +5,10 @@ import {
   type Client,
   type ClientResponse,
   type ResponseState,
+  type UploadRow,
 } from "../lib/api";
 import { applyBranding } from "../lib/branding";
+import { Recorder, RecorderError, extForMime } from "../lib/recorder";
 import {
   renderCard,
   renderComplete,
@@ -16,6 +18,7 @@ import {
   type CardMode,
   type CompletedUpload,
   type PendingUpload,
+  type VoiceState,
 } from "../lib/render";
 
 interface BootData {
@@ -23,6 +26,7 @@ interface BootData {
   cards: Card[];
   responses: Map<string, ClientResponse>;
   uploads: Map<string, CompletedUpload[]>; // keyed by card_id
+  voiceUploads: Map<string, UploadRow>; // keyed by card_id (one voice note per card)
 }
 
 const BASE_URL = (import.meta.env.BASE_URL ?? "/") as string;
@@ -91,7 +95,13 @@ async function loadBootData(token: string): Promise<BootData | null> {
   );
 
   const uploads = new Map<string, CompletedUpload[]>();
+  const voiceUploads = new Map<string, UploadRow>();
   for (const row of uploadsList) {
+    if (row.kind === "voice") {
+      // One voice note per card — last one wins if somehow duplicated.
+      voiceUploads.set(row.card_id, row);
+      continue;
+    }
     const list = uploads.get(row.card_id) ?? [];
     list.push({
       id: row.id,
@@ -101,7 +111,7 @@ async function loadBootData(token: string): Promise<BootData | null> {
     uploads.set(row.card_id, list);
   }
 
-  return { client, cards, responses, uploads };
+  return { client, cards, responses, uploads, voiceUploads };
 }
 
 interface RunCtx extends BootData {
@@ -114,7 +124,8 @@ interface RunCtx extends BootData {
 }
 
 function runApp(ctx: RunCtx): void {
-  const { mount, token, client, cards, responses, uploads, orgLogoSrc } = ctx;
+  const { mount, token, client, cards, responses, uploads, voiceUploads, orgLogoSrc } =
+    ctx;
 
   const bootIndex = firstUnansweredIndex(cards, responses);
   let index = bootIndex;
@@ -127,6 +138,80 @@ function runApp(ctx: RunCtx): void {
   // Per-card UI scratch state. Reset whenever the card changes.
   let draftSelections: Set<string> = new Set();
   let pendingUploads: PendingUpload[] = [];
+
+  // ── Voice recorder state ────────────────────────────────────────────────
+  // One active recorder at a time. The recorder, its tick timer, and the
+  // in-progress object URL are scratch for the current card only; navigating
+  // away discards any in-progress take (see navigateTo/advance).
+  const recorder = new Recorder();
+  // Object URLs we create for inline playback. Tracked so we can revoke
+  // them when a card's recording is replaced or deleted.
+  const voiceAudioUrls = new Map<string, string>(); // card_id → object URL
+  let voiceError: string | undefined;
+  let voiceTimer: ReturnType<typeof setInterval> | undefined;
+  let voiceStartedAt = 0; // epoch ms when the current recording (re)started
+  let voiceAccumulatedMs = 0; // elapsed before the latest pause
+  let voiceUploading = false;
+  // Serializes the async delete-then-(re)record / delete paths so a
+  // double-tap can't fire two DELETEs for the same upload (the second
+  // would 404 and surface a spurious error over a successful first).
+  let voiceMutating = false;
+
+  // Revoke any cached voice playback object URLs when the deck tears down,
+  // so a long session with many recordings/re-records doesn't leak blobs.
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", () => {
+      for (const url of voiceAudioUrls.values()) URL.revokeObjectURL(url);
+      voiceAudioUrls.clear();
+    });
+  }
+
+  const clearVoiceTimer = (): void => {
+    if (voiceTimer) {
+      clearInterval(voiceTimer);
+      voiceTimer = undefined;
+    }
+  };
+
+  const voiceElapsedSeconds = (): number => {
+    const live =
+      recorder.state === "recording" ? Date.now() - voiceStartedAt : 0;
+    return Math.floor((voiceAccumulatedMs + live) / 1000);
+  };
+
+  // Build the VoiceState the renderer consumes for the current card.
+  const voiceStateFor = (cardId: string): VoiceState => {
+    if (recorder.state === "recording") {
+      return { phase: "recording", elapsedSeconds: voiceElapsedSeconds(), error: voiceError };
+    }
+    if (recorder.state === "paused") {
+      return { phase: "paused", elapsedSeconds: voiceElapsedSeconds(), error: voiceError };
+    }
+    if (voiceUploading) {
+      return { phase: "uploading", elapsedSeconds: 0, error: voiceError };
+    }
+    const existing = voiceUploads.get(cardId);
+    if (existing) {
+      return {
+        phase: "done",
+        elapsedSeconds: 0,
+        audioUrl: voiceAudioUrls.get(cardId),
+        error: voiceError,
+      };
+    }
+    return { phase: "idle", elapsedSeconds: 0, error: voiceError };
+  };
+
+  // Reset every per-card voice scratch when the card changes. Discards an
+  // in-progress take (only one recorder at a time, per the deck contract).
+  const resetVoiceForCardChange = (): void => {
+    if (recorder.state !== "idle") recorder.cancel();
+    clearVoiceTimer();
+    voiceError = undefined;
+    voiceStartedAt = 0;
+    voiceAccumulatedMs = 0;
+    voiceUploading = false;
+  };
 
   // When navigating back to a card the user already answered, prime the
   // selection state so multi-select chips and single-select highlights show
@@ -199,6 +284,19 @@ function runApp(ctx: RunCtx): void {
     }
     const card = cards[index];
     if (mode === "view") markViewed(card.id);
+    // A previously saved voice note (boot or back-nav) needs its playback
+    // bytes fetched once. Resolve lazily, then re-draw so the <audio> gets
+    // its src. No-ops once cached or when there's nothing to play.
+    if (
+      recorder.state === "idle" &&
+      !voiceUploading &&
+      voiceUploads.has(card.id) &&
+      !voiceAudioUrls.has(card.id)
+    ) {
+      void ensureVoicePlaybackUrl(card.id).then((url) => {
+        if (url && index < cards.length && cards[index].id === card.id) draw();
+      });
+    }
     renderCard(mount, {
       card,
       position: index + 1,
@@ -208,6 +306,7 @@ function runApp(ctx: RunCtx): void {
       baseUrl: BASE_URL,
       uploads: uploads.get(card.id) ?? [],
       pending: pendingUploads,
+      voice: voiceStateFor(card.id),
       modalOpen,
       pickerOpen,
       draftSelections,
@@ -230,6 +329,7 @@ function runApp(ctx: RunCtx): void {
     if (newIndex < 0 || newIndex > cards.length) return;
     if (newIndex === index && !pickerOpen) return;
     clearRetryTimer();
+    resetVoiceForCardChange();
     index = newIndex;
     mode = "view";
     saveError = undefined;
@@ -244,6 +344,7 @@ function runApp(ctx: RunCtx): void {
 
   const advance = (): void => {
     clearRetryTimer();
+    resetVoiceForCardChange();
     index += 1;
     mode = "view";
     saveError = undefined;
@@ -325,6 +426,13 @@ function runApp(ctx: RunCtx): void {
         value = withNote(base, action.note);
         break;
       }
+    }
+
+    // A voice recording supplements the normal answer: a voice-only answer
+    // (no typed value / no selection) still counts as answered. We never
+    // touch `response_value` — the voice note lives as a separate upload.
+    if (voiceUploads.has(card.id) && state !== "answered") {
+      state = "answered";
     }
 
     let saved: ClientResponse;
@@ -437,6 +545,179 @@ function runApp(ctx: RunCtx): void {
     draw();
   };
 
+  // ── Voice recorder handlers ─────────────────────────────────────────────
+
+  // Revoke and forget a card's cached playback object URL.
+  const revokeVoiceUrl = (cardId: string): void => {
+    const url = voiceAudioUrls.get(cardId);
+    if (url) {
+      URL.revokeObjectURL(url);
+      voiceAudioUrls.delete(cardId);
+    }
+  };
+
+  // Fetch an existing voice upload's bytes (token rides in a header, so we
+  // can't use a plain <audio src>) and cache an object URL for inline
+  // playback. Returns the URL, or null on failure. No-ops if already cached.
+  const ensureVoicePlaybackUrl = async (cardId: string): Promise<string | null> => {
+    const cached = voiceAudioUrls.get(cardId);
+    if (cached) return cached;
+    const row = voiceUploads.get(cardId);
+    if (!row) return null;
+    const url = await clientApi.fileObjectUrl(token, row.id);
+    if (url) voiceAudioUrls.set(cardId, url);
+    return url;
+  };
+
+  // Start (or restart, for "Re-record") a recording on the current card.
+  const startVoiceRecording = async (): Promise<void> => {
+    if (voiceMutating || recorder.state !== "idle") return;
+    voiceMutating = true;
+    const card = cards[index];
+    voiceError = undefined;
+
+    // Re-record: drop the previously saved take first so the card returns
+    // to a clean recording state. Delete server-side, then clear local.
+    const existing = voiceUploads.get(card.id);
+    if (existing) {
+      try {
+        await clientApi.deleteUpload(token, existing.id);
+      } catch (err) {
+        console.error("Voice delete (re-record) failed:", err);
+        voiceError = "Could not replace the previous recording. Try again.";
+        voiceMutating = false;
+        draw();
+        return;
+      }
+      voiceUploads.delete(card.id);
+      revokeVoiceUrl(card.id);
+    }
+
+    try {
+      await recorder.start();
+    } catch (err) {
+      voiceError =
+        err instanceof RecorderError
+          ? err.message
+          : "Could not start recording.";
+      voiceMutating = false;
+      draw();
+      return;
+    }
+    // Recording is live — the mutation window (delete + start) is closed.
+    voiceMutating = false;
+
+    voiceAccumulatedMs = 0;
+    voiceStartedAt = Date.now();
+    clearVoiceTimer();
+    // Tick the timer once a second so the mm:ss display advances.
+    voiceTimer = setInterval(() => {
+      if (recorder.state === "recording") draw();
+    }, 1000);
+    draw();
+  };
+
+  const pauseVoiceRecording = (): void => {
+    if (recorder.state !== "recording") return;
+    voiceAccumulatedMs += Date.now() - voiceStartedAt;
+    recorder.pause();
+    clearVoiceTimer();
+    draw();
+  };
+
+  const resumeVoiceRecording = (): void => {
+    if (recorder.state !== "paused") return;
+    recorder.resume();
+    voiceStartedAt = Date.now();
+    clearVoiceTimer();
+    voiceTimer = setInterval(() => {
+      if (recorder.state === "recording") draw();
+    }, 1000);
+    draw();
+  };
+
+  // Stop, upload the single continuous blob as a voice upload, and cache a
+  // playback URL. The card now shows the inline player.
+  const stopVoiceRecording = async (): Promise<void> => {
+    if (recorder.state === "idle") return;
+    // Capture the card now: stop() + upload() are async, and the user may
+    // navigate before they resolve. The note still belongs to THIS card.
+    const capturedIndex = index;
+    const card = cards[capturedIndex];
+    clearVoiceTimer();
+
+    let result;
+    try {
+      result = await recorder.stop();
+    } catch (err) {
+      console.error("Voice stop failed:", err);
+      voiceError = "Could not finish the recording. Please try again.";
+      voiceUploading = false;
+      draw();
+      return;
+    }
+
+    if (result.blob.size === 0) {
+      voiceError = "Nothing was recorded. Please try again.";
+      draw();
+      return;
+    }
+
+    voiceUploading = true;
+    voiceError = undefined;
+    draw();
+
+    let row: UploadRow;
+    try {
+      row = await clientApi.upload(token, card.id, result.blob, {
+        kind: "voice",
+        filename: `voice.${extForMime(result.mime)}`,
+      });
+    } catch (err) {
+      console.error("Voice upload failed:", err);
+      // Only surface the error if the user is still on this card.
+      if (index === capturedIndex) {
+        voiceError =
+          err instanceof ApiError ? err.detail : "Could not save the recording.";
+        voiceUploading = false;
+        draw();
+      }
+      return;
+    }
+
+    // The note belongs to the captured card no matter where the user is now.
+    voiceUploads.set(card.id, row);
+    if (index === capturedIndex) {
+      voiceUploading = false;
+      // Local playback from the just-recorded blob — no re-download needed.
+      revokeVoiceUrl(card.id);
+      voiceAudioUrls.set(card.id, URL.createObjectURL(result.blob));
+      draw();
+    }
+  };
+
+  const deleteVoiceRecording = async (): Promise<void> => {
+    if (voiceMutating) return;
+    const card = cards[index];
+    const existing = voiceUploads.get(card.id);
+    if (!existing) return;
+    voiceMutating = true;
+    try {
+      await clientApi.deleteUpload(token, existing.id);
+    } catch (err) {
+      console.error("Voice delete failed:", err);
+      voiceError = "Could not delete the recording. Please try again.";
+      voiceMutating = false;
+      draw();
+      return;
+    }
+    voiceUploads.delete(card.id);
+    revokeVoiceUrl(card.id);
+    voiceError = undefined;
+    voiceMutating = false;
+    draw();
+  };
+
   const handlers: CardHandlers = {
     onConfirm: () => {
       void performSave({ kind: "confirm" });
@@ -477,6 +758,21 @@ function runApp(ctx: RunCtx): void {
     },
     onFilesContinue: (note) => {
       void performSave({ kind: "files-continue", note });
+    },
+    onVoiceRecord: () => {
+      void startVoiceRecording();
+    },
+    onVoicePause: () => {
+      pauseVoiceRecording();
+    },
+    onVoiceResume: () => {
+      resumeVoiceRecording();
+    },
+    onVoiceStop: () => {
+      void stopVoiceRecording();
+    },
+    onVoiceDelete: () => {
+      void deleteVoiceRecording();
     },
     onSkip: (note) => {
       void performSave({ kind: "skip", note });

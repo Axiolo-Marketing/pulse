@@ -46,6 +46,118 @@ async def test_upload_writes_file_and_inserts_row(
     assert body["storage_path"].split("/")[1] == card_id
 
 
+async def test_upload_defaults_kind_to_file(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+) -> None:
+    """Omitting the `kind` form field stores `'file'` — the existing
+    file-upload path is unchanged."""
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"]},
+        files={"file": ("report.pdf", b"bytes", "application/pdf")},
+    )
+    assert r.status_code == 201
+    assert r.json()["kind"] == "file"
+
+
+async def test_upload_stores_and_returns_voice_kind(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+) -> None:
+    """A voice answer rides the same pipeline with `kind='voice'`. The
+    stored row carries the discriminator so the viewer renders a player."""
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"audio bytes", "audio/webm")},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["kind"] == "voice"
+    assert body["mime_type"] == "audio/webm"
+    on_disk = storage.resolve_within_upload_dir(body["storage_path"])
+    assert on_disk.exists()
+
+
+async def test_upload_rejects_invalid_kind(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+) -> None:
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "bogus"},
+        files={"file": ("x.bin", b"x", "application/octet-stream")},
+    )
+    assert r.status_code == 400
+
+
+async def test_voice_upload_listed_with_kind(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+) -> None:
+    """`list_for_client` (admin viewer + MCP) projects `kind`, so a voice
+    note shows up distinctly in the engagement listing."""
+    await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"audio bytes", "audio/webm")},
+    )
+    r = await client_authed.get("/api/uploads")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "voice"
+
+
+async def test_voice_upload_still_size_capped(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The size cap applies regardless of kind."""
+    from pulse_api.config import settings
+    monkeypatch.setattr(settings, "max_upload_bytes", 10)
+
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"x" * 1024, "audio/webm")},
+    )
+    assert r.status_code == 413
+
+
+async def test_voice_upload_other_clients_card_returns_404(
+    client_authed: AsyncClient,
+    other_seeded_client: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """RLS scoping is unchanged for voice uploads — a card belonging to
+    another client still 404s."""
+    row = (
+        await db.execute(
+            text(
+                "insert into public.cards "
+                "(client_id, order_index, category, title, context, question, "
+                " response_type, org_id) "
+                "values (cast(:c as uuid), 1, 'C', 'their card', 'X', 'Q', "
+                "        'short-text', cast(:o as uuid)) "
+                "returning id::text"
+            ),
+            {"c": other_seeded_client["id"], "o": other_seeded_client["org_id"]},
+        )
+    ).mappings().one()
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": row["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"audio", "audio/webm")},
+    )
+    assert r.status_code == 404
+
+
 async def test_upload_rejects_oversize(
     client_authed: AsyncClient,
     seed_cards: list[dict[str, str]],

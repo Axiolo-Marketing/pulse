@@ -85,6 +85,23 @@ export interface CompletedUpload {
   sizeBytes: number;
 }
 
+/** UI state for the per-card voice recorder, driven by `app.ts`. The deck
+ * shows one of four visual states off `phase`:
+ *   - `idle`      → a "Record" button (no recording yet).
+ *   - `recording` → a running mm:ss timer + Pause + Stop.
+ *   - `paused`    → a frozen timer + Resume + Stop.
+ *   - `done`      → an inline `<audio>` of the saved take + Re-record/Delete.
+ * `uploading` flips while the stopped blob is in flight. `error` surfaces
+ * mic-permission and upload failures inline near the button. */
+export interface VoiceState {
+  phase: "idle" | "recording" | "paused" | "uploading" | "done";
+  /** Elapsed seconds shown in the timer (recording/paused). */
+  elapsedSeconds: number;
+  /** Object URL for inline playback once a take is saved. */
+  audioUrl?: string;
+  error?: string;
+}
+
 export interface CardHandlers {
   // confirm-edit (no note field — uses Needs edit textarea instead)
   onConfirm: () => void;
@@ -104,6 +121,12 @@ export interface CardHandlers {
   onFilesSelected: (files: FileList) => void;
   onUploadRemove: (uploadId: string) => void;
   onFilesContinue: (note?: string) => void;
+  // voice answer (record control, present on every card)
+  onVoiceRecord: () => void;
+  onVoicePause: () => void;
+  onVoiceResume: () => void;
+  onVoiceStop: () => void;
+  onVoiceDelete: () => void;
   // shared
   onSkip: (note?: string) => void;
   onRetry: () => void;
@@ -127,6 +150,9 @@ export interface RenderCardArgs {
   baseUrl: string;
   uploads: CompletedUpload[];
   pending: PendingUpload[];
+  /** Voice-recorder UI state for this card. Drives the record control
+   * rendered on every card below the primary input. */
+  voice: VoiceState;
   modalOpen: boolean;
   pickerOpen?: boolean;
   draftSelections?: Set<string>;
@@ -303,8 +329,86 @@ function renderViewBody(
     <p class="question">${escape(card.question)}</p>
     ${renderPriorHint(card, args.existingResponse)}
     ${renderInput(card, saving, args)}
+    ${renderVoiceControl(args.voice, saving)}
     ${renderNoteField(card, saving, args.existingResponse)}
     <div class="actions">${renderActions(card, saving, args)}</div>
+  `;
+}
+
+function formatTimer(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const mm = String(Math.floor(s / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+// Per-card voice recorder. Rendered on EVERY card, below the primary input.
+// A voice note supplements the typed answer; a voice-only answer still
+// counts as answered (app.ts forces state='answered' when one is present).
+function renderVoiceControl(voice: VoiceState, saving: boolean): string {
+  const errorHtml = voice.error
+    ? `<p class="voice-error" role="alert">${escape(voice.error)}</p>`
+    : "";
+
+  if (voice.phase === "recording" || voice.phase === "paused") {
+    const paused = voice.phase === "paused";
+    const toggle = paused
+      ? `<button class="voice-btn voice-resume" type="button" data-action="voice-resume">
+           <span class="voice-icon" aria-hidden="true">▶</span> Resume
+         </button>`
+      : `<button class="voice-btn voice-pause" type="button" data-action="voice-pause">
+           <span class="voice-icon" aria-hidden="true">❚❚</span> Pause
+         </button>`;
+    return `
+      <div class="voice-control is-active ${paused ? "is-paused" : "is-recording"}">
+        <div class="voice-status" role="status">
+          <span class="voice-dot" aria-hidden="true"></span>
+          <span class="voice-state-label">${paused ? "Paused" : "Recording"}</span>
+          <span class="voice-timer">${formatTimer(voice.elapsedSeconds)}</span>
+        </div>
+        <div class="voice-actions">
+          ${toggle}
+          <button class="voice-btn voice-stop" type="button" data-action="voice-stop">
+            <span class="voice-icon" aria-hidden="true">■</span> Stop
+          </button>
+        </div>
+      </div>
+      ${errorHtml}
+    `;
+  }
+
+  if (voice.phase === "uploading") {
+    return `
+      <div class="voice-control is-uploading">
+        <span class="voice-uploading-label">Saving recording…</span>
+      </div>
+      ${errorHtml}
+    `;
+  }
+
+  if (voice.phase === "done" && voice.audioUrl) {
+    return `
+      <div class="voice-control is-done">
+        <audio class="voice-player" controls preload="metadata" src="${escapeAttr(voice.audioUrl)}"></audio>
+        <div class="voice-actions">
+          <button class="voice-btn voice-rerecord" type="button" data-action="voice-record" ${saving ? "disabled" : ""}>
+            <span class="voice-icon" aria-hidden="true">●</span> Re-record
+          </button>
+          <button class="voice-btn voice-delete" type="button" data-action="voice-delete" ${saving ? "disabled" : ""}>Delete</button>
+        </div>
+      </div>
+      ${errorHtml}
+    `;
+  }
+
+  // idle
+  return `
+    <div class="voice-control is-idle">
+      <button class="voice-btn voice-record" type="button" data-action="voice-record" ${saving ? "disabled" : ""} aria-label="Record a voice answer">
+        <span class="voice-icon" aria-hidden="true">●</span> Record answer
+      </button>
+    </div>
+    ${errorHtml}
   `;
 }
 
@@ -614,7 +718,11 @@ function renderActions(
     case "file-upload": {
       const hasFiles = args.uploads.length > 0;
       const hasPending = args.pending.some((p) => !p.error);
-      const continueDisabled = saving || hasPending || !hasFiles;
+      // A voice-only answer still counts — don't trap the user behind a
+      // disabled Continue when they recorded but uploaded no files.
+      const hasVoice = args.voice.phase === "done";
+      const continueDisabled =
+        saving || hasPending || (!hasFiles && !hasVoice);
       return `
         <button class="btn btn-primary" type="button" data-action="files-continue" ${
           continueDisabled ? "disabled" : ""
@@ -831,6 +939,21 @@ function dispatch(
     }
     case "files-continue":
       handlers.onFilesContinue(readNote(mount));
+      return;
+    case "voice-record":
+      handlers.onVoiceRecord();
+      return;
+    case "voice-pause":
+      handlers.onVoicePause();
+      return;
+    case "voice-resume":
+      handlers.onVoiceResume();
+      return;
+    case "voice-stop":
+      handlers.onVoiceStop();
+      return;
+    case "voice-delete":
+      handlers.onVoiceDelete();
       return;
     case "remove-upload": {
       const id = btn.dataset.uploadId;

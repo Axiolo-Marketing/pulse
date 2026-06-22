@@ -1230,15 +1230,20 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       const completed = [...responses.values()].filter(
         (r) => r.state === "answered" || r.state === "skipped",
       ).length;
-      const uploadCount = [...uploads.values()].reduce((n, list) => n + list.length, 0);
+      const allUploads = [...uploads.values()].flat();
+      const fileCount = allUploads.filter((u) => u.kind !== "voice").length;
+      const voiceCount = allUploads.filter((u) => u.kind === "voice").length;
       const lines = [`Delete ${label}?`];
       if (totalCards > 0) {
         const parts = [
           `${totalCards} card${totalCards === 1 ? "" : "s"}`,
           `${completed} response${completed === 1 ? "" : "s"}`,
         ];
-        if (uploadCount > 0) {
-          parts.push(`${uploadCount} uploaded file${uploadCount === 1 ? "" : "s"}`);
+        if (fileCount > 0) {
+          parts.push(`${fileCount} uploaded file${fileCount === 1 ? "" : "s"}`);
+        }
+        if (voiceCount > 0) {
+          parts.push(`${voiceCount} voice note${voiceCount === 1 ? "" : "s"}`);
         }
         lines.push(`This will permanently remove ${parts.join(", ")}.`);
       }
@@ -1261,11 +1266,14 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       const completed = [...responses.values()].filter(
         (r) => r.state === "answered" || r.state === "skipped",
       ).length;
-      const uploadCount = [...uploads.values()].reduce((n, list) => n + list.length, 0);
+      const allUploads = [...uploads.values()].flat();
+      const fileCount = allUploads.filter((u) => u.kind !== "voice").length;
+      const voiceCount = allUploads.filter((u) => u.kind === "voice").length;
       const lines = [`Reset all answers for ${label}?`];
       const parts: string[] = [];
       if (completed > 0) parts.push(`${completed} response${completed === 1 ? "" : "s"}`);
-      if (uploadCount > 0) parts.push(`${uploadCount} uploaded file${uploadCount === 1 ? "" : "s"}`);
+      if (fileCount > 0) parts.push(`${fileCount} uploaded file${fileCount === 1 ? "" : "s"}`);
+      if (voiceCount > 0) parts.push(`${voiceCount} voice note${voiceCount === 1 ? "" : "s"}`);
       if (parts.length > 0) {
         lines.push(`This clears ${parts.join(" and ")}, returning every card to unanswered.`);
       } else {
@@ -2097,14 +2105,31 @@ interface ResponseValueShape {
   note?: string;
 }
 
+// Inline audio players for any voice answers on a card. Rendered on EVERY
+// card (voice notes supplement the typed answer), separately from the
+// file-upload download links. The org-scoped admin download endpoint
+// serves the right mime, so the browser plays whatever the client recorded.
+function renderVoicePlayback(uploads: UploadRow[]): string {
+  const voice = uploads.filter((u) => u.kind === "voice");
+  if (voice.length === 0) return "";
+  const players = voice
+    .map((u) => {
+      const url = adminApi.uploadDownloadUrl(u.id);
+      return `<audio class="voice-playback" controls preload="none" src="${escape(url)}"></audio>`;
+    })
+    .join("");
+  return `<div class="voice-answer"><div class="voice-answer-label">Voice answer</div>${players}</div>`;
+}
+
 function renderResponseBodyHtml(card: Card, response: ClientResponse | undefined, uploads: UploadRow[]): string {
-  if (!response || response.state === "not_started") return "Not yet viewed.";
-  if (response.state === "viewed") return "Card opened, no response yet.";
+  const voiceHtml = renderVoicePlayback(uploads);
+  if (!response || response.state === "not_started") return `Not yet viewed.${voiceHtml}`;
+  if (response.state === "viewed") return `Card opened, no response yet.${voiceHtml}`;
 
   const v = (response.response_value ?? {}) as ResponseValueShape;
   const noteHtml = v.note ? `<div class="response-note"><strong>Note:</strong> ${escape(v.note)}</div>` : "";
 
-  if (response.state === "skipped") return `Skipped.${noteHtml}`;
+  if (response.state === "skipped") return `Skipped.${noteHtml}${voiceHtml}`;
 
   let body: string;
   switch (card.response_type) {
@@ -2133,11 +2158,12 @@ function renderResponseBodyHtml(card: Card, response: ClientResponse | undefined
         v.email ? `\n${escape(v.email)}` : "",
       ].join("");
       break;
-    case "file-upload":
+    case "file-upload": {
+      const files = uploads.filter((u) => u.kind !== "voice");
       body =
-        uploads.length === 0
+        files.length === 0
           ? "No files uploaded."
-          : `<ul class="uploads-list">${uploads
+          : `<ul class="uploads-list">${files
               .map((u) => {
                 const url = adminApi.uploadDownloadUrl(u.id);
                 const label = `${escape(u.file_name)} <span class="upload-size">(${formatBytes(u.file_size_bytes)})</span>`;
@@ -2145,10 +2171,11 @@ function renderResponseBodyHtml(card: Card, response: ClientResponse | undefined
               })
               .join("")}</ul>`;
       break;
+    }
     default:
       body = "";
   }
-  return body + noteHtml;
+  return body + noteHtml + voiceHtml;
 }
 
 function formatBytes(bytes: number): string {
@@ -2160,7 +2187,11 @@ function formatBytes(bytes: number): string {
 // ── markdown export plumbing ─────────────────────────────────────────────
 
 function summarizeUploads(uploads: UploadRow[]): UploadInfo[] {
-  return uploads.map((u) => ({ id: u.id, name: u.file_name, sizeBytes: u.file_size_bytes }));
+  // Voice answers are not file attachments — keep them out of the Markdown
+  // attachment summary so the ClickUp export still lists only `file` uploads.
+  return uploads
+    .filter((u) => u.kind !== "voice")
+    .map((u) => ({ id: u.id, name: u.file_name, sizeBytes: u.file_size_bytes }));
 }
 
 function buildSingleCardMarkdown(

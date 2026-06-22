@@ -757,6 +757,34 @@
   margin-left: 6px;
 }
 
+/* Voice answer — inline player in the operator viewer. Rendered on any
+   card that has a `kind='voice'` upload, beneath the typed answer. */
+.voice-answer {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.voice-answer-label {
+  color: var(--primary-dark);
+  letter-spacing: 0.3px;
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.voice-playback {
+  width: 100%;
+  max-width: 420px;
+  height: 36px;
+  display: block;
+}
+
+.voice-playback + .voice-playback {
+  margin-top: 8px;
+}
+
 .response-note strong {
   color: var(--primary-dark);
   letter-spacing: 0.3px;

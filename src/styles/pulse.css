@@ -493,6 +493,175 @@ button:focus-visible {
   cursor: not-allowed;
 }
 
+/* ── Voice answer recorder ─────────────────────────────────────────────
+   Rendered on every card below the primary input. Mobile-first with large
+   tap targets; a clear recording/paused indicator. */
+.voice-control {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.voice-control.is-done,
+.voice-control.is-active,
+.voice-control.is-uploading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.voice-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.voice-btn {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  padding: 12px 18px;
+  min-height: 48px;
+  border: 1.5px solid var(--border);
+  background: var(--white);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.voice-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.voice-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Record / re-record — the inviting primary action. */
+.voice-record {
+  color: var(--primary);
+  border-color: var(--primary);
+  width: 100%;
+  justify-content: center;
+}
+
+.voice-record:not(:disabled):hover {
+  background: var(--primary-soft);
+}
+
+.voice-record .voice-icon,
+.voice-rerecord .voice-icon {
+  color: var(--warning);
+}
+
+/* Stop is the strong action while recording. */
+.voice-stop {
+  color: var(--white);
+  background: var(--primary);
+  border-color: var(--primary);
+  flex: 1;
+  justify-content: center;
+}
+
+.voice-stop:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+}
+
+.voice-pause,
+.voice-resume {
+  flex: 1;
+  justify-content: center;
+}
+
+.voice-rerecord,
+.voice-delete {
+  flex: 1;
+  justify-content: center;
+}
+
+.voice-delete {
+  color: var(--muted);
+}
+
+.voice-delete:not(:disabled):hover {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+/* Recording status row: animated dot + state label + mm:ss timer. */
+.voice-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--ink);
+}
+
+.voice-control.is-paused .voice-status {
+  background: var(--surface-muted);
+}
+
+.voice-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--warning);
+  flex: 0 0 auto;
+}
+
+.voice-control.is-recording .voice-dot {
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-control.is-paused .voice-dot {
+  background: var(--muted);
+  animation: none;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.8); }
+}
+
+.voice-state-label {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.voice-timer {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.voice-uploading-label {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.voice-player {
+  width: 100%;
+  height: 40px;
+}
+
+.voice-error {
+  margin: 8px 0 0 0;
+  font-size: 14px;
+  color: var(--warning);
+}
+
 .error {
   background: var(--white);
   border-radius: var(--radius);
