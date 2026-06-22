@@ -114,6 +114,9 @@ export interface Client {
   engagement_name: string | null;
   token?: string;       // present in admin views, omitted from /api/me
   brief: string | null;
+  /** Folder this engagement is in (admin views only; `null` when
+   * ungrouped or on the client-facing `/api/me` payload). */
+  group_id?: string | null;
   created_at: string;
   last_active_at: string | null;
   /** Optional brand logo path for the operator's organization. When
@@ -424,11 +427,29 @@ export interface EngagementSummary {
   engagement_name: string | null;
   token: string;
   brief: string | null;
+  /** Folder this engagement sits in, or `null` for the implicit
+   * "Ungrouped" bucket. Operators move engagements between folders via
+   * `adminApi.updateClient(id, { group_id })`. */
+  group_id: string | null;
+  /** Convenience name of the folder (joined server-side); `null` when
+   * ungrouped. The admin list buckets by `group_id` and labels by the
+   * folder list, so this is informational. */
+  group_name: string | null;
   created_at: string;
   last_active_at: string | null;
   answered_count: number;
   skipped_count: number;
   total_cards: number;
+}
+
+/** One engagement folder (operator-only). The client deck never sees
+ * folders. `client_count` is the number of engagements currently in the
+ * folder (server-computed). */
+export interface GroupSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  client_count: number;
 }
 
 export interface EngagementDetail {
@@ -449,6 +470,11 @@ export interface UpdateClientArgs {
   org_name?: string | null;
   engagement_name?: string | null;
   brief?: string | null;
+  /** Move the engagement into a folder, or `null` to ungroup it. Omit
+   * the key entirely to leave the folder untouched — the backend keys
+   * off `model_dump(exclude_unset=True)`, so an absent key never writes
+   * the column. */
+  group_id?: string | null;
 }
 
 export interface CreateCardArgs {
@@ -602,6 +628,28 @@ export const adminApi = {
   // for same-site requests.
   uploadDownloadUrl: (uploadId: string): string =>
     `${API_BASE}/api/admin/uploads/${uploadId}/download`,
+};
+
+/** Engagement folders (operator-only). Org-scoped on the backend via the
+ * same `pulse_member` + `pulse.org_id` RLS as every `/api/admin/*`
+ * surface, so a folder created here is invisible to other tenants. */
+export const groupsApi = {
+  list: (): Promise<GroupSummary[]> => request("/api/admin/groups"),
+
+  create: (name: string): Promise<GroupSummary> =>
+    request("/api/admin/groups", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  rename: (id: string, name: string): Promise<GroupSummary> =>
+    request(`/api/admin/groups/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+
+  delete: (id: string): Promise<void> =>
+    request(`/api/admin/groups/${id}`, { method: "DELETE" }),
 };
 
 // ── Org switching, details, members, invites (operator surface) ───────────

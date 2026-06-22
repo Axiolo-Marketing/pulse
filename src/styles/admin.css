@@ -189,6 +189,91 @@
   color: var(--ink);
 }
 
+.engagement-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Engagement folders (flat) ── */
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.folder-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.folder-name {
+  font-weight: 600;
+  font-size: 15px;
+  margin: 0;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.folder-count {
+  display: inline-flex;
+  min-width: 20px;
+  justify-content: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.folder-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.folder-empty {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.engagement-table .move-cell {
+  white-space: nowrap;
+}
+
+.move-folder-select {
+  font-size: 13px;
+  padding: 6px 8px;
+  max-width: 180px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .empty-card {
   background: var(--white);
   border-radius: var(--radius);

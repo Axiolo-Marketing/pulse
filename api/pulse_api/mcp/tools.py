@@ -57,7 +57,8 @@ from pulse_api.repos import uploads as uploads_repo
     name="pulse_list_engagements",
     description=(
         "List every engagement with progress counts (answered, skipped, "
-        "total cards). No arguments."
+        "total cards) plus its folder (`group_id` + `group_name`, both "
+        "null when ungrouped). No arguments."
     ),
 )
 async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:

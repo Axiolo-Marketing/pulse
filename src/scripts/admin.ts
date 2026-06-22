@@ -2,6 +2,7 @@ import {
   adminApi,
   ApiError,
   authApi,
+  groupsApi,
   orgsApi,
   type AuthUser,
   type Card,
@@ -9,6 +10,7 @@ import {
   type ClientResponse,
   type EngagementDetail,
   type EngagementSummary,
+  type GroupSummary,
   type OrgDetails,
   type OrgSummary,
   type ResponseType,
@@ -595,8 +597,11 @@ async function draw(
   if (route.kind === "list") {
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
     try {
-      const summaries = await adminApi.listClients();
-      renderList(container, summaries);
+      const [summaries, groups] = await Promise.all([
+        adminApi.listClients(),
+        groupsApi.list(),
+      ]);
+      renderList(container, summaries, groups);
     } catch (err) {
       console.error("load engagements:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
@@ -706,80 +711,226 @@ async function draw(
 
 // ── list view ───────────────────────────────────────────────────────────
 
-function renderList(container: HTMLElement, summaries: EngagementSummary[]): void {
+/** Synthetic group id for the implicit "Ungrouped" bucket. Engagements
+ * with `group_id === null` collect here; it's never sent to the backend
+ * as an id (the bucket is just `null` on the wire). */
+const UNGROUPED = "__ungrouped__";
+
+/** Build the `<option>` list for a "move to folder" / modal folder
+ * select. `selectedId` (null → Ungrouped) marks the current folder. */
+function folderOptionsHtml(
+  groups: GroupSummary[],
+  selectedId: string | null,
+): string {
+  const ungroupedSel = selectedId === null ? " selected" : "";
+  const opts = groups
+    .map(
+      (g) =>
+        `<option value="${escape(g.id)}"${selectedId === g.id ? " selected" : ""}>${escape(g.name)}</option>`,
+    )
+    .join("");
+  return `<option value="${UNGROUPED}"${ungroupedSel}>Ungrouped</option>${opts}`;
+}
+
+function engagementRowHtml(
+  s: EngagementSummary,
+  groups: GroupSummary[],
+): string {
+  const completed = s.answered_count + s.skipped_count;
+  return `
+    <tr data-client-id="${escape(s.id)}">
+      <td>
+        <div class="client-name">${escape(s.name)}</div>
+        <div class="org-name">${escape(s.org_name ?? "")}</div>
+      </td>
+      <td>${escape(s.engagement_name ?? "")}</td>
+      <td>
+        <span class="progress-pill">${completed} / ${s.total_cards}</span>
+      </td>
+      <td class="last-active">${escape(formatTimestamp(s.last_active_at))}</td>
+      <td class="move-cell">
+        <label class="move-folder">
+          <span class="sr-only">Move to folder</span>
+          <select class="input move-folder-select" data-action="move" aria-label="Move ${escape(s.name)} to folder">
+            ${folderOptionsHtml(groups, s.group_id)}
+          </select>
+        </label>
+      </td>
+      <td class="actions">
+        <button class="action-link" type="button" data-action="view">View responses</button>
+        <button class="action-link" type="button" data-action="copy-link">Copy link</button>
+        <button class="action-link danger" type="button" data-action="rotate">Rotate token</button>
+        <button class="action-link danger" type="button" data-action="delete">Delete</button>
+      </td>
+    </tr>`;
+}
+
+function folderSectionHtml(
+  heading: string,
+  groupId: string | null,
+  rowsHtml: string,
+  count: number,
+  controls: boolean,
+): string {
+  const groupAttr = groupId === null ? UNGROUPED : escape(groupId);
+  const folderControls = controls
+    ? `
+        <button class="action-link" type="button" data-folder-action="rename">Rename</button>
+        <button class="action-link danger" type="button" data-folder-action="delete">Delete folder</button>`
+    : "";
+  const body = rowsHtml
+    ? `
+      <div class="engagement-table-wrap">
+        <table class="engagement-table">
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`
+    : `<div class="folder-empty">No engagements in this folder yet.</div>`;
+  return `
+    <section class="folder-section" data-group-id="${groupAttr}">
+      <div class="folder-header">
+        <h3 class="folder-name">${escape(heading)} <span class="folder-count">${count}</span></h3>
+        <div class="folder-actions">${folderControls}</div>
+      </div>
+      ${body}
+    </section>`;
+}
+
+function renderList(
+  container: HTMLElement,
+  summaries: EngagementSummary[],
+  groups: GroupSummary[],
+): void {
   const header = `
     <div class="engagement-list-header">
       <h2 class="engagement-list-h">Engagements</h2>
-      <button class="btn-primary-sm" type="button" data-action="new-engagement">+ New engagement</button>
+      <div class="engagement-list-actions">
+        <button class="btn-secondary-sm" type="button" data-action="new-folder">+ New folder</button>
+        <button class="btn-primary-sm" type="button" data-action="new-engagement">+ New engagement</button>
+      </div>
     </div>
   `;
 
-  if (summaries.length === 0) {
+  if (summaries.length === 0 && groups.length === 0) {
     container.innerHTML = `
       ${header}
       <div class="empty-card">
         <p>No engagements yet. Click + New engagement to create your first one.</p>
       </div>
     `;
-    container
-      .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
-      ?.addEventListener("click", () => openNewEngagementModal(container));
+    bindListHeader(container, groups);
     return;
   }
 
-  const rows = summaries
-    .map((s) => {
-      const completed = s.answered_count + s.skipped_count;
-      return `
-      <tr data-client-id="${escape(s.id)}">
-        <td>
-          <div class="client-name">${escape(s.name)}</div>
-          <div class="org-name">${escape(s.org_name ?? "")}</div>
-        </td>
-        <td>${escape(s.engagement_name ?? "")}</td>
-        <td>
-          <span class="progress-pill">${completed} / ${s.total_cards}</span>
-        </td>
-        <td class="last-active">${escape(formatTimestamp(s.last_active_at))}</td>
-        <td class="actions">
-          <button class="action-link" type="button" data-action="view">View responses</button>
-          <button class="action-link" type="button" data-action="copy-link">Copy link</button>
-          <button class="action-link danger" type="button" data-action="rotate">Rotate token</button>
-          <button class="action-link danger" type="button" data-action="delete">Delete</button>
-        </td>
-      </tr>`;
+  // Bucket engagements by folder. Server already orders by created_at
+  // desc, so iterating `summaries` keeps that order within each bucket.
+  const byGroup = new Map<string, EngagementSummary[]>();
+  const ungrouped: EngagementSummary[] = [];
+  for (const s of summaries) {
+    if (s.group_id === null) {
+      ungrouped.push(s);
+    } else {
+      const list = byGroup.get(s.group_id) ?? [];
+      list.push(s);
+      byGroup.set(s.group_id, list);
+    }
+  }
+
+  // Folder sections (alphabetical — the API returns them ordered by
+  // name), then the Ungrouped bucket last. Empty folders still render.
+  const sections = groups
+    .map((g) => {
+      const members = byGroup.get(g.id) ?? [];
+      const rowsHtml = members.map((s) => engagementRowHtml(s, groups)).join("");
+      return folderSectionHtml(g.name, g.id, rowsHtml, members.length, true);
     })
     .join("");
 
+  const ungroupedHtml =
+    ungrouped.length > 0 || groups.length > 0
+      ? folderSectionHtml(
+          "Ungrouped",
+          null,
+          ungrouped.map((s) => engagementRowHtml(s, groups)).join(""),
+          ungrouped.length,
+          false,
+        )
+      : "";
+
   container.innerHTML = `
     ${header}
-    <div class="engagement-table-wrap">
-      <table class="engagement-table">
-        <thead>
-          <tr>
-            <th>Client</th>
-            <th>Engagement</th>
-            <th>Progress</th>
-            <th>Last active</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
+    <div class="folder-list">${sections}${ungroupedHtml}</div>
   `;
 
-  container
-    .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
-    ?.addEventListener("click", () => openNewEngagementModal(container));
+  bindListHeader(container, groups);
 
+  // ── select change → move engagement to a folder ──
+  container.addEventListener("change", async (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLSelectElement)) return;
+    if (target.dataset.action !== "move") return;
+    const row = target.closest<HTMLElement>("tr[data-client-id]");
+    if (!row) return;
+    const clientId = row.dataset.clientId!;
+    const raw = target.value;
+    const newGroupId = raw === UNGROUPED ? null : raw;
+    try {
+      await adminApi.updateClient(clientId, { group_id: newGroupId });
+      toast(newGroupId === null ? "Moved to Ungrouped" : "Moved to folder");
+      await reloadList(container);
+    } catch (err) {
+      console.error("move engagement:", err);
+      toast("Could not move engagement");
+      await reloadList(container);
+    }
+  });
+
+  // ── folder rename / delete ──
+  container.addEventListener("click", async (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const folderBtn = target.closest<HTMLButtonElement>("[data-folder-action]");
+    if (!folderBtn) return;
+    const section = folderBtn.closest<HTMLElement>(".folder-section");
+    const groupId = section?.dataset.groupId;
+    if (!groupId || groupId === UNGROUPED) return;
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) return;
+
+    if (folderBtn.dataset.folderAction === "rename") {
+      openRenameFolderModal(container, group);
+      return;
+    }
+    if (folderBtn.dataset.folderAction === "delete") {
+      const n = group.client_count;
+      openConfirmModal({
+        title: "Delete folder",
+        body: [
+          `Delete the folder "${group.name}"?`,
+          n > 0
+            ? `Its ${n} engagement${n === 1 ? "" : "s"} will move to Ungrouped — they are NOT deleted.`
+            : "This folder is empty.",
+        ].join("\n"),
+        confirmLabel: "Delete folder",
+        danger: true,
+        onConfirm: async () => {
+          await groupsApi.delete(group.id);
+          toast("Folder deleted");
+          await reloadList(container);
+        },
+      });
+      return;
+    }
+  });
+
+  // ── engagement row actions (view / copy / rotate / delete) ──
   container.addEventListener("click", async (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn) return;
     const action = btn.dataset.action;
-    if (action === "new-engagement") return; // handled above
+    if (action === "new-engagement" || action === "new-folder") return; // handled in bindListHeader
 
     const row = btn.closest<HTMLElement>("tr[data-client-id]");
     if (!row) return;
@@ -836,9 +987,131 @@ function renderList(container: HTMLElement, summaries: EngagementSummary[]): voi
   });
 }
 
+/** Wire the list header's "New folder" + "New engagement" buttons.
+ * Factored out so the empty-state and populated paths share it. */
+function bindListHeader(container: HTMLElement, groups: GroupSummary[]): void {
+  container
+    .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
+    ?.addEventListener("click", () => openNewEngagementModal(container, groups));
+  container
+    .querySelector<HTMLButtonElement>("[data-action='new-folder']")
+    ?.addEventListener("click", () => openNewFolderModal(container));
+}
+
+// ── folder modals ────────────────────────────────────────────────────────
+
+function openNewFolderModal(container: HTMLElement): void {
+  openFolderNameModal({
+    title: "New folder",
+    label: "Folder name",
+    initial: "",
+    submitLabel: "Create folder",
+    onSubmit: async (name) => {
+      await groupsApi.create(name);
+      toast("Folder created");
+      await reloadList(container);
+    },
+  });
+}
+
+function openRenameFolderModal(
+  container: HTMLElement,
+  group: GroupSummary,
+): void {
+  openFolderNameModal({
+    title: "Rename folder",
+    label: "Folder name",
+    initial: group.name,
+    submitLabel: "Save",
+    onSubmit: async (name) => {
+      await groupsApi.rename(group.id, name);
+      toast("Folder renamed");
+      await reloadList(container);
+    },
+  });
+}
+
+interface FolderNameModalOptions {
+  title: string;
+  label: string;
+  initial: string;
+  submitLabel: string;
+  onSubmit: (name: string) => Promise<void>;
+}
+
+function openFolderNameModal(opts: FolderNameModalOptions): void {
+  const modalEl = document.createElement("div");
+  modalEl.className = "modal";
+  modalEl.innerHTML = `
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel new-eng-panel">
+      <header class="modal-header">
+        <span class="modal-title">${escape(opts.title)}</span>
+        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
+      </header>
+      <form class="new-eng-form" id="folder-name-form">
+        <label class="edit-field">
+          <span class="edit-label">${escape(opts.label)}</span>
+          <input class="input" id="folder-name" type="text" autofocus required value="${escape(opts.initial)}" />
+        </label>
+        <div class="edit-actions">
+          <button class="btn-primary-sm" type="submit">${escape(opts.submitLabel)}</button>
+          <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+
+  const close = (): void => {
+    modalEl.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+
+  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
+    el.addEventListener("click", close);
+  }
+
+  modalEl
+    .querySelector<HTMLFormElement>("#folder-name-form")!
+    .addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = (
+        modalEl.querySelector<HTMLInputElement>("#folder-name")?.value ?? ""
+      ).trim();
+      if (!name) {
+        modalEl.querySelector<HTMLInputElement>("#folder-name")?.focus();
+        return;
+      }
+      const submitBtn = modalEl.querySelector<HTMLButtonElement>("button[type='submit']");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Working...";
+      }
+      try {
+        await opts.onSubmit(name);
+        close();
+      } catch (err) {
+        console.error("folder name modal:", err);
+        toast("Could not save folder");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = opts.submitLabel;
+        }
+      }
+    });
+}
+
 // ── new engagement modal ────────────────────────────────────────────────
 
-function openNewEngagementModal(container: HTMLElement): void {
+function openNewEngagementModal(
+  container: HTMLElement,
+  groups: GroupSummary[],
+): void {
   const modalEl = document.createElement("div");
   modalEl.className = "modal";
   modalEl.innerHTML = `
@@ -860,6 +1133,12 @@ function openNewEngagementModal(container: HTMLElement): void {
         <label class="edit-field">
           <span class="edit-label">Engagement name (optional)</span>
           <input class="input" id="ne-eng" type="text" />
+        </label>
+        <label class="edit-field">
+          <span class="edit-label">Folder (optional)</span>
+          <select class="input" id="ne-folder">
+            ${folderOptionsHtml(groups, null)}
+          </select>
         </label>
         <div class="edit-actions">
           <button class="btn-primary-sm" type="submit">Create engagement</button>
@@ -888,6 +1167,8 @@ function openNewEngagementModal(container: HTMLElement): void {
     const name = (modalEl.querySelector<HTMLInputElement>("#ne-name")?.value ?? "").trim();
     const org = (modalEl.querySelector<HTMLInputElement>("#ne-org")?.value ?? "").trim();
     const eng = (modalEl.querySelector<HTMLInputElement>("#ne-eng")?.value ?? "").trim();
+    const folderRaw = modalEl.querySelector<HTMLSelectElement>("#ne-folder")?.value ?? UNGROUPED;
+    const groupId = folderRaw === UNGROUPED ? null : folderRaw;
     if (!name) {
       modalEl.querySelector<HTMLInputElement>("#ne-name")?.focus();
       return;
@@ -905,6 +1186,11 @@ function openNewEngagementModal(container: HTMLElement): void {
         org_name: org || null,
         engagement_name: eng || null,
       });
+      // Create doesn't accept group_id (folders are assigned via PATCH);
+      // if the operator picked a folder, move the new engagement into it.
+      if (groupId !== null) {
+        await adminApi.updateClient(created.id, { group_id: groupId });
+      }
       close();
       toast(`Engagement created for ${created.name}`);
       window.location.hash = `client/${created.id}`;
@@ -1037,6 +1323,12 @@ function openEditEngagementModal(
           <span class="edit-label">Engagement name (optional)</span>
           <input class="input" id="ee-eng" type="text" value="${escape(client.engagement_name ?? "")}" />
         </label>
+        <label class="edit-field">
+          <span class="edit-label">Folder (optional)</span>
+          <select class="input" id="ee-folder" disabled>
+            <option value="${UNGROUPED}" selected>Loading folders…</option>
+          </select>
+        </label>
         <div class="edit-actions">
           <button class="btn-primary-sm" type="submit">Save changes</button>
           <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
@@ -1045,6 +1337,23 @@ function openEditEngagementModal(
     </div>
   `;
   document.body.appendChild(modalEl);
+
+  const folderSelect = modalEl.querySelector<HTMLSelectElement>("#ee-folder")!;
+  // Populate the folder dropdown asynchronously; the rest of the form is
+  // usable immediately. If the fetch fails the select stays disabled and
+  // the save simply omits group_id (leaves the folder untouched).
+  let foldersLoaded = false;
+  void groupsApi
+    .list()
+    .then((groups) => {
+      folderSelect.innerHTML = folderOptionsHtml(groups, client.group_id ?? null);
+      folderSelect.disabled = false;
+      foldersLoaded = true;
+    })
+    .catch((err) => {
+      console.error("load folders for edit:", err);
+      folderSelect.innerHTML = `<option value="${UNGROUPED}" selected>Folders unavailable</option>`;
+    });
 
   const close = (): void => {
     modalEl.remove();
@@ -1075,12 +1384,26 @@ function openEditEngagementModal(
       submitBtn.textContent = "Saving...";
     }
 
+    const args: {
+      name: string;
+      org_name: string | null;
+      engagement_name: string | null;
+      group_id?: string | null;
+    } = {
+      name,
+      org_name: org || null,
+      engagement_name: eng || null,
+    };
+    // Only send group_id once the folder list loaded — otherwise we'd
+    // send the placeholder value and accidentally ungroup the engagement.
+    if (foldersLoaded) {
+      const raw = folderSelect.value;
+      args.group_id = raw === UNGROUPED ? null : raw;
+    }
+
     try {
-      const updated = await adminApi.updateClient(client.id, {
-        name,
-        org_name: org || null,
-        engagement_name: eng || null,
-      });
+      const updated = await adminApi.updateClient(client.id, args);
+      client.group_id = updated.group_id ?? null;
       onSaved({
         name: updated.name,
         org_name: updated.org_name,
@@ -1119,8 +1442,11 @@ async function rotateToken(container: HTMLElement, clientId: string): Promise<vo
 // untouched.
 async function reloadList(container: HTMLElement): Promise<void> {
   try {
-    const summaries = await adminApi.listClients();
-    renderList(container, summaries);
+    const [summaries, groups] = await Promise.all([
+      adminApi.listClients(),
+      groupsApi.list(),
+    ]);
+    renderList(container, summaries, groups);
   } catch (err) {
     console.error("reload list:", err);
     container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;

@@ -24,6 +24,7 @@ from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
+from pulse_api.repos import groups as groups_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 
@@ -46,12 +47,24 @@ class CreateClientRequest(BaseModel):
 class UpdateClientRequest(BaseModel):
     """Partial update. Fields omitted from the request body stay as-is.
     `token` is intentionally not accepted here — rotation goes through
-    its own POST endpoint so it's an explicit action."""
+    its own POST endpoint so it's an explicit action.
+
+    `group_id` moves the engagement into a folder; send `null` to
+    ungroup it (move to the implicit "Ungrouped" bucket). It's
+    distinguished from "not provided" via `model_dump(exclude_unset=True)`
+    in the handler, so a body without the key never touches the column."""
 
     name: str | None = None
     org_name: str | None = None
     engagement_name: str | None = None
     brief: str | None = None
+    group_id: str | None = None
+
+
+class GroupRequest(BaseModel):
+    """Create/rename payload for an engagement folder."""
+
+    name: str = Field(min_length=1, max_length=200)
 
 
 RESPONSE_TYPES = (
@@ -167,6 +180,14 @@ async def update_engagement(
 ) -> dict[str, Any]:
     user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
+    # A non-null group_id must reference a folder in the caller's org.
+    # RLS already blocks cross-org folders (a foreign id matches no row,
+    # so the FK update would null it silently), but we reject explicitly
+    # with 404 so a typo / stale id surfaces instead of quietly ungrouping.
+    target_group = fields.get("group_id")
+    if target_group is not None:
+        if await groups_repo.get_by_id(session, target_group) is None:
+            raise HTTPException(status_code=404, detail="folder not found")
     row = await clients_repo.update_engagement(session, client_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
@@ -299,6 +320,111 @@ async def rotate_token(
     )
     await session.commit()
     return row
+
+
+# ── Engagement folders (engagement_groups table) ───────────────────────────
+
+
+@router.get("/groups")
+async def list_groups(
+    session: AsyncSession = Depends(get_org_scoped_session),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
+) -> list[dict[str, Any]]:
+    """List the active org's folders + per-folder engagement counts.
+
+    RLS narrows the result to the active org. The list is ordered by
+    name; empty folders are included (the UI still renders them).
+    """
+    return await groups_repo.list_for_org(session)
+
+
+@router.post("/groups", status_code=201)
+async def create_group(
+    req: GroupRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    """Create a folder under the operator's active organization.
+
+    ``org_id`` comes from the resolved membership — never the wire body.
+    RLS WITH CHECK would reject any other value anyway.
+    """
+    user, membership = org_member
+    row = await groups_repo.create(
+        session, name=req.name, org_id=membership.org_id
+    )
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="group.create",
+        target_type="group",
+        target_id=row["id"],
+        metadata={"name": row.get("name")},
+    )
+    await session.commit()
+    return row
+
+
+@router.patch("/groups/{group_id}")
+async def rename_group(
+    group_id: str,
+    req: GroupRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    user, membership = org_member
+    row = await groups_repo.rename(session, group_id, req.name)
+    if row is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="group.update",
+        target_type="group",
+        target_id=group_id,
+        metadata={"name": row.get("name")},
+    )
+    await session.commit()
+    return row
+
+
+@router.delete("/groups/{group_id}", status_code=204)
+async def delete_group(
+    group_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> None:
+    """Delete a folder. Its engagements are ungrouped, never deleted.
+
+    The ``clients.group_id`` FK is ``on delete set null``, so any
+    engagements in this folder return to the implicit "Ungrouped" bucket
+    in the same transaction.
+    """
+    user, membership = org_member
+    # Snapshot the name BEFORE the delete so the activity row renders a
+    # label instead of a stale UUID once the row is gone.
+    snapshot = await groups_repo.get_by_id(session, group_id)
+    deleted = await groups_repo.delete(session, group_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="folder not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="group.delete",
+        target_type="group",
+        target_id=group_id,
+        metadata={"name": (snapshot or {}).get("name") if snapshot else None},
+    )
+    await session.commit()
 
 
 # ── Cards ──────────────────────────────────────────────────────────────────

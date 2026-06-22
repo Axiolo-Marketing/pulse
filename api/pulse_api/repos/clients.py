@@ -85,12 +85,15 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               c.id::text                                         as id,
               c.name, c.org_name, c.engagement_name, c.token,
               c.brief, c.created_at, c.last_active_at,
+              c.group_id::text                                   as group_id,
+              g.name                                             as group_name,
               coalesce(count(r.*) filter (where r.state = 'answered'), 0)::int as answered_count,
               coalesce(count(r.*) filter (where r.state = 'skipped'),  0)::int as skipped_count,
               (select count(*) from public.cards where client_id = c.id)::int  as total_cards
             from public.clients c
             left join public.responses r on r.client_id = c.id
-            group by c.id
+            left join public.engagement_groups g on g.id = c.group_id
+            group by c.id, g.name
             order by c.created_at desc
             """
         )
@@ -103,6 +106,7 @@ async def get_by_id(session: AsyncSession, client_id: str) -> dict | None:
         result = await session.execute(
             text(
                 "select id::text, name, org_name, engagement_name, token, brief, "
+                "group_id::text as group_id, "
                 "created_at, last_active_at from public.clients "
                 "where id = cast(:cid as uuid)"
             ),
@@ -142,7 +146,7 @@ async def create_engagement(
             "(name, org_name, engagement_name, token, org_id) "
             "values (:n, :o, :e, :t, cast(:org as uuid)) "
             "returning id::text, name, org_name, engagement_name, token, brief, "
-            "created_at, last_active_at"
+            "group_id::text as group_id, created_at, last_active_at"
         ),
         {
             "n": name,
@@ -160,10 +164,19 @@ async def update_engagement(
 ) -> dict | None:
     """Partial update — only the keys in `fields` get written. Caller is
     responsible for restricting which keys it forwards (so the wire body
-    can't sneak in a token rotation by sending {'token': '...'})."""
+    can't sneak in a token rotation by sending {'token': '...'}).
+
+    ``group_id`` is special-cased: it's a uuid column, so its bind is
+    cast explicitly. Passing ``group_id=None`` ungroups the engagement
+    (moves it to the implicit "Ungrouped" bucket)."""
     if not fields:
         return await get_by_id(session, client_id)
-    set_clauses = ", ".join(f"{k} = :{k}" for k in fields)
+    # group_id is a uuid column — cast the bind so a NULL or a string id
+    # both bind cleanly. Every other field is plain text.
+    set_clauses = ", ".join(
+        f"{k} = cast(:{k} as uuid)" if k == "group_id" else f"{k} = :{k}"
+        for k in fields
+    )
     params = {"cid": client_id, **fields}
     try:
         result = await session.execute(
@@ -171,7 +184,7 @@ async def update_engagement(
                 f"update public.clients set {set_clauses} "
                 f"where id = cast(:cid as uuid) "
                 f"returning id::text, name, org_name, engagement_name, token, brief, "
-                f"created_at, last_active_at"
+                f"group_id::text as group_id, created_at, last_active_at"
             ),
             params,
         )
@@ -224,7 +237,7 @@ async def rotate_token(session: AsyncSession, client_id: str) -> dict | None:
                 "update public.clients set token = :t "
                 "where id = cast(:cid as uuid) "
                 "returning id::text, name, org_name, engagement_name, token, brief, "
-                "created_at, last_active_at"
+                "group_id::text as group_id, created_at, last_active_at"
             ),
             {"t": new_token, "cid": client_id},
         )
