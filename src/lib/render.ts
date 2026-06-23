@@ -167,7 +167,7 @@ export interface RenderCardArgs {
   responses?: Map<string, ClientResponse>;
   handlers: CardHandlers;
   /** Optional `<img src>` for the operator's org logo. When supplied
-   * (caller resolved it from `Client.org_logo_path`), the top-bar
+   * (caller resolved it from `Engagement.org_logo_path`), the top-bar
    * renders this in place of the default Axiolo wordmark — that's the
    * client-facing piece of the org branding work. Omitted by callers
    * that don't have logo data — the deck falls back to the Axiolo

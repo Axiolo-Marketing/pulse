@@ -151,7 +151,7 @@ async def test_voice_upload_other_clients_card_returns_404(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, "
+                "(engagement_id, order_index, category, title, context, question, "
                 " response_type, org_id) "
                 "values (cast(:c as uuid), 1, 'C', 'their card', 'X', 'Q', "
                 "        'short-text', cast(:o as uuid)) "
@@ -178,7 +178,7 @@ async def _set_voice_enabled(
     await db.execute(text("reset role"))
     await db.execute(
         text(
-            "update public.clients set voice_enabled = :v "
+            "update public.engagements set voice_enabled = :v "
             "where id = cast(:cid as uuid)"
         ),
         {"v": enabled, "cid": client_id},
@@ -315,7 +315,7 @@ async def test_upload_other_clients_card_returns_404(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, "
+                "(engagement_id, order_index, category, title, context, question, "
                 " response_type, org_id) "
                 "values (cast(:c as uuid), 1, 'C', 'their card', 'X', 'Q', "
                 "        'file-upload', cast(:o as uuid)) "
@@ -395,7 +395,7 @@ async def test_download_cannot_target_other_clients_upload(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, "
+                "(engagement_id, order_index, category, title, context, question, "
                 " response_type, org_id) "
                 "values (cast(:c as uuid), 1, 'C', 'theirs', 'X', 'Q', "
                 "        'file-upload', cast(:o as uuid)) "
@@ -406,7 +406,7 @@ async def test_download_cannot_target_other_clients_upload(
     ).mappings().one()
 
     rel = storage.build_storage_path(
-        client_id=other_seeded_client["id"],
+        engagement_id=other_seeded_client["id"],
         card_id=card_row["id"],
         filename="secret.txt",
     )
@@ -416,7 +416,7 @@ async def test_download_cannot_target_other_clients_upload(
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, client_id, file_name, file_size_bytes, storage_path, mime_type) "
+                "(card_id, engagement_id, file_name, file_size_bytes, storage_path, mime_type) "
                 "values (cast(:k as uuid), cast(:c as uuid), 'secret.txt', 14, :sp, 'text/plain') "
                 "returning id::text"
             ),
@@ -473,7 +473,7 @@ async def test_delete_other_clients_upload_returns_404(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, "
+                "(engagement_id, order_index, category, title, context, question, "
                 " response_type, org_id) "
                 "values (cast(:c as uuid), 1, 'C', 'theirs', 'X', 'Q', "
                 "        'file-upload', cast(:o as uuid)) "
@@ -486,7 +486,7 @@ async def test_delete_other_clients_upload_returns_404(
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, client_id, file_name, file_size_bytes, storage_path, "
+                "(card_id, engagement_id, file_name, file_size_bytes, storage_path, "
                 " mime_type, org_id) "
                 "values (cast(:k as uuid), cast(:c as uuid), 'x.bin', 1, "
                 "        'fake/path', null, cast(:o as uuid)) "

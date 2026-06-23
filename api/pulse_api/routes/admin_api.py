@@ -23,7 +23,7 @@ from pulse_api.auth.middleware import (
 from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
-from pulse_api.repos import clients as clients_repo
+from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import groups as groups_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
@@ -38,13 +38,13 @@ router = APIRouter(
 # ── Request/response models ────────────────────────────────────────────────
 
 
-class CreateClientRequest(BaseModel):
+class CreateEngagementRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     org_name: str | None = None
     engagement_name: str | None = None
 
 
-class UpdateClientRequest(BaseModel):
+class UpdateEngagementRequest(BaseModel):
     """Partial update. Fields omitted from the request body stay as-is.
     `token` is intentionally not accepted here — rotation goes through
     its own POST endpoint so it's an explicit action.
@@ -110,38 +110,38 @@ class ImportMarkdownRequest(BaseModel):
     markdown: str = Field(min_length=1, max_length=500_000)
 
 
-# ── Engagement (clients table) ─────────────────────────────────────────────
+# ── Engagement (engagements table) ─────────────────────────────────────────
 
 
-@router.get("/clients")
+@router.get("/engagements")
 async def list_engagements(
     session: AsyncSession = Depends(get_org_scoped_session),
     _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> list[dict[str, Any]]:
     """List engagements visible to the active org — RLS handles the scope."""
-    return await clients_repo.list_all_with_counts(session)
+    return await engagements_repo.list_all_with_counts(session)
 
 
-@router.get("/clients/{client_id}")
+@router.get("/engagements/{engagement_id}")
 async def get_engagement(
-    client_id: str,
+    engagement_id: str,
     session: AsyncSession = Depends(get_org_scoped_session),
     _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> dict[str, Any]:
-    client = await clients_repo.get_by_id(session, client_id)
-    if client is None:
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
         raise HTTPException(status_code=404, detail="engagement not found")
     return {
-        "client": client,
-        "cards": await cards_repo.list_for_client(session, client_id),
-        "responses": await responses_repo.list_for_client(session, client_id),
-        "uploads": await uploads_repo.list_for_client(session, client_id),
+        "engagement": engagement,
+        "cards": await cards_repo.list_for_engagement(session, engagement_id),
+        "responses": await responses_repo.list_for_engagement(session, engagement_id),
+        "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
     }
 
 
-@router.post("/clients", status_code=201)
+@router.post("/engagements", status_code=201)
 async def create_engagement(
-    req: CreateClientRequest,
+    req: CreateEngagementRequest,
     session: AsyncSession = Depends(get_org_scoped_session),
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
@@ -153,7 +153,7 @@ async def create_engagement(
     body. RLS WITH CHECK would reject any other value anyway.
     """
     user, membership = org_member
-    row = await clients_repo.create_engagement(
+    row = await engagements_repo.create_engagement(
         session,
         name=req.name,
         org_name=req.org_name,
@@ -173,10 +173,10 @@ async def create_engagement(
     return row
 
 
-@router.patch("/clients/{client_id}")
+@router.patch("/engagements/{engagement_id}")
 async def update_engagement(
-    client_id: str,
-    req: UpdateClientRequest,
+    engagement_id: str,
+    req: UpdateEngagementRequest,
     session: AsyncSession = Depends(get_org_scoped_session),
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
@@ -192,7 +192,7 @@ async def update_engagement(
     if target_group is not None:
         if await groups_repo.get_by_id(session, target_group) is None:
             raise HTTPException(status_code=404, detail="folder not found")
-    row = await clients_repo.update_engagement(session, client_id, fields)
+    row = await engagements_repo.update_engagement(session, engagement_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
     await record_audit(
@@ -201,7 +201,7 @@ async def update_engagement(
         user_id=user.id,
         action="client.update",
         target_type="client",
-        target_id=client_id,
+        target_id=engagement_id,
         metadata={
             "changed_fields": sorted(fields.keys()),
             "name": row.get("name"),
@@ -211,9 +211,9 @@ async def update_engagement(
     return row
 
 
-@router.delete("/clients/{client_id}", status_code=204)
+@router.delete("/engagements/{engagement_id}", status_code=204)
 async def delete_engagement(
-    client_id: str,
+    engagement_id: str,
     session: AsyncSession = Depends(get_org_scoped_session),
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
@@ -226,11 +226,11 @@ async def delete_engagement(
     user, membership = org_member
     # Capture the name before the delete so the audit log can render
     # something more useful than a UUID once the row is gone.
-    snapshot = await clients_repo.get_by_id(session, client_id)
-    upload_paths = await clients_repo.list_upload_paths_for_client(
-        session, client_id
+    snapshot = await engagements_repo.get_by_id(session, engagement_id)
+    upload_paths = await engagements_repo.list_upload_paths_for_engagement(
+        session, engagement_id
     )
-    deleted = await clients_repo.delete_engagement(session, client_id)
+    deleted = await engagements_repo.delete_engagement(session, engagement_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="engagement not found")
     await record_audit(
@@ -239,7 +239,7 @@ async def delete_engagement(
         user_id=user.id,
         action="client.delete",
         target_type="client",
-        target_id=client_id,
+        target_id=engagement_id,
         metadata={"name": (snapshot or {}).get("name") if snapshot else None},
     )
     await session.commit()
@@ -251,9 +251,9 @@ async def delete_engagement(
         storage.delete_upload(path)
 
 
-@router.post("/clients/{client_id}/reset")
+@router.post("/engagements/{engagement_id}/reset")
 async def reset_engagement(
-    client_id: str,
+    engagement_id: str,
     session: AsyncSession = Depends(get_org_scoped_session),
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member
@@ -268,18 +268,18 @@ async def reset_engagement(
     Use when multiple people need to take the deck, or a client wants to
     start over."""
     user, membership = org_member
-    if (await clients_repo.get_by_id(session, client_id)) is None:
+    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
-    removed_uploads = await uploads_repo.delete_all_for_client(session, client_id)
-    responses_cleared = await responses_repo.delete_all_for_client(session, client_id)
+    removed_uploads = await uploads_repo.delete_all_for_engagement(session, engagement_id)
+    responses_cleared = await responses_repo.delete_all_for_engagement(session, engagement_id)
     await record_audit(
         session,
         org_id=membership.org_id,
         user_id=user.id,
         action="client.reset",
         target_type="client",
-        target_id=client_id,
+        target_id=engagement_id,
         metadata={
             "responses_cleared": responses_cleared,
             "uploads_cleared": len(removed_uploads),
@@ -407,9 +407,9 @@ async def delete_group(
 # ── Cards ──────────────────────────────────────────────────────────────────
 
 
-@router.post("/clients/{client_id}/cards", status_code=201)
+@router.post("/engagements/{engagement_id}/cards", status_code=201)
 async def add_card(
-    client_id: str,
+    engagement_id: str,
     req: CreateCardRequest,
     session: AsyncSession = Depends(get_org_scoped_session),
     org_member: tuple[User, OrganizationMembership] = Depends(
@@ -418,13 +418,13 @@ async def add_card(
 ) -> dict[str, Any]:
     # Verify the engagement exists; cleaner 404 than a FK violation.
     # RLS hides out-of-org engagements, so this also covers cross-org.
-    if (await clients_repo.get_by_id(session, client_id)) is None:
+    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
     user, membership = org_member
     row = await cards_repo.create_card(
         session,
-        client_id=client_id,
+        engagement_id=engagement_id,
         category=req.category,
         title=req.title,
         context=req.context,
@@ -446,7 +446,7 @@ async def add_card(
         target_type="card",
         target_id=row["id"],
         metadata={
-            "client_id": client_id,
+            "client_id": engagement_id,
             "title": row.get("title"),
             "response_type": req.response_type,
         },
@@ -455,9 +455,9 @@ async def add_card(
     return row
 
 
-@router.post("/clients/{client_id}/cards/import-markdown", status_code=201)
+@router.post("/engagements/{engagement_id}/cards/import-markdown", status_code=201)
 async def import_cards_markdown(
-    client_id: str,
+    engagement_id: str,
     req: ImportMarkdownRequest,
     session: AsyncSession = Depends(get_org_scoped_session),
     org_member: tuple[User, OrganizationMembership] = Depends(
@@ -471,7 +471,7 @@ async def import_cards_markdown(
     insert sees prior uncommitted rows in the same session, so ordering
     is stable.
     """
-    if (await clients_repo.get_by_id(session, client_id)) is None:
+    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
     try:
@@ -489,7 +489,7 @@ async def import_cards_markdown(
     for card in parsed:
         row = await cards_repo.create_card(
             session,
-            client_id=client_id,
+            engagement_id=engagement_id,
             org_id=org_id,
             **card.to_create_kwargs(),
         )
@@ -506,7 +506,7 @@ async def import_cards_markdown(
         user_id=user.id,
         action="card.import",
         target_type="client",
-        target_id=client_id,
+        target_id=engagement_id,
         # One audit row per import call, not per card — the bulk import
         # is the operator's single user action. ``count`` lets the UI
         # render "Tom imported 14 cards" without joining card rows.

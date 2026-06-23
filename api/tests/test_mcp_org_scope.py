@@ -191,7 +191,7 @@ async def _seed_client(db: AsyncSession, *, org_id: str, name: str) -> str:
     row = (
         await db.execute(
             text(
-                "insert into public.clients (name, token, org_id) "
+                "insert into public.engagements (name, token, org_id) "
                 "values (:n, :t, cast(:o as uuid)) returning id::text"
             ),
             {"n": name, "t": secrets.token_hex(8), "o": org_id},
@@ -270,7 +270,7 @@ async def test_mcp_tool_scoped_to_key_org(
         stored_org_id = (
             await db.execute(
                 text(
-                    "select org_id::text from public.clients "
+                    "select org_id::text from public.engagements "
                     "where id = cast(:i as uuid)"
                 ),
                 {"i": new_id},

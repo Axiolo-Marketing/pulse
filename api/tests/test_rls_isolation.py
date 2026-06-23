@@ -7,8 +7,8 @@ the multi-tenant security model is broken regardless of how the API behaves.
 The two load-bearing properties:
 1. `pulse_anon` with no `pulse.token` set sees zero rows across every
    RLS-protected table.
-2. `pulse_anon` with a valid token sees only the matching client's rows —
-   never the other client's.
+2. `pulse_anon` with a valid token sees only the matching engagement's
+   rows — never the other engagement's.
 
 The tests seed data as the superuser, then call `become_anon()` to switch
 the open transaction's effective role to `pulse_anon`. The seed data is
@@ -24,17 +24,17 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from tests.conftest import become_anon
 
 
-RLS_TABLES = ["clients", "cards", "responses", "uploads"]
+RLS_TABLES = ["engagements", "cards", "responses", "uploads"]
 
 
 async def _seed_full_set(
     db: AsyncSession,
-    client_id: str,
+    engagement_id: str,
     label: str,
     *,
     org_id: str,
 ) -> None:
-    """Insert one card + one response + one upload for the given client.
+    """Insert one card + one response + one upload for the given engagement.
 
     ``org_id`` is NOT NULL on every tenant-scoped table (migration 0005);
     we thread it through explicitly so the seed doesn't rely on the
@@ -43,29 +43,29 @@ async def _seed_full_set(
     await db.execute(
         text(
             "insert into public.cards "
-            "(client_id, order_index, category, title, context, question, "
+            "(engagement_id, order_index, category, title, context, question, "
             " response_type, org_id) "
             "values (cast(:cid as uuid), 1, 'C', :t, 'X', 'Q', 'short-text', "
             "        cast(:o as uuid))"
         ),
-        {"cid": client_id, "t": f"{label} card", "o": org_id},
+        {"cid": engagement_id, "t": f"{label} card", "o": org_id},
     )
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, org_id) "
-            "select id, client_id, 'answered', cast(:o as uuid) from public.cards "
-            "where client_id = cast(:cid as uuid)"
+            "insert into public.responses (card_id, engagement_id, state, org_id) "
+            "select id, engagement_id, 'answered', cast(:o as uuid) from public.cards "
+            "where engagement_id = cast(:cid as uuid)"
         ),
-        {"cid": client_id, "o": org_id},
+        {"cid": engagement_id, "o": org_id},
     )
     await db.execute(
         text(
             "insert into public.uploads "
-            "(card_id, client_id, file_name, file_size_bytes, storage_path, org_id) "
-            "select id, client_id, :fn, 100, 'x/y/z', cast(:o as uuid) "
-            "from public.cards where client_id = cast(:cid as uuid)"
+            "(card_id, engagement_id, file_name, file_size_bytes, storage_path, org_id) "
+            "select id, engagement_id, :fn, 100, 'x/y/z', cast(:o as uuid) "
+            "from public.cards where engagement_id = cast(:cid as uuid)"
         ),
-        {"cid": client_id, "fn": f"{label}.pdf", "o": org_id},
+        {"cid": engagement_id, "fn": f"{label}.pdf", "o": org_id},
     )
 
 
@@ -104,14 +104,14 @@ async def test_anon_with_token_sees_only_own_rows(
     ).scalar()
     assert count == 1, f"expected 1 visible row in {table}; got {count}"
 
-    visible_client_ids = [
+    visible_engagement_ids = [
         str(r[0])
         for r in (
-            await db_conn.execute(text(f"select client_id from public.{table}"))
+            await db_conn.execute(text(f"select engagement_id from public.{table}"))
         ).all()
     ]
-    assert visible_client_ids == [seed_client["id"]], (
-        f"{table} leaked rows from another client: {visible_client_ids}"
+    assert visible_engagement_ids == [seed_client["id"]], (
+        f"{table} leaked rows from another engagement: {visible_engagement_ids}"
     )
 
 
@@ -121,5 +121,5 @@ async def test_anon_with_unknown_token_sees_nothing(
     seed_client: dict[str, str],
 ) -> None:
     await become_anon(db_conn, token="ffffffffffffffff")
-    count = (await db_conn.execute(text("select count(*) from public.clients"))).scalar()
+    count = (await db_conn.execute(text("select count(*) from public.engagements"))).scalar()
     assert count == 0

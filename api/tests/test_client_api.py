@@ -53,7 +53,7 @@ async def test_me_reflects_voice_enabled_when_on(
     await db.execute(text("reset role"))
     await db.execute(
         text(
-            "update public.clients set voice_enabled = true "
+            "update public.engagements set voice_enabled = true "
             "where id = cast(:cid as uuid)"
         ),
         {"cid": seed_client["id"]},
@@ -78,7 +78,7 @@ async def test_cards_returns_only_my_clients_cards(
     await db.execute(
         text(
             "insert into public.cards "
-            "(client_id, order_index, category, title, context, question, "
+            "(engagement_id, order_index, category, title, context, question, "
             " response_type, org_id) "
             "values (cast(:cid as uuid), 99, 'C', 'Other card', 'X', 'Q', "
             "        'short-text', cast(:o as uuid))"
@@ -111,7 +111,7 @@ async def test_cards_ordering_by_order_index(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, "
+                "(engagement_id, order_index, category, title, context, question, "
                 " response_type, org_id) "
                 "values (cast(:cid as uuid), :i, 'C', :t, 'X', 'Q', "
                 "        'short-text', cast(:o as uuid))"
@@ -183,7 +183,7 @@ async def test_mark_viewed_cannot_target_other_clients_card(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, question, "
+                "(engagement_id, order_index, category, title, context, question, "
                 " response_type, org_id) "
                 "values (cast(:cid as uuid), 1, 'C', 'theirs', 'X', 'Q', "
                 "        'short-text', cast(:o as uuid)) "
@@ -323,7 +323,7 @@ async def test_heartbeat_updates_last_active_at(
     # Capture initial value BEFORE the API call (which switches role to anon)
     initial = (
         await db.execute(
-            text("select last_active_at from public.clients where id = cast(:i as uuid)"),
+            text("select last_active_at from public.engagements where id = cast(:i as uuid)"),
             {"i": seed_client["id"]},
         )
     ).scalar()
@@ -338,7 +338,7 @@ async def test_heartbeat_updates_last_active_at(
     # row through the policy.
     new = (
         await db.execute(
-            text("select last_active_at from public.clients limit 1")
+            text("select last_active_at from public.engagements limit 1")
         )
     ).scalar()
     assert new is not None

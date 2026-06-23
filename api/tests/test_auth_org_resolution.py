@@ -12,7 +12,7 @@ priority order under test mirrors what ``auth.middleware`` documents:
 
 A non-resolving case (no membership, no last_active_org_id) yields 403.
 
-We exercise the resolution by hitting ``GET /api/admin/clients`` because
+We exercise the resolution by hitting ``GET /api/admin/engagements`` because
 it is the smallest endpoint protected by ``get_current_org_member``;
 any 200 means the dep resolved and the role-flip succeeded.
 """
@@ -164,7 +164,7 @@ async def test_active_org_resolution(
     else:  # pragma: no cover — pytest enforces parametrize ids
         raise AssertionError(f"unknown scenario {scenario!r}")
 
-    r = await client.get("/api/admin/clients")
+    r = await client.get("/api/admin/engagements")
     assert r.status_code == expected_status, (
         f"{scenario}: got {r.status_code}, body={r.text!r}"
     )

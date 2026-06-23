@@ -6,15 +6,15 @@ import {
   orgsApi,
   type AuthUser,
   type Card,
-  type Client,
   type ClientResponse,
+  type Engagement,
   type EngagementDetail,
   type EngagementSummary,
   type GroupSummary,
   type OrgDetails,
   type OrgSummary,
   type ResponseType,
-  type UpdateClientArgs,
+  type UpdateEngagementArgs,
   type UploadRow,
 } from "../lib/api";
 import { applyBranding } from "../lib/branding";
@@ -394,7 +394,7 @@ interface RouteList {
 }
 interface RouteDetail {
   kind: "detail";
-  clientId: string;
+  engagementId: string;
 }
 interface RouteSettings {
   kind: "settings";
@@ -408,7 +408,7 @@ type Route = RouteList | RouteDetail | RouteSettings | RouteSuperadmin;
 function parseRoute(): Route {
   const hash = window.location.hash.replace(/^#/, "");
   const m = hash.match(/^client\/([0-9a-f-]+)$/i);
-  if (m) return { kind: "detail", clientId: m[1] };
+  if (m) return { kind: "detail", engagementId: m[1] };
   // Bare `#settings` redirects to `#settings/personal`; the explicit
   // `#settings/organization` and `#settings/activity` paths open the
   // matching tab. Anything else we treat as Personal so a typo doesn't
@@ -599,7 +599,7 @@ async function draw(
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
     try {
       const [summaries, groups] = await Promise.all([
-        adminApi.listClients(),
+        adminApi.listEngagements(),
         groupsApi.list(),
       ]);
       renderList(container, summaries, groups);
@@ -692,7 +692,7 @@ async function draw(
 
   container.innerHTML = `<div class="loading">Loading responses...</div>`;
   try {
-    const detail = await adminApi.getClient(route.clientId);
+    const detail = await adminApi.getEngagement(route.engagementId);
     renderDetail(container, detail);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
@@ -739,7 +739,7 @@ function engagementRowHtml(
 ): string {
   const completed = s.answered_count + s.skipped_count;
   return `
-    <tr data-client-id="${escape(s.id)}">
+    <tr data-engagement-id="${escape(s.id)}">
       <td>
         <div class="client-name">${escape(s.name)}</div>
         <div class="org-name">${escape(s.org_name ?? "")}</div>
@@ -877,13 +877,13 @@ function renderList(
     const target = e.target;
     if (!(target instanceof HTMLSelectElement)) return;
     if (target.dataset.action !== "move") return;
-    const row = target.closest<HTMLElement>("tr[data-client-id]");
+    const row = target.closest<HTMLElement>("tr[data-engagement-id]");
     if (!row) return;
-    const clientId = row.dataset.clientId!;
+    const engagementId = row.dataset.engagementId!;
     const raw = target.value;
     const newGroupId = raw === UNGROUPED ? null : raw;
     try {
-      await adminApi.updateClient(clientId, { group_id: newGroupId });
+      await adminApi.updateEngagement(engagementId, { group_id: newGroupId });
       toast(newGroupId === null ? "Moved to Ungrouped" : "Moved to folder");
       await reloadList(container);
     } catch (err) {
@@ -940,16 +940,16 @@ function renderList(
     const action = btn.dataset.action;
     if (action === "new-engagement" || action === "new-folder") return; // handled in bindListHeader
 
-    const row = btn.closest<HTMLElement>("tr[data-client-id]");
+    const row = btn.closest<HTMLElement>("tr[data-engagement-id]");
     if (!row) return;
-    const clientId = row.dataset.clientId!;
+    const engagementId = row.dataset.engagementId!;
 
-    const summary = summaries.find((s) => s.id === clientId);
+    const summary = summaries.find((s) => s.id === engagementId);
     if (!summary) return;
 
     switch (action) {
       case "view":
-        window.location.hash = `client/${clientId}`;
+        window.location.hash = `client/${engagementId}`;
         return;
       case "copy-link":
         await navigator.clipboard.writeText(`${PROD_URL}?t=${summary.token}`);
@@ -1183,7 +1183,7 @@ function openNewEngagementModal(
     }
 
     try {
-      const created = await adminApi.createClient({
+      const created = await adminApi.createEngagement({
         name,
         org_name: org || null,
         engagement_name: eng || null,
@@ -1192,11 +1192,11 @@ function openNewEngagementModal(
       // assigned via PATCH. Fold them into a single follow-up update so a
       // new engagement lands in the right folder with voice on if asked.
       // Voice defaults off server-side, so only PATCH when it's checked.
-      const patch: UpdateClientArgs = {};
+      const patch: UpdateEngagementArgs = {};
       if (groupId !== null) patch.group_id = groupId;
       if (voiceEnabled) patch.voice_enabled = true;
       if (Object.keys(patch).length > 0) {
-        await adminApi.updateClient(created.id, patch);
+        await adminApi.updateEngagement(created.id, patch);
       }
       close();
       toast(`Engagement created for ${created.name}`);
@@ -1215,7 +1215,7 @@ function openNewEngagementModal(
 
 // ── edit engagement modal ───────────────────────────────────────────────
 
-function renderDetailHeader(client: Client): string {
+function renderDetailHeader(client: Engagement): string {
   const subtitle = [client.org_name, client.engagement_name]
     .filter((s) => s && s.trim().length > 0)
     .map((s) => escape(s as string))
@@ -1305,7 +1305,7 @@ function openConfirmModal(opts: ConfirmModalOptions): void {
 }
 
 function openEditEngagementModal(
-  client: Client & { token: string },
+  client: Engagement & { token: string },
   onSaved: (updated: { name: string; org_name: string | null; engagement_name: string | null }) => void,
 ): void {
   const modalEl = document.createElement("div");
@@ -1397,7 +1397,7 @@ function openEditEngagementModal(
     }
 
     const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ee-voice")?.checked ?? false;
-    const args: UpdateClientArgs = {
+    const args: UpdateEngagementArgs = {
       name,
       org_name: org || null,
       engagement_name: eng || null,
@@ -1411,7 +1411,7 @@ function openEditEngagementModal(
     }
 
     try {
-      const updated = await adminApi.updateClient(client.id, args);
+      const updated = await adminApi.updateEngagement(client.id, args);
       client.group_id = updated.group_id ?? null;
       client.voice_enabled = updated.voice_enabled;
       onSaved({
@@ -1440,7 +1440,7 @@ function openEditEngagementModal(
 async function reloadList(container: HTMLElement): Promise<void> {
   try {
     const [summaries, groups] = await Promise.all([
-      adminApi.listClients(),
+      adminApi.listEngagements(),
       groupsApi.list(),
     ]);
     renderList(container, summaries, groups);
@@ -1453,7 +1453,7 @@ async function reloadList(container: HTMLElement): Promise<void> {
 // ── detail view ──────────────────────────────────────────────────────────
 
 interface DetailViewData {
-  client: Client & { token: string };
+  client: Engagement & { token: string };
   cards: Card[];
   responses: Map<string, ClientResponse>;
   uploads: Map<string, UploadRow[]>;
@@ -1468,7 +1468,7 @@ function bucketDetail(payload: EngagementDetail): DetailViewData {
     list.push(u);
     uploads.set(u.card_id, list);
   }
-  return { client: payload.client, cards: payload.cards, responses, uploads };
+  return { client: payload.engagement, cards: payload.cards, responses, uploads };
 }
 
 function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
@@ -1648,7 +1648,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       const orig = btn.textContent;
       btn.textContent = "Saving...";
       try {
-        await adminApi.updateClient(client.id, { brief: next || null });
+        await adminApi.updateEngagement(client.id, { brief: next || null });
         client.brief = next || null;
         toast("Brief saved");
         showBriefView();
@@ -2177,7 +2177,7 @@ Any HTML deliverables for this engagement. Drop files in \`public/deliverables/\
 - [ ] Engagement deleted if access should end
 `;
 
-function renderBriefView(client: Client): string {
+function renderBriefView(client: Engagement): string {
   const hasBrief = !!(client.brief && client.brief.trim().length > 0);
   if (!hasBrief) {
     return `
@@ -2207,7 +2207,7 @@ function renderBriefView(client: Client): string {
   `;
 }
 
-function renderBriefEdit(client: Client): string {
+function renderBriefEdit(client: Engagement): string {
   const value = client.brief && client.brief.trim().length > 0 ? client.brief : BRIEF_TEMPLATE;
   return `
     <div class="brief-card brief-editing">
@@ -2518,7 +2518,7 @@ function summarizeUploads(uploads: UploadRow[]): UploadInfo[] {
 }
 
 function buildSingleCardMarkdown(
-  client: Client,
+  client: Engagement,
   card: Card,
   response: ClientResponse | undefined,
   uploads: UploadRow[],
@@ -2555,7 +2555,7 @@ function slugify(s: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function downloadFilename(client: Client): string {
+function downloadFilename(client: Engagement): string {
   const today = new Date().toISOString().slice(0, 10);
   const parts = [client.org_name, client.engagement_name]
     .map((s) => s?.trim())

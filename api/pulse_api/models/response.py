@@ -20,7 +20,7 @@ class Response(SQLModel, table=True):
     Attributes:
         id: UUID primary key.
         card_id: Card being answered.
-        client_id: Owning engagement.
+        engagement_id: Owning engagement.
         org_id: Owning organization (nullable in PR 1, NOT NULL in PR 2).
         state: One of `not_started|viewed|answered|skipped|needs_edit`.
         response_value: JSONB blob whose shape depends on `response_type`.
@@ -31,7 +31,7 @@ class Response(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     card_id: uuid.UUID = Field(foreign_key="cards.id")
-    client_id: uuid.UUID = Field(foreign_key="clients.id")
+    engagement_id: uuid.UUID = Field(foreign_key="engagements.id")
     org_id: uuid.UUID | None = Field(
         default=None, foreign_key="organizations.id", index=True
     )

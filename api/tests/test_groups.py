@@ -3,7 +3,7 @@
 Three layers, mirroring the rest of the suite:
 
 * **HTTP route layer** — drive the ``/api/admin/groups`` CRUD + the
-  ``PATCH /api/admin/clients/{id}`` move through the real ASGI surface
+  ``PATCH /api/admin/engagements/{id}`` move through the real ASGI surface
   as the seeded admin (``admin_authed``). Assert the response shapes,
   the ``client_count`` projection, the ``group_id`` round-trip on the
   engagement, the ungroup-on-delete behaviour, and the cross-org 404 on
@@ -117,7 +117,7 @@ async def test_list_groups_includes_client_count(
 
     # Move the seeded engagement in → count becomes 1.
     await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"group_id": created["id"]},
     )
     listed = (await admin_authed.get("/api/admin/groups")).json()
@@ -180,13 +180,13 @@ async def test_delete_group_ungroups_engagements(
         await admin_authed.post("/api/admin/groups", json={"name": "Bucket"})
     ).json()
     await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"group_id": created["id"]},
     )
     # Sanity: the engagement is in the folder.
     moved = (
-        await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
-    ).json()["client"]
+        await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
+    ).json()["engagement"]
     assert moved["group_id"] == created["id"]
 
     r = await admin_authed.delete(f"/api/admin/groups/{created['id']}")
@@ -194,14 +194,14 @@ async def test_delete_group_ungroups_engagements(
 
     # The engagement still exists and is now ungrouped (group_id null).
     after = (
-        await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
-    ).json()["client"]
+        await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
+    ).json()["engagement"]
     assert after["group_id"] is None
     # Row still present in the DB — only the folder was removed.
     still_there = (
         await db.execute(
             text(
-                "select group_id from public.clients "
+                "select group_id from public.engagements "
                 "where id = cast(:c as uuid)"
             ),
             {"c": seed_client["id"]},
@@ -221,12 +221,12 @@ async def test_patch_client_moves_into_folder(
         await admin_authed.post("/api/admin/groups", json={"name": "Dest"})
     ).json()
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"group_id": g["id"]}
+        f"/api/admin/engagements/{seed_client['id']}", json={"group_id": g["id"]}
     )
     assert r.status_code == 200
     assert r.json()["group_id"] == g["id"]
     # The list projection carries the folder name too.
-    listed = (await admin_authed.get("/api/admin/clients")).json()
+    listed = (await admin_authed.get("/api/admin/engagements")).json()
     row = next(c for c in listed if c["id"] == seed_client["id"])
     assert row["group_id"] == g["id"]
     assert row["group_name"] == "Dest"
@@ -239,10 +239,10 @@ async def test_patch_client_ungroup_with_null(
         await admin_authed.post("/api/admin/groups", json={"name": "Dest"})
     ).json()
     await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"group_id": g["id"]}
+        f"/api/admin/engagements/{seed_client['id']}", json={"group_id": g["id"]}
     )
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"group_id": None}
+        f"/api/admin/engagements/{seed_client['id']}", json={"group_id": None}
     )
     assert r.status_code == 200
     assert r.json()["group_id"] is None
@@ -252,7 +252,7 @@ async def test_patch_client_unknown_folder_returns_404(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"group_id": str(uuid.uuid4())},
     )
     assert r.status_code == 404
@@ -265,11 +265,11 @@ async def test_patch_client_omitting_group_id_leaves_it_untouched(
         await admin_authed.post("/api/admin/groups", json={"name": "Keep"})
     ).json()
     await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"group_id": g["id"]}
+        f"/api/admin/engagements/{seed_client['id']}", json={"group_id": g["id"]}
     )
     # A patch that omits group_id must not null the column.
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"brief": "hi"}
+        f"/api/admin/engagements/{seed_client['id']}", json={"brief": "hi"}
     )
     assert r.status_code == 200
     assert r.json()["group_id"] == g["id"]
@@ -289,14 +289,14 @@ async def test_patch_client_into_foreign_org_folder_rejected(
     foreign_group = await _make_group(db, org_id=acme_id, name="Acme folder")
 
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"group_id": foreign_group},
     )
     assert r.status_code == 404
     # Untouched.
     after = (
-        await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
-    ).json()["client"]
+        await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
+    ).json()["engagement"]
     assert after["group_id"] is None
 
 

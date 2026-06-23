@@ -20,15 +20,15 @@ from pulse_api.config import settings
 
 
 ADMIN_ENDPOINTS = [
-    ("GET",    "/api/admin/clients",                                      None),
-    ("GET",    "/api/admin/clients/00000000-0000-0000-0000-000000000000", None),
-    ("POST",   "/api/admin/clients",                                      {"name": "x"}),
-    ("PATCH",  "/api/admin/clients/00000000-0000-0000-0000-000000000000", {"name": "y"}),
-    ("DELETE", "/api/admin/clients/00000000-0000-0000-0000-000000000000", None),
-    ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/reset", None),
-    ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards",
+    ("GET",    "/api/admin/engagements",                                      None),
+    ("GET",    "/api/admin/engagements/00000000-0000-0000-0000-000000000000", None),
+    ("POST",   "/api/admin/engagements",                                      {"name": "x"}),
+    ("PATCH",  "/api/admin/engagements/00000000-0000-0000-0000-000000000000", {"name": "y"}),
+    ("DELETE", "/api/admin/engagements/00000000-0000-0000-0000-000000000000", None),
+    ("POST",   "/api/admin/engagements/00000000-0000-0000-0000-000000000000/reset", None),
+    ("POST",   "/api/admin/engagements/00000000-0000-0000-0000-000000000000/cards",
         {"category": "C", "title": "T", "context": "X", "question": "Q", "response_type": "short-text"}),
-    ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards/import-markdown",
+    ("POST",   "/api/admin/engagements/00000000-0000-0000-0000-000000000000/cards/import-markdown",
         {"markdown": "## Card 1: X\n\n**Category:** C\n**Type:** short-text\n**Skip:** optional\n\n**Context:** ctx\n\n**Question:** q?"}),
     ("PATCH",  "/api/admin/cards/00000000-0000-0000-0000-000000000000",   {"title": "y"}),
     ("DELETE", "/api/admin/cards/00000000-0000-0000-0000-000000000000",   None),
@@ -67,7 +67,7 @@ async def test_admin_endpoint_rejects_non_admin(
     assert r.status_code == 403
 
 
-# ── GET /api/admin/clients ────────────────────────────────────────────────
+# ── GET /api/admin/engagements ────────────────────────────────────────────────
 
 
 async def test_list_engagements_includes_aggregates(
@@ -80,20 +80,20 @@ async def test_list_engagements_includes_aggregates(
     answered_id, skipped_id = seed_cards[0]["id"], seed_cards[1]["id"]
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "insert into public.responses (card_id, engagement_id, state, answered_at) "
             "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
         ),
         {"k": answered_id, "c": seed_client["id"]},
     )
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "insert into public.responses (card_id, engagement_id, state, answered_at) "
             "values (cast(:k as uuid), cast(:c as uuid), 'skipped', now())"
         ),
         {"k": skipped_id, "c": seed_client["id"]},
     )
 
-    r = await admin_authed.get("/api/admin/clients")
+    r = await admin_authed.get("/api/admin/engagements")
     assert r.status_code == 200
     row = next(c for c in r.json() if c["id"] == seed_client["id"])
     assert row["total_cards"] == 8
@@ -109,12 +109,12 @@ async def test_list_engagements_returns_all_clients(
     """Both clients show up regardless of which was inserted first.
     Order is `created_at desc` but the two fixture inserts can land on
     the same microsecond — don't assert on their relative order here."""
-    r = await admin_authed.get("/api/admin/clients")
+    r = await admin_authed.get("/api/admin/engagements")
     ids = {c["id"] for c in r.json()}
     assert ids == {seed_client["id"], other_seeded_client["id"]}
 
 
-# ── GET /api/admin/clients/{id} ───────────────────────────────────────────
+# ── GET /api/admin/engagements/{id} ───────────────────────────────────────────
 
 
 async def test_get_engagement_returns_full_detail(
@@ -122,33 +122,33 @@ async def test_get_engagement_returns_full_detail(
     seed_client: dict[str, str],
     seed_cards: list[dict[str, str]],
 ) -> None:
-    r = await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
+    r = await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
     assert r.status_code == 200
     body = r.json()
-    assert body["client"]["id"] == seed_client["id"]
+    assert body["engagement"]["id"] == seed_client["id"]
     assert len(body["cards"]) == 8
     assert body["responses"] == []
     assert body["uploads"] == []
 
 
 async def test_get_engagement_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
-    r = await admin_authed.get(f"/api/admin/clients/{uuid.uuid4()}")
+    r = await admin_authed.get(f"/api/admin/engagements/{uuid.uuid4()}")
     assert r.status_code == 404
 
 
 async def test_get_engagement_malformed_id_returns_404(admin_authed: AsyncClient) -> None:
-    r = await admin_authed.get("/api/admin/clients/not-a-uuid")
+    r = await admin_authed.get("/api/admin/engagements/not-a-uuid")
     assert r.status_code == 404
 
 
-# ── POST /api/admin/clients ───────────────────────────────────────────────
+# ── POST /api/admin/engagements ───────────────────────────────────────────────
 
 
 async def test_create_engagement_generates_token(
     admin_authed: AsyncClient, db: AsyncSession
 ) -> None:
     r = await admin_authed.post(
-        "/api/admin/clients",
+        "/api/admin/engagements",
         json={"name": "New Client", "org_name": "Acme", "engagement_name": "Q3 review"},
     )
     assert r.status_code == 201
@@ -171,26 +171,26 @@ async def test_create_engagement_generates_token(
 async def test_create_engagement_validation(
     admin_authed: AsyncClient, payload: dict, expected_status: int
 ) -> None:
-    r = await admin_authed.post("/api/admin/clients", json=payload)
+    r = await admin_authed.post("/api/admin/engagements", json=payload)
     assert r.status_code == expected_status
 
 
 async def test_create_two_engagements_have_distinct_tokens(
     admin_authed: AsyncClient,
 ) -> None:
-    r1 = await admin_authed.post("/api/admin/clients", json={"name": "A"})
-    r2 = await admin_authed.post("/api/admin/clients", json={"name": "B"})
+    r1 = await admin_authed.post("/api/admin/engagements", json={"name": "A"})
+    r2 = await admin_authed.post("/api/admin/engagements", json={"name": "B"})
     assert r1.json()["token"] != r2.json()["token"]
 
 
-# ── PATCH /api/admin/clients/{id} ─────────────────────────────────────────
+# ── PATCH /api/admin/engagements/{id} ─────────────────────────────────────────
 
 
 async def test_patch_engagement_updates_brief(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"brief": "## Goals\n- ship the migration"},
     )
     assert r.status_code == 200
@@ -201,10 +201,10 @@ async def test_patch_engagement_partial_only_writes_provided_fields(
     admin_authed: AsyncClient, seed_client: dict[str, str], db: AsyncSession
 ) -> None:
     await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"brief": "v1"}
+        f"/api/admin/engagements/{seed_client['id']}", json={"brief": "v1"}
     )
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"org_name": "New Org"}
+        f"/api/admin/engagements/{seed_client['id']}", json={"org_name": "New Org"}
     )
     assert r.json()["org_name"] == "New Org"
     # brief was NOT overwritten by the second PATCH
@@ -218,7 +218,7 @@ async def test_patch_engagement_does_not_accept_token_field(
     sneaky PATCH body field."""
     original = seed_client["token"]
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"token": "ffffffffffffffff", "name": "still updates name"},
     )
     assert r.status_code == 200
@@ -228,7 +228,7 @@ async def test_patch_engagement_does_not_accept_token_field(
 
 async def test_patch_engagement_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
     r = await admin_authed.patch(
-        f"/api/admin/clients/{uuid.uuid4()}", json={"name": "x"}
+        f"/api/admin/engagements/{uuid.uuid4()}", json={"name": "x"}
     )
     assert r.status_code == 404
 
@@ -236,23 +236,23 @@ async def test_patch_engagement_unknown_id_returns_404(admin_authed: AsyncClient
 async def test_get_engagement_voice_enabled_defaults_false(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
-    r = await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
+    r = await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
     assert r.status_code == 200
-    assert r.json()["client"]["voice_enabled"] is False
+    assert r.json()["engagement"]["voice_enabled"] is False
 
 
 async def test_patch_engagement_toggles_voice_enabled(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"voice_enabled": True},
     )
     assert r.status_code == 200
     assert r.json()["voice_enabled"] is True
     # And it persists on a fresh read.
-    detail = await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
-    assert detail.json()["client"]["voice_enabled"] is True
+    detail = await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
+    assert detail.json()["engagement"]["voice_enabled"] is True
 
 
 async def test_patch_engagement_omitting_voice_enabled_leaves_it(
@@ -261,11 +261,11 @@ async def test_patch_engagement_omitting_voice_enabled_leaves_it(
     """A PATCH without `voice_enabled` must not reset the flag — it rides
     the same `model_dump(exclude_unset=True)` path as every other field."""
     await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"voice_enabled": True},
     )
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}", json={"org_name": "New Org"}
+        f"/api/admin/engagements/{seed_client['id']}", json={"org_name": "New Org"}
     )
     assert r.status_code == 200
     assert r.json()["org_name"] == "New Org"
@@ -275,13 +275,13 @@ async def test_patch_engagement_omitting_voice_enabled_leaves_it(
 async def test_list_engagements_includes_voice_enabled(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
-    r = await admin_authed.get("/api/admin/clients")
+    r = await admin_authed.get("/api/admin/engagements")
     assert r.status_code == 200
     row = next(c for c in r.json() if c["id"] == seed_client["id"])
     assert row["voice_enabled"] is False
 
 
-# ── DELETE /api/admin/clients/{id} ────────────────────────────────────────
+# ── DELETE /api/admin/engagements/{id} ────────────────────────────────────────
 
 
 async def test_delete_engagement_removes_client_and_cascades(
@@ -293,19 +293,19 @@ async def test_delete_engagement_removes_client_and_cascades(
     # Seed a response too so we can prove cascade.
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "insert into public.responses (card_id, engagement_id, state, answered_at) "
             "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
         ),
         {"k": seed_cards[0]["id"], "c": seed_client["id"]},
     )
 
-    r = await admin_authed.delete(f"/api/admin/clients/{seed_client['id']}")
+    r = await admin_authed.delete(f"/api/admin/engagements/{seed_client['id']}")
     assert r.status_code == 204
 
     # Client gone
     row = (
         await db.execute(
-            text("select count(*) from public.clients where id = cast(:c as uuid)"),
+            text("select count(*) from public.engagements where id = cast(:c as uuid)"),
             {"c": seed_client["id"]},
         )
     ).scalar_one()
@@ -314,13 +314,13 @@ async def test_delete_engagement_removes_client_and_cascades(
     # Cards + responses cascaded
     cards_remaining = (
         await db.execute(
-            text("select count(*) from public.cards where client_id = cast(:c as uuid)"),
+            text("select count(*) from public.cards where engagement_id = cast(:c as uuid)"),
             {"c": seed_client["id"]},
         )
     ).scalar_one()
     responses_remaining = (
         await db.execute(
-            text("select count(*) from public.responses where client_id = cast(:c as uuid)"),
+            text("select count(*) from public.responses where engagement_id = cast(:c as uuid)"),
             {"c": seed_client["id"]},
         )
     ).scalar_one()
@@ -349,13 +349,13 @@ async def test_delete_engagement_removes_upload_files_from_disk(
     await db.execute(
         text(
             "insert into public.uploads "
-            "(card_id, client_id, file_name, file_size_bytes, storage_path) "
+            "(card_id, engagement_id, file_name, file_size_bytes, storage_path) "
             "values (cast(:k as uuid), cast(:c as uuid), :fn, 5, :sp)"
         ),
         {"k": card_id, "c": client_id, "fn": "some.txt", "sp": rel_path},
     )
 
-    r = await admin_authed.delete(f"/api/admin/clients/{client_id}")
+    r = await admin_authed.delete(f"/api/admin/engagements/{client_id}")
     assert r.status_code == 204
     assert not full_path.exists()
 
@@ -375,7 +375,7 @@ async def test_reset_engagement_clears_answers_keeps_cards(
     # A response and an upload (row + file on disk).
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "insert into public.responses (card_id, engagement_id, state, answered_at) "
             "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
         ),
         {"k": card_id, "c": client_id},
@@ -387,26 +387,26 @@ async def test_reset_engagement_clears_answers_keeps_cards(
     await db.execute(
         text(
             "insert into public.uploads "
-            "(card_id, client_id, file_name, file_size_bytes, storage_path) "
+            "(card_id, engagement_id, file_name, file_size_bytes, storage_path) "
             "values (cast(:k as uuid), cast(:c as uuid), :fn, 4, :sp)"
         ),
         {"k": card_id, "c": client_id, "fn": "reset-me.txt", "sp": rel_path},
     )
 
-    r = await admin_authed.post(f"/api/admin/clients/{client_id}/reset")
+    r = await admin_authed.post(f"/api/admin/engagements/{client_id}/reset")
     assert r.status_code == 200
     assert r.json() == {"responses_cleared": 1, "uploads_cleared": 1}
 
     # Answers gone, file unlinked.
     responses_left = (
         await db.execute(
-            text("select count(*) from public.responses where client_id = cast(:c as uuid)"),
+            text("select count(*) from public.responses where engagement_id = cast(:c as uuid)"),
             {"c": client_id},
         )
     ).scalar_one()
     uploads_left = (
         await db.execute(
-            text("select count(*) from public.uploads where client_id = cast(:c as uuid)"),
+            text("select count(*) from public.uploads where engagement_id = cast(:c as uuid)"),
             {"c": client_id},
         )
     ).scalar_one()
@@ -417,24 +417,24 @@ async def test_reset_engagement_clears_answers_keeps_cards(
     # Cards + engagement preserved.
     cards_left = (
         await db.execute(
-            text("select count(*) from public.cards where client_id = cast(:c as uuid)"),
+            text("select count(*) from public.cards where engagement_id = cast(:c as uuid)"),
             {"c": client_id},
         )
     ).scalar_one()
     assert cards_left == len(seed_cards)
-    detail = await admin_authed.get(f"/api/admin/clients/{client_id}")
+    detail = await admin_authed.get(f"/api/admin/engagements/{client_id}")
     assert detail.status_code == 200
 
 
 async def test_reset_engagement_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
-    r = await admin_authed.post(f"/api/admin/clients/{uuid.uuid4()}/reset")
+    r = await admin_authed.post(f"/api/admin/engagements/{uuid.uuid4()}/reset")
     assert r.status_code == 404
 
 
 async def test_delete_engagement_unknown_id_returns_404(
     admin_authed: AsyncClient,
 ) -> None:
-    r = await admin_authed.delete(f"/api/admin/clients/{uuid.uuid4()}")
+    r = await admin_authed.delete(f"/api/admin/engagements/{uuid.uuid4()}")
     assert r.status_code == 404
 
 
@@ -444,19 +444,19 @@ async def test_delete_engagement_only_affects_targeted_client(
     other_seeded_client: dict[str, str],
     db: AsyncSession,
 ) -> None:
-    r = await admin_authed.delete(f"/api/admin/clients/{seed_client['id']}")
+    r = await admin_authed.delete(f"/api/admin/engagements/{seed_client['id']}")
     assert r.status_code == 204
 
     remaining = (
         await db.execute(
-            text("select count(*) from public.clients where id = cast(:c as uuid)"),
+            text("select count(*) from public.engagements where id = cast(:c as uuid)"),
             {"c": other_seeded_client["id"]},
         )
     ).scalar_one()
     assert remaining == 1
 
 
-# ── POST /api/admin/clients/{id}/cards ────────────────────────────────────
+# ── POST /api/admin/engagements/{id}/cards ────────────────────────────────────
 
 
 async def test_add_card_assigns_next_order_index(
@@ -466,7 +466,7 @@ async def test_add_card_assigns_next_order_index(
 ) -> None:
     # seed_cards inserted 8 cards (indices 1..8). New card should be 9.
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards",
+        f"/api/admin/engagements/{seed_client['id']}/cards",
         json={
             "category": "New",
             "title": "Ninth card",
@@ -490,7 +490,7 @@ async def test_add_card_accepts_every_response_type(
     admin_authed: AsyncClient, seed_client: dict[str, str], response_type: str
 ) -> None:
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards",
+        f"/api/admin/engagements/{seed_client['id']}/cards",
         json={
             "category": "C", "title": "T", "context": "X", "question": "Q",
             "response_type": response_type,
@@ -505,7 +505,7 @@ async def test_add_card_rejects_invalid_response_type(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards",
+        f"/api/admin/engagements/{seed_client['id']}/cards",
         json={
             "category": "C", "title": "T", "context": "X", "question": "Q",
             "response_type": "free-form",  # not in the enum
@@ -516,7 +516,7 @@ async def test_add_card_rejects_invalid_response_type(
 
 async def test_add_card_unknown_engagement_returns_404(admin_authed: AsyncClient) -> None:
     r = await admin_authed.post(
-        f"/api/admin/clients/{uuid.uuid4()}/cards",
+        f"/api/admin/engagements/{uuid.uuid4()}/cards",
         json={
             "category": "C", "title": "T", "context": "X", "question": "Q",
             "response_type": "short-text",
@@ -525,7 +525,7 @@ async def test_add_card_unknown_engagement_returns_404(admin_authed: AsyncClient
     assert r.status_code == 404
 
 
-# ── POST /api/admin/clients/{id}/cards/import-markdown ────────────────────
+# ── POST /api/admin/engagements/{id}/cards/import-markdown ────────────────────
 
 
 IMPORT_MD_TWO_CARDS = """\
@@ -566,7 +566,7 @@ async def test_import_markdown_creates_cards_in_order(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        f"/api/admin/engagements/{seed_client['id']}/cards/import-markdown",
         json={"markdown": IMPORT_MD_TWO_CARDS},
     )
     assert r.status_code == 201
@@ -587,7 +587,7 @@ async def test_import_markdown_appends_after_existing_cards(
 ) -> None:
     """seed_cards inserts 8 cards. Imported cards should start at order 9."""
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        f"/api/admin/engagements/{seed_client['id']}/cards/import-markdown",
         json={"markdown": IMPORT_MD_TWO_CARDS},
     )
     assert r.status_code == 201
@@ -599,7 +599,7 @@ async def test_import_markdown_unknown_engagement_returns_404(
     admin_authed: AsyncClient,
 ) -> None:
     r = await admin_authed.post(
-        f"/api/admin/clients/{uuid.uuid4()}/cards/import-markdown",
+        f"/api/admin/engagements/{uuid.uuid4()}/cards/import-markdown",
         json={"markdown": IMPORT_MD_TWO_CARDS},
     )
     assert r.status_code == 404
@@ -620,7 +620,7 @@ async def test_import_markdown_returns_parse_errors(
 **Question:** q?
 """
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        f"/api/admin/engagements/{seed_client['id']}/cards/import-markdown",
         json={"markdown": bad},
     )
     assert r.status_code == 400
@@ -632,7 +632,7 @@ async def test_import_markdown_rejects_empty_body(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        f"/api/admin/engagements/{seed_client['id']}/cards/import-markdown",
         json={"markdown": ""},
     )
     assert r.status_code == 422
@@ -659,7 +659,7 @@ async def test_import_markdown_no_partial_writes_on_error(
 **Question:** q?
 """
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        f"/api/admin/engagements/{seed_client['id']}/cards/import-markdown",
         json={"markdown": mixed},
     )
     assert r.status_code == 400
@@ -667,7 +667,7 @@ async def test_import_markdown_no_partial_writes_on_error(
     count = (
         await db.execute(
             text(
-                "select count(*) from public.cards where client_id = cast(:c as uuid)"
+                "select count(*) from public.cards where engagement_id = cast(:c as uuid)"
             ),
             {"c": seed_client["id"]},
         )
@@ -738,7 +738,7 @@ async def test_delete_card_cascades_responses(
     # Attach a response to the card
     await db.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, answered_at) "
+            "insert into public.responses (card_id, engagement_id, state, answered_at) "
             "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
         ),
         {"k": card_id, "c": seed_client["id"]},

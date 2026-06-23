@@ -7,8 +7,8 @@ traversal guard on the disk side).
 Order of operations on POST:
   1. Validate the card_id belongs to the caller (RLS-filtered SELECT).
   2. Read and size-check the request body.
-  3. Build the storage path from authenticated client_id + card_id (NEVER
-     the request body's idea of these).
+  3. Build the storage path from authenticated engagement_id + card_id
+     (NEVER the request body's idea of these).
   4. Write file to disk.
   5. Insert uploads row. If RLS rejects (impossible at this point given
      step 1, but defense-in-depth), delete the file we just wrote.
@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pulse_api import storage
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
-from pulse_api.repos import clients as clients_repo
+from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import uploads as uploads_repo
 
 router = APIRouter(prefix="/api", tags=["client"])
@@ -48,8 +48,8 @@ async def upload_file(
     # Voice is gated per engagement (default off). Refuse the write when
     # the toggle is off even though the UI hides the control — this guard
     # is the real enforcement; the hidden button is only cosmetic. The
-    # flag is read RLS-scoped from the token's own client row.
-    if kind == "voice" and not await clients_repo.voice_enabled_for_my_client(
+    # flag is read RLS-scoped from the token's own engagement row.
+    if kind == "voice" and not await engagements_repo.voice_enabled_for_my_engagement(
         session
     ):
         raise HTTPException(
@@ -63,14 +63,14 @@ async def upload_file(
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="empty file")
 
-    client_id = await uploads_repo.get_current_client_id(session)
-    if client_id is None:
-        # Token didn't resolve to a client — same shape as RLS rejection.
+    engagement_id = await uploads_repo.get_current_engagement_id(session)
+    if engagement_id is None:
+        # Token didn't resolve to an engagement — same shape as RLS rejection.
         raise HTTPException(status_code=404, detail="client not found")
 
     try:
         relative_path = storage.build_storage_path(
-            client_id=client_id,
+            engagement_id=engagement_id,
             card_id=card_id,
             filename=file.filename or "file",
         )

@@ -194,7 +194,7 @@ async def test_audit_client_create(
     db: AsyncSession,
     seed_admin_user: dict[str, str],
 ) -> None:
-    r = await admin_authed.post("/api/admin/clients", json={"name": "Acme"})
+    r = await admin_authed.post("/api/admin/engagements", json={"name": "Acme"})
     assert r.status_code == 201
 
     rows = await _fetch_audit_rows(
@@ -214,7 +214,7 @@ async def test_audit_client_update_captures_changed_fields(
     seed_client: dict[str, str],
 ) -> None:
     r = await admin_authed.patch(
-        f"/api/admin/clients/{seed_client['id']}",
+        f"/api/admin/engagements/{seed_client['id']}",
         json={"name": "Renamed", "brief": "Hello"},
     )
     assert r.status_code == 200
@@ -234,7 +234,7 @@ async def test_audit_client_delete_snapshots_name(
     seed_client: dict[str, str],
 ) -> None:
     name = seed_client["name"]
-    r = await admin_authed.delete(f"/api/admin/clients/{seed_client['id']}")
+    r = await admin_authed.delete(f"/api/admin/engagements/{seed_client['id']}")
     assert r.status_code == 204
 
     rows = await _fetch_audit_rows(
@@ -251,7 +251,7 @@ async def test_audit_card_create_and_update_and_delete(
     seed_client: dict[str, str],
 ) -> None:
     create = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards",
+        f"/api/admin/engagements/{seed_client['id']}/cards",
         json={
             "category": "C",
             "title": "T",
@@ -291,7 +291,7 @@ async def test_audit_card_import_emits_single_row_with_count(
         "**Skip:** optional\n\n**Context:** ctx\n\n**Question:** q?\n"
     )
     r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/cards/import-markdown",
+        f"/api/admin/engagements/{seed_client['id']}/cards/import-markdown",
         json={"markdown": markdown},
     )
     assert r.status_code == 201
@@ -863,7 +863,7 @@ async def test_activity_list_includes_actor_display(
     seed_admin_user: dict[str, str],
 ) -> None:
     """The two-pass enrichment populates the ``actor.email`` field."""
-    await admin_authed.post("/api/admin/clients", json={"name": "A"})
+    await admin_authed.post("/api/admin/engagements", json={"name": "A"})
 
     r = await admin_authed.get("/api/orgs/me/activity")
     assert r.status_code == 200

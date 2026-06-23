@@ -19,9 +19,9 @@ class Card(SQLModel, table=True):
 
     Attributes:
         id: UUID primary key.
-        client_id: Owning engagement.
+        engagement_id: Owning engagement.
         org_id: Owning organization (nullable in PR 1, NOT NULL in PR 2).
-        order_index: Position in the deck (unique per client).
+        order_index: Position in the deck (unique per engagement).
         category, title, context, question: Card content.
         response_type: One of the SPEC §4 enum strings.
         options: JSONB option set for select-type cards.
@@ -34,7 +34,7 @@ class Card(SQLModel, table=True):
     __tablename__ = "cards"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    client_id: uuid.UUID = Field(foreign_key="clients.id")
+    engagement_id: uuid.UUID = Field(foreign_key="engagements.id")
     org_id: uuid.UUID | None = Field(
         default=None, foreign_key="organizations.id", index=True
     )

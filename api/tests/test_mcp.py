@@ -296,7 +296,7 @@ async def test_create_then_delete_engagement_roundtrip(
     # The row exists in the DB now.
     row = (
         await db.execute(
-            text("select name from public.clients where id = cast(:i as uuid)"),
+            text("select name from public.engagements where id = cast(:i as uuid)"),
             {"i": client_id},
         )
     ).scalar_one_or_none()
@@ -306,7 +306,7 @@ async def test_create_then_delete_engagement_roundtrip(
     del_resp = await _mcp_call(
         mcp_client,
         "tools/call",
-        _tool_call_payload("pulse_delete_engagement", {"client_id": client_id}),
+        _tool_call_payload("pulse_delete_engagement", {"engagement_id": client_id}),
         api_key=raw,
     )
     assert del_resp["result"].get("isError") is not True, del_resp
@@ -314,7 +314,7 @@ async def test_create_then_delete_engagement_roundtrip(
 
     gone = (
         await db.execute(
-            text("select 1 from public.clients where id = cast(:i as uuid)"),
+            text("select 1 from public.engagements where id = cast(:i as uuid)"),
             {"i": client_id},
         )
     ).scalar_one_or_none()
@@ -426,7 +426,7 @@ async def test_create_engagement_then_import_deck_orders_cards(
         mcp_client,
         "tools/call",
         _tool_call_payload(
-            "pulse_import_deck", {"client_id": client_id, "markdown": deck}
+            "pulse_import_deck", {"engagement_id": client_id, "markdown": deck}
         ),
         api_key=raw,
     )
@@ -441,7 +441,7 @@ async def test_create_engagement_then_import_deck_orders_cards(
         await db.execute(
             text(
                 "select title, order_index from public.cards "
-                "where client_id = cast(:i as uuid) order by order_index"
+                "where engagement_id = cast(:i as uuid) order by order_index"
             ),
             {"i": client_id},
         )
@@ -504,7 +504,7 @@ async def test_upload_attachment_then_add_card_links_path(
         _tool_call_payload(
             "pulse_add_card",
             {
-                "client_id": eng["id"],
+                "engagement_id": eng["id"],
                 "category": "ref",
                 "title": "PNG ref",
                 "context": "look",
@@ -559,11 +559,11 @@ async def test_remaining_tool_surface_roundtrip(
         await _mcp_call(
             mcp_client,
             "tools/call",
-            _tool_call_payload("pulse_get_engagement", {"client_id": cid}),
+            _tool_call_payload("pulse_get_engagement", {"engagement_id": cid}),
             api_key=raw,
         )
     )
-    assert got["client"]["id"] == cid
+    assert got["engagement"]["id"] == cid
     assert got["cards"] == []
 
     # update_engagement
@@ -573,7 +573,7 @@ async def test_remaining_tool_surface_roundtrip(
             "tools/call",
             _tool_call_payload(
                 "pulse_update_engagement",
-                {"client_id": cid, "org_name": "Org", "brief": "Hello"},
+                {"engagement_id": cid, "org_name": "Org", "brief": "Hello"},
             ),
             api_key=raw,
         )
@@ -589,7 +589,7 @@ async def test_remaining_tool_surface_roundtrip(
             _tool_call_payload(
                 "pulse_add_card",
                 {
-                    "client_id": cid,
+                    "engagement_id": cid,
                     "category": "Intro",
                     "title": "Welcome",
                     "context": "ctx",

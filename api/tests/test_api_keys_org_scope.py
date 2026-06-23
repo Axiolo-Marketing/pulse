@@ -70,7 +70,7 @@ async def _seed_client(db: AsyncSession, *, org_id: str, name: str) -> str:
     row = (
         await db.execute(
             text(
-                "insert into public.clients (name, token, org_id) "
+                "insert into public.engagements (name, token, org_id) "
                 "values (:n, :t, cast(:o as uuid)) returning id::text"
             ),
             {"n": name, "t": secrets.token_hex(8), "o": org_id},
@@ -124,7 +124,7 @@ async def test_bearer_key_scoped_to_key_org(
         db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
     )
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == request_status
     ids = {c["id"] for c in r.json()}
@@ -147,7 +147,7 @@ async def test_revoking_key_immediately_blocks_subsequent_auth(
         db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
     )
     ok = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert ok.status_code == 200
 
@@ -162,7 +162,7 @@ async def test_revoking_key_immediately_blocks_subsequent_auth(
     client.cookies.delete(settings.session_cookie_name)
 
     blocked = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert blocked.status_code == 401
 

@@ -1,15 +1,15 @@
 """Repository helpers for `responses`. RLS restricts everything to the
-token's client, and inserts derive client_id server-side from
-`pulse_request_client_id()` so the wire body can't pretend to be another
-client."""
+token's engagement, and inserts derive engagement_id server-side from
+`pulse_request_engagement_id()` so the wire body can't pretend to be
+another engagement."""
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def list_for_my_client(session: AsyncSession) -> list[dict]:
+async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
     result = await session.execute(
         text(
-            "select id::text, card_id::text, client_id::text, state, response_value, "
+            "select id::text, card_id::text, engagement_id::text, state, response_value, "
             "viewed_at, answered_at, created_at, updated_at "
             "from public.responses"
         )
@@ -18,8 +18,8 @@ async def list_for_my_client(session: AsyncSession) -> list[dict]:
 
 
 async def _card_belongs_to_caller(session: AsyncSession, card_id: str) -> bool:
-    """RLS filters `cards` by client_id automatically — if no row comes
-    back, the card either doesn't exist or belongs to another client.
+    """RLS filters `cards` by engagement_id automatically — if no row comes
+    back, the card either doesn't exist or belongs to another engagement.
     Treat both the same way (404) so we don't leak existence."""
     try:
         result = await session.execute(
@@ -35,15 +35,15 @@ async def _card_belongs_to_caller(session: AsyncSession, card_id: str) -> bool:
 async def mark_viewed(session: AsyncSession, card_id: str) -> dict | None:
     """Insert a viewed row if none exists; otherwise leave the existing
     row alone. Returns the row's current state, or None if the card
-    isn't visible to the token's client (404 at the route layer)."""
+    isn't visible to the token's engagement (404 at the route layer)."""
     if not await _card_belongs_to_caller(session, card_id):
         return None
 
     result = await session.execute(
         text(
-            "insert into public.responses (card_id, client_id, state, viewed_at) "
-            "values (cast(:cid as uuid), public.pulse_request_client_id(), 'viewed', now()) "
-            "on conflict (card_id, client_id) do nothing "
+            "insert into public.responses (card_id, engagement_id, state, viewed_at) "
+            "values (cast(:cid as uuid), public.pulse_request_engagement_id(), 'viewed', now()) "
+            "on conflict (card_id, engagement_id) do nothing "
             "returning id::text, card_id::text, state, viewed_at"
         ),
         {"cid": card_id},
@@ -70,7 +70,7 @@ async def upsert_answer(
     state: str,
     response_value: dict | None,
 ) -> dict | None:
-    """Insert or update the response for (card_id, current client). For
+    """Insert or update the response for (card_id, current engagement). For
     answered/skipped/needs_edit states this sets `answered_at = now()`; for
     'viewed' it sets `viewed_at = now()` and leaves `answered_at` alone."""
     if not await _card_belongs_to_caller(session, card_id):
@@ -81,18 +81,18 @@ async def upsert_answer(
         text(
             f"""
             insert into public.responses
-              (card_id, client_id, state, response_value, viewed_at, answered_at)
+              (card_id, engagement_id, state, response_value, viewed_at, answered_at)
             values
-              (cast(:cid as uuid), public.pulse_request_client_id(), :state,
+              (cast(:cid as uuid), public.pulse_request_engagement_id(), :state,
                cast(:rv as jsonb),
                {"now()" if state == "viewed" else "null"},
                {"now()" if set_answered else "null"})
-            on conflict (card_id, client_id) do update set
+            on conflict (card_id, engagement_id) do update set
               state = excluded.state,
               response_value = excluded.response_value,
               answered_at = coalesce(excluded.answered_at, public.responses.answered_at),
               viewed_at = coalesce(public.responses.viewed_at, excluded.viewed_at)
-            returning id::text, card_id::text, client_id::text, state, response_value,
+            returning id::text, card_id::text, engagement_id::text, state, response_value,
                       viewed_at, answered_at, created_at, updated_at
             """
         ),
@@ -107,31 +107,31 @@ def _json_dump(value: dict | None) -> str | None:
     return json.dumps(value) if value is not None else None
 
 
-# ── admin-mode helpers (BYPASSRLS — explicit client_id filters) ────────────
+# ── admin-mode helpers (BYPASSRLS — explicit engagement_id filters) ────────
 
 
-async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
+async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
     try:
         result = await session.execute(
             text(
-                "select id::text, card_id::text, client_id::text, state, response_value, "
+                "select id::text, card_id::text, engagement_id::text, state, response_value, "
                 "viewed_at, answered_at, created_at, updated_at "
-                "from public.responses where client_id = cast(:cid as uuid) "
+                "from public.responses where engagement_id = cast(:cid as uuid) "
                 "order by created_at"
             ),
-            {"cid": client_id},
+            {"cid": engagement_id},
         )
     except Exception:
         return []
     return [dict(r) for r in result.mappings().all()]
 
 
-async def delete_all_for_client(session: AsyncSession, client_id: str) -> int:
+async def delete_all_for_engagement(session: AsyncSession, engagement_id: str) -> int:
     """Admin reset: wipe every response for one engagement so the deck
     restarts clean. Returns the number of rows removed. BYPASSRLS session
-    with an explicit client_id filter."""
+    with an explicit engagement_id filter."""
     result = await session.execute(
-        text("delete from public.responses where client_id = cast(:cid as uuid)"),
-        {"cid": client_id},
+        text("delete from public.responses where engagement_id = cast(:cid as uuid)"),
+        {"cid": engagement_id},
     )
     return result.rowcount or 0

@@ -4,7 +4,7 @@ Covers:
   • POST /api/auth/me/api-keys returns the raw key exactly once.
   • GET  /api/auth/me/api-keys lists prefix metadata only.
   • DELETE /api/auth/me/api-keys/{id} sets revoked_at; revoked key stops working.
-  • Bearer-auth path on /api/admin/clients (admin → 200, non-admin → 403,
+  • Bearer-auth path on /api/admin/engagements (admin → 200, non-admin → 403,
     revoked → 401, unknown prefix → 401).
   • Cookie auth continues to work after the bearer-or-cookie generalisation.
   • `last_used_at` advances after a successful bearer auth.
@@ -100,7 +100,7 @@ async def test_list_api_keys_omits_raw_and_hash(
     assert row["prefix"] == created.json()["prefix"]
 
 
-# 5. Bearer auth for an admin reaches /api/admin/clients (200).
+# 5. Bearer auth for an admin reaches /api/admin/engagements (200).
 async def test_bearer_admin_key_reaches_admin_endpoint(
     client: AsyncClient, db: AsyncSession, seed_admin_user: dict[str, str]
 ) -> None:
@@ -108,13 +108,13 @@ async def test_bearer_admin_key_reaches_admin_endpoint(
         db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
     )
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 
 
-# 6. Bearer key for a user with no org membership → 403 on /api/admin/clients.
+# 6. Bearer key for a user with no org membership → 403 on /api/admin/engagements.
 #    Post-PR-2 there is no "non-admin" vs "admin" — only "member of the
 #    key's org" vs "not a member". We pin both cases here: minting a key
 #    for a user who is NOT a member of the named org and using it must
@@ -129,7 +129,7 @@ async def test_bearer_non_admin_key_blocked_from_admin_endpoint(
         db, user_id=seed_user["id"], org_id=axiolo_org["id"]
     )
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == 403
 
@@ -138,7 +138,7 @@ async def test_bearer_non_admin_key_blocked_from_admin_endpoint(
 async def test_session_cookie_still_works_on_admin_endpoint(
     admin_authed: AsyncClient,
 ) -> None:
-    r = await admin_authed.get("/api/admin/clients")
+    r = await admin_authed.get("/api/admin/engagements")
     assert r.status_code == 200
 
 
@@ -153,7 +153,7 @@ async def test_revoked_key_returns_401(
         revoked=True,
     )
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == 401
 
@@ -175,7 +175,7 @@ async def test_unknown_prefix_and_wrong_hash_both_return_401(
     assert wrong_hash_raw != valid_raw
 
     r1 = await client.get(
-        "/api/admin/clients",
+        "/api/admin/engagements",
         headers={"Authorization": f"Bearer {wrong_hash_raw}"},
     )
     assert r1.status_code == 401
@@ -183,7 +183,7 @@ async def test_unknown_prefix_and_wrong_hash_both_return_401(
     # Unknown prefix: a freshly generated key that was never inserted.
     unknown_raw = generate_key()
     r2 = await client.get(
-        "/api/admin/clients",
+        "/api/admin/engagements",
         headers={"Authorization": f"Bearer {unknown_raw}"},
     )
     assert r2.status_code == 401
@@ -209,7 +209,7 @@ async def test_last_used_at_advances_after_bearer_auth(
     assert before is None
 
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == 200
 
@@ -240,7 +240,7 @@ async def test_delete_revokes_key_and_blocks_subsequent_auth(
 
     # Sanity: key works before revoke.
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == 200
 
@@ -269,7 +269,7 @@ async def test_delete_revokes_key_and_blocks_subsequent_auth(
     # Clear the cookie so the next request is bearer-only.
     client.cookies.delete(settings.session_cookie_name)
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {raw}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {raw}"}
     )
     assert r.status_code == 401
 
@@ -316,7 +316,7 @@ async def test_unknown_prefix_runs_hash_and_compare_digest(
     # always returns None, so we go through the miss path.
     bogus = generate_key()
     r = await client.get(
-        "/api/admin/clients", headers={"Authorization": f"Bearer {bogus}"}
+        "/api/admin/engagements", headers={"Authorization": f"Bearer {bogus}"}
     )
     assert r.status_code == 401
 

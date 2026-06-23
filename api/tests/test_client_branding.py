@@ -83,7 +83,7 @@ async def _seed_org_with_owner_and_client(
     client_id = (
         await db.execute(
             text(
-                "insert into public.clients (name, token, org_id) "
+                "insert into public.engagements (name, token, org_id) "
                 "values (:n, :t, cast(:o as uuid)) returning id::text"
             ),
             {"n": f"{label} Client", "t": token, "o": org_id},

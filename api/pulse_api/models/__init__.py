@@ -1,7 +1,7 @@
 from pulse_api.models.api_key import ApiKey
 from pulse_api.models.audit_log import AuditLog
 from pulse_api.models.card import Card
-from pulse_api.models.client import Client
+from pulse_api.models.engagement import Engagement
 from pulse_api.models.engagement_group import EngagementGroup
 from pulse_api.models.oauth_authorization_code import OAuthAuthorizationCode
 from pulse_api.models.oauth_client import OAuthClient
@@ -21,7 +21,7 @@ __all__ = [
     "ApiKey",
     "AuditLog",
     "Card",
-    "Client",
+    "Engagement",
     "EngagementGroup",
     "MemberRole",
     "OAuthAuthorizationCode",

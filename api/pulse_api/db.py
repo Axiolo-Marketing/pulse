@@ -7,9 +7,9 @@ Four engines, one per Postgres role:
 - ``anon_engine`` connects as ``pulse_anon``. RLS applies. Client-facing
   routes use a per-request session that runs
   ``SET LOCAL pulse.token = $1`` (via ``set_config``) before any query
-  so the helper functions resolve to the right ``client_id``. The same
-  session ALSO sets ``pulse.org_id`` from the resolved client's row so
-  any cross-table reads stay tenant-scoped.
+  so the helper functions resolve to the right ``engagement_id``. The
+  same session ALSO sets ``pulse.org_id`` from the resolved engagement's
+  row so any cross-table reads stay tenant-scoped.
 - ``admin_engine`` connects as ``pulse_admin`` (BYPASSRLS). Reserved for
   ``/api/superadmin/*`` and migrations after PR 2 lands; PR 1's admin
   routes still use it.
@@ -58,11 +58,11 @@ async def get_anon_session(
 
     Opens a transaction, sets ``pulse.token`` and ``pulse.org_id`` for
     that transaction, yields a session bound to it. RLS policies fire
-    against the token's client_id; the resolved client's org_id flows
-    into the GUC so any future cross-tenant reads stay scoped.
+    against the token's engagement_id; the resolved engagement's org_id
+    flows into the GUC so any future cross-tenant reads stay scoped.
 
-    If no client matches the token we set ``pulse.org_id`` to the empty
-    string — the helper's NULLIF turns that into NULL, and the
+    If no engagement matches the token we set ``pulse.org_id`` to the
+    empty string — the helper's NULLIF turns that into NULL, and the
     org-scoped policies reject the comparison.
     """
     if not x_pulse_token:
@@ -77,14 +77,14 @@ async def get_anon_session(
                 text("select set_config('pulse.token', :t, true)"),
                 {"t": x_pulse_token},
             )
-            # Resolve the client's org_id so cross-table reads (audit logs,
-            # org-scoped extras coming in PR 2+) stay tenant-scoped. Returns
-            # empty string if no row matches the token — NULLIF in the RLS
-            # helper turns that into NULL and the policy rejects.
+            # Resolve the engagement's org_id so cross-table reads (audit
+            # logs, org-scoped extras coming in PR 2+) stay tenant-scoped.
+            # Returns empty string if no row matches the token — NULLIF in
+            # the RLS helper turns that into NULL and the policy rejects.
             org_row = (
                 await conn.execute(
                     text(
-                        "select coalesce((select org_id::text from public.clients "
+                        "select coalesce((select org_id::text from public.engagements "
                         "where token = :t limit 1), '')"
                     ),
                     {"t": x_pulse_token},

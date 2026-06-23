@@ -34,7 +34,7 @@ from tests.conftest import become_member
 # Tables protected by an org-scoped pulse_member RLS policy (migration 0004).
 ORG_SCOPED_TABLES = [
     "organizations",
-    "clients",
+    "engagements",
     "cards",
     "responses",
     "uploads",
@@ -68,23 +68,23 @@ async def _seed_one_set(
     """Insert one row in every org-scoped table for the given org.
 
     Returns a mapping from table-name → id (string). Every row is tagged
-    with ``org_id``; FKs (cards→clients, responses→cards, etc.) are wired
-    so a real production query would resolve them cleanly.
+    with ``org_id``; FKs (cards→engagements, responses→cards, etc.) are
+    wired so a real production query would resolve them cleanly.
 
     Run as the schema owner (no RLS); the seeded rows become visible to
     the post-role-switch queries thanks to single-transaction semantics.
     """
     ids: dict[str, str] = {}
 
-    # client
-    client_token = secrets.token_hex(8)
-    ids["clients"] = (
+    # engagement
+    engagement_token = secrets.token_hex(8)
+    ids["engagements"] = (
         await db.execute(
             text(
-                "insert into public.clients (name, token, org_id) "
+                "insert into public.engagements (name, token, org_id) "
                 "values (:n, :t, cast(:o as uuid)) returning id::text"
             ),
-            {"n": f"{label}-client", "t": client_token, "o": org_id},
+            {"n": f"{label}-engagement", "t": engagement_token, "o": org_id},
         )
     ).mappings().one()["id"]
 
@@ -93,13 +93,13 @@ async def _seed_one_set(
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, "
+                "(engagement_id, order_index, category, title, context, "
                 " question, response_type, org_id) "
                 "values (cast(:cid as uuid), 1, 'Test', :t, 'ctx', 'q?', "
                 "        'short-text', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"cid": ids["clients"], "t": f"{label}-card", "o": org_id},
+            {"cid": ids["engagements"], "t": f"{label}-card", "o": org_id},
         )
     ).mappings().one()["id"]
 
@@ -108,12 +108,12 @@ async def _seed_one_set(
         await db.execute(
             text(
                 "insert into public.responses "
-                "(card_id, client_id, state, org_id) "
+                "(card_id, engagement_id, state, org_id) "
                 "values (cast(:card as uuid), cast(:cid as uuid), "
                 "        'answered', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"card": ids["cards"], "cid": ids["clients"], "o": org_id},
+            {"card": ids["cards"], "cid": ids["engagements"], "o": org_id},
         )
     ).mappings().one()["id"]
 
@@ -122,7 +122,7 @@ async def _seed_one_set(
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, client_id, file_name, file_size_bytes, "
+                "(card_id, engagement_id, file_name, file_size_bytes, "
                 " storage_path, org_id) "
                 "values (cast(:card as uuid), cast(:cid as uuid), :fn, "
                 "        100, :sp, cast(:o as uuid)) "
@@ -130,7 +130,7 @@ async def _seed_one_set(
             ),
             {
                 "card": ids["cards"],
-                "cid": ids["clients"],
+                "cid": ids["engagements"],
                 "fn": f"{label}.pdf",
                 "sp": f"{label}/x/y",
                 "o": org_id,
@@ -190,7 +190,7 @@ async def _seed_one_set(
                 "        'client', :tid) "
                 "returning id::text"
             ),
-            {"o": org_id, "u": user_id, "tid": ids["clients"]},
+            {"o": org_id, "u": user_id, "tid": ids["engagements"]},
         )
     ).mappings().one()["id"]
 
@@ -322,9 +322,9 @@ async def test_member_cannot_write_to_other_org(
     Three cases, parametrized:
       - ``insert``: INSERT into ``audit_logs`` tagged with the other org's
         id. RLS WITH CHECK rejects → DBAPIError.
-      - ``update``: UPDATE ``clients`` on the other org's row. RLS USING
-        filter hides the row from the UPDATE → 0 rows affected.
-      - ``delete``: DELETE ``clients`` on the other org's row. Same
+      - ``update``: UPDATE ``engagements`` on the other org's row. RLS
+        USING filter hides the row from the UPDATE → 0 rows affected.
+      - ``delete``: DELETE ``engagements`` on the other org's row. Same
         mechanism → 0 rows affected.
     """
     seeded = await _seed_two_orgs(db, axiolo_org["id"])
@@ -332,7 +332,7 @@ async def test_member_cannot_write_to_other_org(
 
     org_a_id = seeded["a"]["org_id"]
     org_b_id = seeded["b"]["org_id"]
-    other_client_id = seeded["b"]["clients"]
+    other_engagement_id = seeded["b"]["engagements"]
     user_id = seeded["a"]["users"]
 
     await become_member(db_conn, org_id=org_a_id)
@@ -353,10 +353,10 @@ async def test_member_cannot_write_to_other_org(
         # UPDATE matches zero rows. No exception, just no-op.
         result = await db_conn.execute(
             text(
-                "update public.clients set name = 'leak' "
+                "update public.engagements set name = 'leak' "
                 "where id = cast(:cid as uuid)"
             ),
-            {"cid": other_client_id},
+            {"cid": other_engagement_id},
         )
         assert result.rowcount == 0, (
             "pulse_member updated a row belonging to another org "
@@ -368,10 +368,10 @@ async def test_member_cannot_write_to_other_org(
         name = (
             await db_conn.execute(
                 text(
-                    "select name from public.clients "
+                    "select name from public.engagements "
                     "where id = cast(:cid as uuid)"
                 ),
-                {"cid": other_client_id},
+                {"cid": other_engagement_id},
             )
         ).scalar()
         assert name != "leak", "cross-org UPDATE silently succeeded"
@@ -379,10 +379,10 @@ async def test_member_cannot_write_to_other_org(
         # Cross-org DELETE: same row-invisibility mechanism.
         result = await db_conn.execute(
             text(
-                "delete from public.clients "
+                "delete from public.engagements "
                 "where id = cast(:cid as uuid)"
             ),
-            {"cid": other_client_id},
+            {"cid": other_engagement_id},
         )
         assert result.rowcount == 0, (
             "pulse_member deleted a row belonging to another org "
@@ -394,10 +394,10 @@ async def test_member_cannot_write_to_other_org(
         still_there = (
             await db_conn.execute(
                 text(
-                    "select count(*) from public.clients "
+                    "select count(*) from public.engagements "
                     "where id = cast(:cid as uuid)"
                 ),
-                {"cid": other_client_id},
+                {"cid": other_engagement_id},
             )
         ).scalar()
         assert still_there == 1, "cross-org DELETE silently succeeded"
@@ -418,24 +418,24 @@ async def test_member_default_org_id_on_insert(
     The client-facing INSERT path therefore does not need to know about
     the org id — the GUC the request middleware sets is enough.
     """
-    # Seed a client + card as owner so the FKs resolve later. The
+    # Seed an engagement + card as owner so the FKs resolve later. The
     # seeded card already has one response (unique constraint on
-    # ``(card_id, client_id)``) so we add a fresh "extra" card here for
+    # ``(card_id, engagement_id)``) so we add a fresh "extra" card here for
     # the response-default test to attach to.
     seeded = await _seed_two_orgs(db, axiolo_org["id"])
     org_a_id = seeded["a"]["org_id"]
-    client_id = seeded["a"]["clients"]
+    engagement_id = seeded["a"]["engagements"]
     extra_card_id = (
         await db.execute(
             text(
                 "insert into public.cards "
-                "(client_id, order_index, category, title, context, "
+                "(engagement_id, order_index, category, title, context, "
                 " question, response_type, org_id) "
                 "values (cast(:cid as uuid), 99, 'Test', 'extra', 'ctx', "
                 "        'q?', 'short-text', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"cid": client_id, "o": org_a_id},
+            {"cid": engagement_id, "o": org_a_id},
         )
     ).mappings().one()["id"]
     await db.flush()
@@ -448,11 +448,11 @@ async def test_member_default_org_id_on_insert(
     new_response_id = (
         await db_conn.execute(
             text(
-                "insert into public.responses (card_id, client_id, state) "
+                "insert into public.responses (card_id, engagement_id, state) "
                 "values (cast(:card as uuid), cast(:cid as uuid), 'viewed') "
                 "returning id::text"
             ),
-            {"card": card_id, "cid": client_id},
+            {"card": card_id, "cid": engagement_id},
         )
     ).scalar()
     assert new_response_id is not None
@@ -476,12 +476,12 @@ async def test_member_default_org_id_on_insert(
         await db_conn.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, client_id, file_name, file_size_bytes, storage_path) "
+                "(card_id, engagement_id, file_name, file_size_bytes, storage_path) "
                 "values (cast(:card as uuid), cast(:cid as uuid), "
                 "        'default.pdf', 1, 'a/b/c') "
                 "returning id::text"
             ),
-            {"card": card_id, "cid": client_id},
+            {"card": card_id, "cid": engagement_id},
         )
     ).scalar()
     assert new_upload_id is not None

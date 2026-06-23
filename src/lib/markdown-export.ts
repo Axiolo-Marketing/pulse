@@ -1,4 +1,4 @@
-import type { Card, Client, ClientResponse } from "./api";
+import type { Card, ClientResponse, Engagement } from "./api";
 import type { Status } from "./status-suggest";
 
 export interface UploadInfo {
@@ -9,7 +9,7 @@ export interface UploadInfo {
 
 export interface ExportArgs {
   card: Card;
-  client: Client;
+  client: Engagement;
   response: ClientResponse | undefined;
   status: Status;
   uploads: UploadInfo[]; // attachment summaries (no URLs — files live in admin)

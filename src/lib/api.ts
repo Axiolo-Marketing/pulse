@@ -104,10 +104,10 @@ export type ResponseState =
   | "skipped"
   | "needs_edit";
 
-export interface Client {
+export interface Engagement {
   id: string;
   name: string;
-  /** Legacy free-form customer-org text on the client row (kept for
+  /** Legacy free-form customer-org text on the engagement row (kept for
    * backwards compat). The post-multi-tenant operator-side org is
    * surfaced separately via `org_logo_path` + the brand wordmark. */
   org_name: string | null;
@@ -139,7 +139,7 @@ export interface Client {
 
 export interface Card {
   id: string;
-  client_id: string;
+  engagement_id: string;
   order_index: number;
   category: string;
   title: string;
@@ -156,7 +156,7 @@ export interface Card {
 export interface ClientResponse {
   id: string;
   card_id: string;
-  client_id: string;
+  engagement_id: string;
   state: ResponseState;
   response_value: unknown;
   viewed_at: string | null;
@@ -168,7 +168,7 @@ export interface ClientResponse {
 export interface UploadRow {
   id: string;
   card_id: string;
-  client_id: string;
+  engagement_id: string;
   file_name: string;
   file_size_bytes: number;
   storage_path: string;
@@ -183,7 +183,7 @@ export interface UploadRow {
 // ── Client-facing API ─────────────────────────────────────────────────────
 
 export const clientApi = {
-  me: (token: string): Promise<Client> => request("/api/me", { token }),
+  me: (token: string): Promise<Engagement> => request("/api/me", { token }),
 
   cards: (token: string): Promise<Card[]> => request("/api/cards", { token }),
 
@@ -435,7 +435,7 @@ export interface EngagementSummary {
   brief: string | null;
   /** Folder this engagement sits in, or `null` for the implicit
    * "Ungrouped" bucket. Operators move engagements between folders via
-   * `adminApi.updateClient(id, { group_id })`. */
+   * `adminApi.updateEngagement(id, { group_id })`. */
   group_id: string | null;
   /** Convenience name of the folder (joined server-side); `null` when
    * ungrouped. The admin list buckets by `group_id` and labels by the
@@ -462,19 +462,19 @@ export interface GroupSummary {
 }
 
 export interface EngagementDetail {
-  client: Client & { token: string };
+  engagement: Engagement & { token: string };
   cards: Card[];
   responses: ClientResponse[];
   uploads: UploadRow[];
 }
 
-export interface CreateClientArgs {
+export interface CreateEngagementArgs {
   name: string;
   org_name?: string | null;
   engagement_name?: string | null;
 }
 
-export interface UpdateClientArgs {
+export interface UpdateEngagementArgs {
   name?: string;
   org_name?: string | null;
   engagement_name?: string | null;
@@ -576,34 +576,34 @@ export const authApi = {
 };
 
 export const adminApi = {
-  listClients: (): Promise<EngagementSummary[]> =>
-    request("/api/admin/clients"),
+  listEngagements: (): Promise<EngagementSummary[]> =>
+    request("/api/admin/engagements"),
 
-  getClient: (id: string): Promise<EngagementDetail> =>
-    request(`/api/admin/clients/${id}`),
+  getEngagement: (id: string): Promise<EngagementDetail> =>
+    request(`/api/admin/engagements/${id}`),
 
-  createClient: (args: CreateClientArgs): Promise<EngagementSummary> =>
-    request("/api/admin/clients", {
+  createEngagement: (args: CreateEngagementArgs): Promise<EngagementSummary> =>
+    request("/api/admin/engagements", {
       method: "POST",
       body: JSON.stringify(args),
     }),
 
-  updateClient: (id: string, args: UpdateClientArgs): Promise<EngagementSummary> =>
-    request(`/api/admin/clients/${id}`, {
+  updateEngagement: (id: string, args: UpdateEngagementArgs): Promise<EngagementSummary> =>
+    request(`/api/admin/engagements/${id}`, {
       method: "PATCH",
       body: JSON.stringify(args),
     }),
 
   deleteEngagement: (id: string): Promise<void> =>
-    request(`/api/admin/clients/${id}`, { method: "DELETE" }),
+    request(`/api/admin/engagements/${id}`, { method: "DELETE" }),
 
   /** Clear all answers + uploaded files for a fresh restart. Cards and the
    * link are preserved. Returns counts of what was cleared. */
   resetEngagement: (id: string): Promise<{ responses_cleared: number; uploads_cleared: number }> =>
-    request(`/api/admin/clients/${id}/reset`, { method: "POST" }),
+    request(`/api/admin/engagements/${id}/reset`, { method: "POST" }),
 
-  createCard: (clientId: string, args: CreateCardArgs): Promise<Card> =>
-    request(`/api/admin/clients/${clientId}/cards`, {
+  createCard: (engagementId: string, args: CreateCardArgs): Promise<Card> =>
+    request(`/api/admin/engagements/${engagementId}/cards`, {
       method: "POST",
       body: JSON.stringify(args),
     }),
@@ -618,10 +618,10 @@ export const adminApi = {
     request(`/api/admin/cards/${id}`, { method: "DELETE" }),
 
   importMarkdownCards: (
-    clientId: string,
+    engagementId: string,
     markdown: string,
   ): Promise<{ created: Card[] }> =>
-    request(`/api/admin/clients/${clientId}/cards/import-markdown`, {
+    request(`/api/admin/engagements/${engagementId}/cards/import-markdown`, {
       method: "POST",
       body: JSON.stringify({ markdown }),
     }),

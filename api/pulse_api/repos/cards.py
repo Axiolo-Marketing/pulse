@@ -5,30 +5,30 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 CARD_COLS = (
-    "id::text, client_id::text, order_index, category, title, context, question, "
+    "id::text, engagement_id::text, order_index, category, title, context, question, "
     "response_type, options, default_value, skip_allowed, attachment_path, created_at"
 )
 
 
-async def list_for_my_client(session: AsyncSession) -> list[dict]:
-    """RLS narrows this to cards belonging to the token-bound client."""
+async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
+    """RLS narrows this to cards belonging to the token-bound engagement."""
     result = await session.execute(
         text(f"select {CARD_COLS} from public.cards order by order_index")
     )
     return [dict(r) for r in result.mappings().all()]
 
 
-# ── admin-mode helpers (BYPASSRLS — explicit client_id filters) ────────────
+# ── admin-mode helpers (BYPASSRLS — explicit engagement_id filters) ────────
 
 
-async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
+async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
     try:
         result = await session.execute(
             text(
                 f"select {CARD_COLS} from public.cards "
-                "where client_id = cast(:cid as uuid) order by order_index"
+                "where engagement_id = cast(:cid as uuid) order by order_index"
             ),
-            {"cid": client_id},
+            {"cid": engagement_id},
         )
     except Exception:
         return []
@@ -38,7 +38,7 @@ async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
 async def create_card(
     session: AsyncSession,
     *,
-    client_id: str,
+    engagement_id: str,
     category: str,
     title: str,
     context: str,
@@ -61,19 +61,19 @@ async def create_card(
             text(
                 f"""
                 insert into public.cards
-                  (client_id, order_index, category, title, context, question,
+                  (engagement_id, order_index, category, title, context, question,
                    response_type, options, default_value, skip_allowed,
                    attachment_path, org_id)
                 values
                   (cast(:cid as uuid),
-                   coalesce((select max(order_index) from public.cards where client_id = cast(:cid as uuid)), 0) + 1,
+                   coalesce((select max(order_index) from public.cards where engagement_id = cast(:cid as uuid)), 0) + 1,
                    :cat, :title, :ctx, :q, :rt,
                    cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid))
                 returning {CARD_COLS}
                 """
             ),
             {
-                "cid": client_id,
+                "cid": engagement_id,
                 "cat": category,
                 "title": title,
                 "ctx": context,

@@ -2,7 +2,7 @@ import {
   clientApi,
   ApiError,
   type Card,
-  type Client,
+  type Engagement,
   type ClientResponse,
   type ResponseState,
   type UploadRow,
@@ -22,7 +22,7 @@ import {
 } from "../lib/render";
 
 interface BootData {
-  client: Client;
+  client: Engagement;
   cards: Card[];
   responses: Map<string, ClientResponse>;
   uploads: Map<string, CompletedUpload[]>; // keyed by card_id
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
 }
 
 async function loadBootData(token: string): Promise<BootData | null> {
-  let client: Client;
+  let client: Engagement;
   try {
     client = await clientApi.me(token);
   } catch (err) {
@@ -274,7 +274,7 @@ function runApp(ctx: RunCtx): void {
 
   // markViewed inserts a viewed row for this card if no row exists yet.
   // The backend's POST /api/responses/view is idempotent via the
-  // (card_id, client_id) unique constraint — safe to fire on every render.
+  // (card_id, engagement_id) unique constraint — safe to fire on every render.
   const markViewed = (cardId: string): void => {
     if (responses.has(cardId)) return;
     clientApi
@@ -325,7 +325,7 @@ function runApp(ctx: RunCtx): void {
       // Operator-org branding on the client deck: the logo object URL was
       // resolved once on boot (token in a header, not the URL). A null
       // logo keeps the Axiolo wordmark. `orgName` is left unset — the
-      // `Client` payload's `org_name` is the *customer* org (legacy
+      // `Engagement` payload's `org_name` is the *customer* org (legacy
       // free-form text), not the operator org, so it would mislabel the
       // mark; `renderCard` falls back to a generic "Organization" alt.
       orgLogoSrc,
@@ -385,7 +385,7 @@ function runApp(ctx: RunCtx): void {
       return v;
     };
 
-    // The backend derives `client_id` from the request's token and sets
+    // The backend derives `engagement_id` from the request's token and sets
     // `answered_at`/`viewed_at` server-side based on `state`, so we only
     // ship `{card_id, state, response_value}`.
     switch (action.kind) {

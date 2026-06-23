@@ -4,42 +4,42 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 UPLOAD_COLS = (
-    "id::text, card_id::text, client_id::text, file_name, "
+    "id::text, card_id::text, engagement_id::text, file_name, "
     "file_size_bytes, storage_path, mime_type, kind, uploaded_at"
 )
 
 
-async def list_for_my_client(session: AsyncSession) -> list[dict]:
+async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
     result = await session.execute(
         text(f"select {UPLOAD_COLS} from public.uploads order by uploaded_at")
     )
     return [dict(r) for r in result.mappings().all()]
 
 
-async def list_for_client(session: AsyncSession, client_id: str) -> list[dict]:
+async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
     try:
         result = await session.execute(
             text(
                 f"select {UPLOAD_COLS} from public.uploads "
-                "where client_id = cast(:cid as uuid) order by uploaded_at"
+                "where engagement_id = cast(:cid as uuid) order by uploaded_at"
             ),
-            {"cid": client_id},
+            {"cid": engagement_id},
         )
     except Exception:
         return []
     return [dict(r) for r in result.mappings().all()]
 
 
-async def delete_all_for_client(session: AsyncSession, client_id: str) -> list[dict]:
+async def delete_all_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
     """Admin reset: delete every upload row for one engagement and return
     the deleted rows so the route can remove the on-disk files. BYPASSRLS
-    session with an explicit client_id filter."""
+    session with an explicit engagement_id filter."""
     result = await session.execute(
         text(
-            f"delete from public.uploads where client_id = cast(:cid as uuid) "
+            f"delete from public.uploads where engagement_id = cast(:cid as uuid) "
             f"returning {UPLOAD_COLS}"
         ),
-        {"cid": client_id},
+        {"cid": engagement_id},
     )
     return [dict(r) for r in result.mappings().all()]
 
@@ -57,9 +57,9 @@ async def create_upload(
     mime_type: str | None,
     kind: str = "file",
 ) -> dict | None:
-    """Insert an uploads row. client_id is derived server-side from
-    `pulse_request_client_id()` so the wire body can't address another
-    client's uploads. ``kind`` discriminates answer files (``'file'``)
+    """Insert an uploads row. engagement_id is derived server-side from
+    `pulse_request_engagement_id()` so the wire body can't address another
+    engagement's uploads. ``kind`` discriminates answer files (``'file'``)
     from recorded voice answers (``'voice'``). Returns None if card_id is
     invalid (cast fails) or RLS rejects the insert because the card
     doesn't belong to caller."""
@@ -68,10 +68,10 @@ async def create_upload(
             text(
                 f"""
                 insert into public.uploads
-                  (card_id, client_id, file_name, file_size_bytes, storage_path,
+                  (card_id, engagement_id, file_name, file_size_bytes, storage_path,
                    mime_type, kind)
                 values
-                  (cast(:cid as uuid), public.pulse_request_client_id(),
+                  (cast(:cid as uuid), public.pulse_request_engagement_id(),
                    :fn, :sz, :sp, :mt, :kind)
                 returning {UPLOAD_COLS}
                 """
@@ -92,7 +92,7 @@ async def create_upload(
 
 async def get_by_id_for_caller(session: AsyncSession, upload_id: str) -> dict | None:
     """RLS narrows to the caller's uploads. Returns None for unknown
-    or other-client uploads — same response so existence isn't leaked."""
+    or other-engagement uploads — same response so existence isn't leaked."""
     try:
         result = await session.execute(
             text(f"select {UPLOAD_COLS} from public.uploads where id = cast(:uid as uuid)"),
@@ -139,11 +139,11 @@ async def admin_get_by_id(session: AsyncSession, upload_id: str) -> dict | None:
 # ── Helpers used by both modes ─────────────────────────────────────────────
 
 
-async def get_current_client_id(session: AsyncSession) -> str | None:
-    """Resolve the current request's client_id via the helper SQL function.
+async def get_current_engagement_id(session: AsyncSession) -> str | None:
+    """Resolve the current request's engagement_id via the helper SQL function.
     Returns None if no token is bound. Used by client-facing upload routes
     that need to construct the on-disk path."""
-    result = await session.execute(text("select public.pulse_request_client_id()::text"))
+    result = await session.execute(text("select public.pulse_request_engagement_id()::text"))
     return result.scalar()
 
 

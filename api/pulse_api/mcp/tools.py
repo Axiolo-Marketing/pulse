@@ -8,13 +8,13 @@ new behaviour, fix it in the REST endpoint first and re-export it here.
 Mappings to the REST routes (see ``routes/admin_api.py`` and
 ``routes/attachments.py``):
 
-    pulse_list_engagements      ←  GET    /api/admin/clients
-    pulse_get_engagement        ←  GET    /api/admin/clients/{id}
-    pulse_create_engagement     ←  POST   /api/admin/clients
-    pulse_update_engagement     ←  PATCH  /api/admin/clients/{id}
-    pulse_delete_engagement     ←  DELETE /api/admin/clients/{id}
-    pulse_import_deck           ←  POST   /api/admin/clients/{id}/cards/import-markdown
-    pulse_add_card              ←  POST   /api/admin/clients/{id}/cards
+    pulse_list_engagements      ←  GET    /api/admin/engagements
+    pulse_get_engagement        ←  GET    /api/admin/engagements/{id}
+    pulse_create_engagement     ←  POST   /api/admin/engagements
+    pulse_update_engagement     ←  PATCH  /api/admin/engagements/{id}
+    pulse_delete_engagement     ←  DELETE /api/admin/engagements/{id}
+    pulse_import_deck           ←  POST   /api/admin/engagements/{id}/cards/import-markdown
+    pulse_add_card              ←  POST   /api/admin/engagements/{id}/cards
     pulse_update_card           ←  PATCH  /api/admin/cards/{id}
     pulse_delete_card           ←  DELETE /api/admin/cards/{id}
     pulse_upload_attachment     ←  POST   /api/admin/attachments
@@ -44,7 +44,7 @@ from pulse_api.mcp.server import (
     mcp,
 )
 from pulse_api.repos import cards as cards_repo
-from pulse_api.repos import clients as clients_repo
+from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 
@@ -63,7 +63,7 @@ from pulse_api.repos import uploads as uploads_repo
 async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        return await clients_repo.list_all_with_counts(session)
+        return await engagements_repo.list_all_with_counts(session)
 
 
 @mcp.tool(
@@ -74,18 +74,18 @@ async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
     ),
 )
 async def pulse_get_engagement(
-    ctx: Context, client_id: str
+    ctx: Context, engagement_id: str
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        client = await clients_repo.get_by_id(session, client_id)
-        if client is None:
+        engagement = await engagements_repo.get_by_id(session, engagement_id)
+        if engagement is None:
             raise ValueError("engagement not found")
         return {
-            "client": client,
-            "cards": await cards_repo.list_for_client(session, client_id),
-            "responses": await responses_repo.list_for_client(session, client_id),
-            "uploads": await uploads_repo.list_for_client(session, client_id),
+            "engagement": engagement,
+            "cards": await cards_repo.list_for_engagement(session, engagement_id),
+            "responses": await responses_repo.list_for_engagement(session, engagement_id),
+            "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
         }
 
 
@@ -104,7 +104,7 @@ async def pulse_create_engagement(
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        row = await clients_repo.create_engagement(
+        row = await engagements_repo.create_engagement(
             session,
             name=name,
             org_name=org_name,
@@ -124,7 +124,7 @@ async def pulse_create_engagement(
 )
 async def pulse_update_engagement(
     ctx: Context,
-    client_id: str,
+    engagement_id: str,
     name: str | None = None,
     org_name: str | None = None,
     engagement_name: str | None = None,
@@ -142,7 +142,7 @@ async def pulse_update_engagement(
         fields["brief"] = brief
 
     async with _open_member_session(org_id) as session:
-        row = await clients_repo.update_engagement(session, client_id, fields)
+        row = await engagements_repo.update_engagement(session, engagement_id, fields)
         if row is None:
             raise ValueError("engagement not found")
         await session.commit()
@@ -159,14 +159,14 @@ async def pulse_update_engagement(
     ),
 )
 async def pulse_delete_engagement(
-    ctx: Context, client_id: str
+    ctx: Context, engagement_id: str
 ) -> dict[str, bool]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        upload_paths = await clients_repo.list_upload_paths_for_client(
-            session, client_id
+        upload_paths = await engagements_repo.list_upload_paths_for_engagement(
+            session, engagement_id
         )
-        deleted = await clients_repo.delete_engagement(session, client_id)
+        deleted = await engagements_repo.delete_engagement(session, engagement_id)
         if not deleted:
             raise ValueError("engagement not found")
         await session.commit()
@@ -190,11 +190,11 @@ async def pulse_delete_engagement(
     ),
 )
 async def pulse_import_deck(
-    ctx: Context, client_id: str, markdown: str
+    ctx: Context, engagement_id: str, markdown: str
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        if (await clients_repo.get_by_id(session, client_id)) is None:
+        if (await engagements_repo.get_by_id(session, engagement_id)) is None:
             raise ValueError("engagement not found")
         try:
             parsed = parse_markdown(markdown)
@@ -206,7 +206,7 @@ async def pulse_import_deck(
         for card in parsed:
             row = await cards_repo.create_card(
                 session,
-                client_id=client_id,
+                engagement_id=engagement_id,
                 org_id=org_id,
                 **card.to_create_kwargs(),
             )
@@ -227,7 +227,7 @@ async def pulse_import_deck(
 )
 async def pulse_add_card(
     ctx: Context,
-    client_id: str,
+    engagement_id: str,
     category: str,
     title: str,
     context: str,
@@ -240,11 +240,11 @@ async def pulse_add_card(
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        if (await clients_repo.get_by_id(session, client_id)) is None:
+        if (await engagements_repo.get_by_id(session, engagement_id)) is None:
             raise ValueError("engagement not found")
         row = await cards_repo.create_card(
             session,
-            client_id=client_id,
+            engagement_id=engagement_id,
             category=category,
             title=title,
             context=context,

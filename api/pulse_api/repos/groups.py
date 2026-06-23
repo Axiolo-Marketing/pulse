@@ -40,7 +40,7 @@ async def list_for_org(session: AsyncSession) -> list[dict[str, object]]:
               g.id::text as id,
               g.name,
               g.created_at,
-              (select count(*) from public.clients c
+              (select count(*) from public.engagements c
                  where c.group_id = g.id)::int as client_count
             from public.engagement_groups g
             order by g.name

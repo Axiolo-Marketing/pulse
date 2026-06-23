@@ -1,10 +1,10 @@
 """Local-disk file storage for uploads.
 
-Path convention: `{client_id}/{card_id}/{uuid}-{sanitized-filename}` under
-`settings.upload_dir`. The client_id segment is the trust boundary — a
-caller must NEVER produce a path with another client's prefix, and every
-read/write reconstructs that prefix from authenticated state, not from
-the wire body.
+Path convention: `{engagement_id}/{card_id}/{uuid}-{sanitized-filename}`
+under `settings.upload_dir`. The engagement_id segment is the trust
+boundary — a caller must NEVER produce a path with another engagement's
+prefix, and every read/write reconstructs that prefix from authenticated
+state, not from the wire body.
 
 Path traversal defense lives in `resolve_within_upload_dir`: any input
 that resolves outside the upload root (via `..`, absolute paths, or
@@ -103,18 +103,18 @@ def resolve_attachment_filename(filename: str) -> Path:
     return resolve_within_upload_dir(f"{ATTACHMENTS_PREFIX}/{name}")
 
 
-def build_storage_path(*, client_id: str, card_id: str, filename: str) -> str:
+def build_storage_path(*, engagement_id: str, card_id: str, filename: str) -> str:
     """Build the relative storage path for a new upload.
 
     Both ids must be valid UUIDs — non-UUID inputs raise StoragePathError
     so a caller can't sneak `..` or other path components into the prefix.
     """
-    if not _is_uuid(client_id):
-        raise StoragePathError(f"invalid client_id: {client_id!r}")
+    if not _is_uuid(engagement_id):
+        raise StoragePathError(f"invalid engagement_id: {engagement_id!r}")
     if not _is_uuid(card_id):
         raise StoragePathError(f"invalid card_id: {card_id!r}")
     safe = sanitize_filename(filename)
-    return f"{client_id}/{card_id}/{uuid.uuid4()}-{safe}"
+    return f"{engagement_id}/{card_id}/{uuid.uuid4()}-{safe}"
 
 
 def resolve_within_upload_dir(relative_path: str) -> Path:

@@ -480,7 +480,7 @@ async def test_delete_org_with_clients_returns_409(
     # Drop a client row in.
     await db.execute(
         text(
-            "insert into public.clients (name, token, org_id) "
+            "insert into public.engagements (name, token, org_id) "
             "values (:n, :t, cast(:o as uuid))"
         ),
         {"n": "Stuck Client", "t": secrets.token_hex(8), "o": target},

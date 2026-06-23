@@ -206,7 +206,7 @@ async def client(
         org_id = (
             await db_conn.execute(
                 text(
-                    "select coalesce((select org_id::text from public.clients "
+                    "select coalesce((select org_id::text from public.engagements "
                     "where token = :t limit 1), '')"
                 ),
                 {"t": x_pulse_token},
@@ -335,7 +335,7 @@ async def seed_client(
     row = (
         await db.execute(
             text(
-                "insert into public.clients (name, token, org_id) "
+                "insert into public.engagements (name, token, org_id) "
                 "values (:n, :t, cast(:org as uuid)) "
                 "returning id::text, token, name"
             ),
@@ -353,7 +353,7 @@ async def other_seeded_client(
     row = (
         await db.execute(
             text(
-                "insert into public.clients (name, token, org_id) "
+                "insert into public.engagements (name, token, org_id) "
                 "values (:n, :t, cast(:org as uuid)) "
                 "returning id::text, token, name"
             ),
@@ -380,7 +380,7 @@ async def seed_cards(
             await db.execute(
                 text(
                     "insert into public.cards "
-                    "(client_id, order_index, category, title, context, "
+                    "(engagement_id, order_index, category, title, context, "
                     " question, response_type, org_id) "
                     "values (cast(:cid as uuid), :idx, 'Test', :t, 'ctx', "
                     "        'q?', :rt, cast(:org as uuid)) "

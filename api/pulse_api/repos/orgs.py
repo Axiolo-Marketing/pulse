@@ -483,7 +483,7 @@ async def client_count(
     """
     result = await session.execute(
         text(
-            "select count(*)::int from public.clients "
+            "select count(*)::int from public.engagements "
             "where org_id = cast(:o as uuid)"
         ),
         {"o": str(org_id)},
