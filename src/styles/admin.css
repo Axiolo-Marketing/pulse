@@ -365,6 +365,46 @@
 .action-link.danger { color: var(--warning); }
 .action-link.danger:hover { background: var(--warning-soft); }
 
+/* Engagement row actions as icon buttons (view / copy / delete). The label
+   lives in `aria-label` (screen readers) + `title` (a native hover tooltip
+   that, unlike a CSS pseudo-element, isn't clipped by the table wrap's
+   `overflow: hidden`), so the icon stays unambiguous. */
+.action-icons {
+  display: inline-flex;
+  gap: 2px;
+}
+.action-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--primary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.action-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.action-icon:hover { background: var(--primary-soft); }
+.action-icon:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.action-icon.danger { color: var(--warning); }
+.action-icon.danger:hover { background: var(--warning-soft); }
+.action-icon.danger:focus-visible { outline-color: var(--warning); }
+
 /* ── Detail view ─────────────────────────────────────────────────────── */
 
 .back-link {

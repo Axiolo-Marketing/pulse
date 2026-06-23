@@ -758,9 +758,17 @@ function engagementRowHtml(
         </label>
       </td>
       <td class="actions">
-        <button class="action-link" type="button" data-action="view">View responses</button>
-        <button class="action-link" type="button" data-action="copy-link">Copy link</button>
-        <button class="action-link danger" type="button" data-action="delete">Delete</button>
+        <div class="action-icons">
+          <button class="action-icon" type="button" data-action="view" aria-label="View responses" title="View responses">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+          <button class="action-icon" type="button" data-action="copy-link" aria-label="Copy link" title="Copy link">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          </button>
+          <button class="action-icon danger" type="button" data-action="delete" aria-label="Delete" title="Delete">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+          </button>
+        </div>
       </td>
     </tr>`;
 }
