@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pulse_api import storage
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
+from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import uploads as uploads_repo
 
 router = APIRouter(prefix="/api", tags=["client"])
@@ -44,6 +45,17 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="invalid kind")
     if not await uploads_repo.card_belongs_to_caller(session, card_id):
         raise HTTPException(status_code=404, detail="card not found")
+    # Voice is gated per engagement (default off). Refuse the write when
+    # the toggle is off even though the UI hides the control — this guard
+    # is the real enforcement; the hidden button is only cosmetic. The
+    # flag is read RLS-scoped from the token's own client row.
+    if kind == "voice" and not await clients_repo.voice_enabled_for_my_client(
+        session
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="voice recording is not enabled for this engagement",
+        )
 
     content = await file.read()
     if len(content) > settings.max_upload_bytes:

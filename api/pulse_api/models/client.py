@@ -26,6 +26,9 @@ class Client(SQLModel, table=True):
             sits in. NULL means the implicit "Ungrouped" bucket. The FK
             is `on delete set null`, so deleting a folder ungroups its
             engagements rather than deleting them.
+        voice_enabled: When ``True``, the client deck shows the voice
+            record control and the upload route accepts ``kind='voice'``
+            writes. Defaults ``False`` — voice is opt-in per engagement.
         created_at: Insert timestamp (naive UTC).
         last_active_at: Updated by the client touch-endpoint.
     """
@@ -42,5 +45,6 @@ class Client(SQLModel, table=True):
     group_id: uuid.UUID | None = Field(
         default=None, foreign_key="engagement_groups.id"
     )
+    voice_enabled: bool = False
     created_at: datetime = Field(default_factory=utcnow_naive)
     last_active_at: datetime | None = None

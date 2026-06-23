@@ -52,13 +52,17 @@ class UpdateClientRequest(BaseModel):
     `group_id` moves the engagement into a folder; send `null` to
     ungroup it (move to the implicit "Ungrouped" bucket). It's
     distinguished from "not provided" via `model_dump(exclude_unset=True)`
-    in the handler, so a body without the key never touches the column."""
+    in the handler, so a body without the key never touches the column.
+
+    `voice_enabled` toggles the per-engagement voice recorder. Omitting it
+    (the same `exclude_unset` path) leaves the flag untouched."""
 
     name: str | None = None
     org_name: str | None = None
     engagement_name: str | None = None
     brief: str | None = None
     group_id: str | None = None
+    voice_enabled: bool | None = None
 
 
 class GroupRequest(BaseModel):

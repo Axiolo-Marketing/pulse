@@ -14,6 +14,7 @@ import {
   type OrgDetails,
   type OrgSummary,
   type ResponseType,
+  type UpdateClientArgs,
   type UploadRow,
 } from "../lib/api";
 import { applyBranding } from "../lib/branding";
@@ -1140,6 +1141,11 @@ function openNewEngagementModal(
             ${folderOptionsHtml(groups, null)}
           </select>
         </label>
+        <label class="edit-field edit-field--check">
+          <input type="checkbox" id="ne-voice" />
+          <span class="edit-label">Voice recording</span>
+        </label>
+        <p class="edit-hint">Let clients record spoken answers on this engagement's questions.</p>
         <div class="edit-actions">
           <button class="btn-primary-sm" type="submit">Create engagement</button>
           <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
@@ -1169,6 +1175,7 @@ function openNewEngagementModal(
     const eng = (modalEl.querySelector<HTMLInputElement>("#ne-eng")?.value ?? "").trim();
     const folderRaw = modalEl.querySelector<HTMLSelectElement>("#ne-folder")?.value ?? UNGROUPED;
     const groupId = folderRaw === UNGROUPED ? null : folderRaw;
+    const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ne-voice")?.checked ?? false;
     if (!name) {
       modalEl.querySelector<HTMLInputElement>("#ne-name")?.focus();
       return;
@@ -1186,10 +1193,15 @@ function openNewEngagementModal(
         org_name: org || null,
         engagement_name: eng || null,
       });
-      // Create doesn't accept group_id (folders are assigned via PATCH);
-      // if the operator picked a folder, move the new engagement into it.
-      if (groupId !== null) {
-        await adminApi.updateClient(created.id, { group_id: groupId });
+      // Create accepts neither group_id nor voice_enabled — both are
+      // assigned via PATCH. Fold them into a single follow-up update so a
+      // new engagement lands in the right folder with voice on if asked.
+      // Voice defaults off server-side, so only PATCH when it's checked.
+      const patch: UpdateClientArgs = {};
+      if (groupId !== null) patch.group_id = groupId;
+      if (voiceEnabled) patch.voice_enabled = true;
+      if (Object.keys(patch).length > 0) {
+        await adminApi.updateClient(created.id, patch);
       }
       close();
       toast(`Engagement created for ${created.name}`);
@@ -1329,6 +1341,11 @@ function openEditEngagementModal(
             <option value="${UNGROUPED}" selected>Loading folders…</option>
           </select>
         </label>
+        <label class="edit-field edit-field--check">
+          <input type="checkbox" id="ee-voice" ${client.voice_enabled ? "checked" : ""} />
+          <span class="edit-label">Voice recording</span>
+        </label>
+        <p class="edit-hint">Let clients record spoken answers on this engagement's questions.</p>
         <div class="edit-actions">
           <button class="btn-primary-sm" type="submit">Save changes</button>
           <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
@@ -1384,15 +1401,12 @@ function openEditEngagementModal(
       submitBtn.textContent = "Saving...";
     }
 
-    const args: {
-      name: string;
-      org_name: string | null;
-      engagement_name: string | null;
-      group_id?: string | null;
-    } = {
+    const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ee-voice")?.checked ?? false;
+    const args: UpdateClientArgs = {
       name,
       org_name: org || null,
       engagement_name: eng || null,
+      voice_enabled: voiceEnabled,
     };
     // Only send group_id once the folder list loaded — otherwise we'd
     // send the placeholder value and accidentally ungroup the engagement.
@@ -1404,6 +1418,7 @@ function openEditEngagementModal(
     try {
       const updated = await adminApi.updateClient(client.id, args);
       client.group_id = updated.group_id ?? null;
+      client.voice_enabled = updated.voice_enabled;
       onSaved({
         name: updated.name,
         org_name: updated.org_name,

@@ -64,11 +64,14 @@ async def test_upload_defaults_kind_to_file(
 
 async def test_upload_stores_and_returns_voice_kind(
     client_authed: AsyncClient,
+    seed_client: dict[str, str],
     seed_cards: list[dict[str, str]],
+    db: AsyncSession,
     tmp_uploads_dir: Path,
 ) -> None:
     """A voice answer rides the same pipeline with `kind='voice'`. The
     stored row carries the discriminator so the viewer renders a player."""
+    await _set_voice_enabled(db, seed_client["id"], True)
     r = await client_authed.post(
         "/api/uploads",
         data={"card_id": seed_cards[0]["id"], "kind": "voice"},
@@ -96,11 +99,14 @@ async def test_upload_rejects_invalid_kind(
 
 async def test_voice_upload_listed_with_kind(
     client_authed: AsyncClient,
+    seed_client: dict[str, str],
     seed_cards: list[dict[str, str]],
+    db: AsyncSession,
     tmp_uploads_dir: Path,
 ) -> None:
     """`list_for_client` (admin viewer + MCP) projects `kind`, so a voice
     note shows up distinctly in the engagement listing."""
+    await _set_voice_enabled(db, seed_client["id"], True)
     await client_authed.post(
         "/api/uploads",
         data={"card_id": seed_cards[0]["id"], "kind": "voice"},
@@ -115,12 +121,16 @@ async def test_voice_upload_listed_with_kind(
 
 async def test_voice_upload_still_size_capped(
     client_authed: AsyncClient,
+    seed_client: dict[str, str],
     seed_cards: list[dict[str, str]],
+    db: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The size cap applies regardless of kind."""
+    """The size cap applies regardless of kind (with voice enabled, the
+    request gets past the toggle guard and hits the size check)."""
     from pulse_api.config import settings
     monkeypatch.setattr(settings, "max_upload_bytes", 10)
+    await _set_voice_enabled(db, seed_client["id"], True)
 
     r = await client_authed.post(
         "/api/uploads",
@@ -156,6 +166,104 @@ async def test_voice_upload_other_clients_card_returns_404(
         files={"file": ("voice.webm", b"audio", "audio/webm")},
     )
     assert r.status_code == 404
+
+
+async def _set_voice_enabled(
+    db: AsyncSession, client_id: str, enabled: bool
+) -> None:
+    # A prior `client_authed` request flips the shared connection into the
+    # `pulse_anon` role (which can't write `clients`). Reset to the owner
+    # role first — `set local role` is transaction-local, so this just
+    # undoes the request's flip. Mirrors the conftest override pattern.
+    await db.execute(text("reset role"))
+    await db.execute(
+        text(
+            "update public.clients set voice_enabled = :v "
+            "where id = cast(:cid as uuid)"
+        ),
+        {"v": enabled, "cid": client_id},
+    )
+
+
+async def test_voice_upload_rejected_when_disabled(
+    client_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+) -> None:
+    """Engagements default to voice OFF, so a `kind='voice'` POST is
+    refused with 403 — the real enforcement behind the hidden UI."""
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"audio bytes", "audio/webm")},
+    )
+    assert r.status_code == 403
+    assert "not enabled" in r.json()["detail"]
+
+
+async def test_voice_upload_allowed_when_enabled(
+    client_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    db: AsyncSession,
+    tmp_uploads_dir: Path,
+) -> None:
+    """Flipping the per-engagement toggle on lets the voice upload through."""
+    await _set_voice_enabled(db, seed_client["id"], True)
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"audio bytes", "audio/webm")},
+    )
+    assert r.status_code == 201
+    assert r.json()["kind"] == "voice"
+
+
+async def test_file_upload_unaffected_by_voice_toggle(
+    client_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+) -> None:
+    """The guard only gates `kind='voice'` — a normal file upload still
+    succeeds on a voice-disabled engagement."""
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "file"},
+        files={"file": ("report.pdf", b"hello pdf bytes", "application/pdf")},
+    )
+    assert r.status_code == 201
+    assert r.json()["kind"] == "file"
+
+
+async def test_existing_voice_upload_readable_after_disable(
+    client_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    db: AsyncSession,
+    tmp_uploads_dir: Path,
+) -> None:
+    """Disabling voice must not break already-recorded answers — the
+    column only governs new uploads, not playback of existing ones."""
+    await _set_voice_enabled(db, seed_client["id"], True)
+    created = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"], "kind": "voice"},
+        files={"file": ("voice.webm", b"audio bytes", "audio/webm")},
+    )
+    assert created.status_code == 201
+    upload_id = created.json()["id"]
+
+    # Operator turns voice back off.
+    await _set_voice_enabled(db, seed_client["id"], False)
+
+    # The recording is still listed and still downloadable.
+    listed = await client_authed.get("/api/uploads")
+    assert any(row["id"] == upload_id for row in listed.json())
+    fetched = await client_authed.get(f"/api/files/{upload_id}")
+    assert fetched.status_code == 200
+    assert fetched.content == b"audio bytes"
 
 
 async def test_upload_rejects_oversize(

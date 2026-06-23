@@ -234,6 +234,54 @@ async def test_patch_engagement_unknown_id_returns_404(admin_authed: AsyncClient
     assert r.status_code == 404
 
 
+async def test_get_engagement_voice_enabled_defaults_false(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
+    assert r.status_code == 200
+    assert r.json()["client"]["voice_enabled"] is False
+
+
+async def test_patch_engagement_toggles_voice_enabled(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.patch(
+        f"/api/admin/clients/{seed_client['id']}",
+        json={"voice_enabled": True},
+    )
+    assert r.status_code == 200
+    assert r.json()["voice_enabled"] is True
+    # And it persists on a fresh read.
+    detail = await admin_authed.get(f"/api/admin/clients/{seed_client['id']}")
+    assert detail.json()["client"]["voice_enabled"] is True
+
+
+async def test_patch_engagement_omitting_voice_enabled_leaves_it(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    """A PATCH without `voice_enabled` must not reset the flag — it rides
+    the same `model_dump(exclude_unset=True)` path as every other field."""
+    await admin_authed.patch(
+        f"/api/admin/clients/{seed_client['id']}",
+        json={"voice_enabled": True},
+    )
+    r = await admin_authed.patch(
+        f"/api/admin/clients/{seed_client['id']}", json={"org_name": "New Org"}
+    )
+    assert r.status_code == 200
+    assert r.json()["org_name"] == "New Org"
+    assert r.json()["voice_enabled"] is True  # untouched by the second PATCH
+
+
+async def test_list_engagements_includes_voice_enabled(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.get("/api/admin/clients")
+    assert r.status_code == 200
+    row = next(c for c in r.json() if c["id"] == seed_client["id"])
+    assert row["voice_enabled"] is False
+
+
 # ── POST /api/admin/clients/{id}/rotate-token ─────────────────────────────
 
 

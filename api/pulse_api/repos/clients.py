@@ -21,7 +21,7 @@ async def get_my_client(session: AsyncSession) -> dict | None:
     result = await session.execute(
         text(
             "select c.id::text, c.name, c.org_name, c.engagement_name, "
-            "c.brief, c.created_at, c.last_active_at, "
+            "c.brief, c.voice_enabled, c.created_at, c.last_active_at, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.clients c "
             "left join public.organizations o on o.id = c.org_id "
@@ -59,6 +59,33 @@ async def get_my_org_logo_path(session: AsyncSession) -> str | None:
     return result.scalar_one_or_none()
 
 
+async def voice_enabled_for_my_client(session: AsyncSession) -> bool:
+    """Return whether voice recording is enabled for the token-bound client.
+
+    Runs on the ``pulse_anon`` session. This is the security gate the upload
+    route consults before accepting a ``kind='voice'`` upload, so it filters
+    on ``pulse_request_token()`` EXPLICITLY (like ``touch_last_active``)
+    rather than leaning on RLS alone — the flag is then correct even if RLS
+    were ever not engaged. Returns ``False`` when no client resolves
+    (unknown token) — the upload route treats that as "voice not allowed",
+    the safe default.
+
+    Args:
+        session: ``pulse_anon`` session with ``pulse.token`` set.
+
+    Returns:
+        The client's ``voice_enabled`` flag, or ``False`` when no row
+        resolves.
+    """
+    result = await session.execute(
+        text(
+            "select voice_enabled from public.clients "
+            "where token = public.pulse_request_token() limit 1"
+        )
+    )
+    return bool(result.scalar_one_or_none())
+
+
 async def touch_last_active(session: AsyncSession) -> bool:
     """Updates last_active_at on the token-bound client. Returns True if a
     row was updated. RLS + the column-scoped grant restrict this to the
@@ -84,7 +111,7 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
             select
               c.id::text                                         as id,
               c.name, c.org_name, c.engagement_name, c.token,
-              c.brief, c.created_at, c.last_active_at,
+              c.brief, c.voice_enabled, c.created_at, c.last_active_at,
               c.group_id::text                                   as group_id,
               g.name                                             as group_name,
               coalesce(count(r.*) filter (where r.state = 'answered'), 0)::int as answered_count,
@@ -106,7 +133,7 @@ async def get_by_id(session: AsyncSession, client_id: str) -> dict | None:
         result = await session.execute(
             text(
                 "select id::text, name, org_name, engagement_name, token, brief, "
-                "group_id::text as group_id, "
+                "voice_enabled, group_id::text as group_id, "
                 "created_at, last_active_at from public.clients "
                 "where id = cast(:cid as uuid)"
             ),
@@ -145,7 +172,7 @@ async def create_engagement(
             "insert into public.clients "
             "(name, org_name, engagement_name, token, org_id) "
             "values (:n, :o, :e, :t, cast(:org as uuid)) "
-            "returning id::text, name, org_name, engagement_name, token, brief, "
+            "returning id::text, name, org_name, engagement_name, token, brief, voice_enabled, "
             "group_id::text as group_id, created_at, last_active_at"
         ),
         {
@@ -183,7 +210,7 @@ async def update_engagement(
             text(
                 f"update public.clients set {set_clauses} "
                 f"where id = cast(:cid as uuid) "
-                f"returning id::text, name, org_name, engagement_name, token, brief, "
+                f"returning id::text, name, org_name, engagement_name, token, brief, voice_enabled, "
                 f"group_id::text as group_id, created_at, last_active_at"
             ),
             params,
@@ -236,7 +263,7 @@ async def rotate_token(session: AsyncSession, client_id: str) -> dict | None:
             text(
                 "update public.clients set token = :t "
                 "where id = cast(:cid as uuid) "
-                "returning id::text, name, org_name, engagement_name, token, brief, "
+                "returning id::text, name, org_name, engagement_name, token, brief, voice_enabled, "
                 "group_id::text as group_id, created_at, last_active_at"
             ),
             {"t": new_token, "cid": client_id},

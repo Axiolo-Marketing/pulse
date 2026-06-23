@@ -35,6 +35,34 @@ async def test_me_with_unknown_token_returns_404(client: AsyncClient) -> None:
     assert r.status_code == 404
 
 
+async def test_me_voice_enabled_defaults_false(
+    client_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    """A fresh engagement has voice off; the deck reads the flag here."""
+    r = await client_authed.get("/api/me")
+    assert r.status_code == 200
+    assert r.json()["voice_enabled"] is False
+
+
+async def test_me_reflects_voice_enabled_when_on(
+    client_authed: AsyncClient, seed_client: dict[str, str], db: AsyncSession
+) -> None:
+    # The shared test connection may be left in the pulse_anon role by a
+    # prior client request (which has no UPDATE grant on clients); reset to
+    # the owner role before seeding the flag, like _set_voice_enabled does.
+    await db.execute(text("reset role"))
+    await db.execute(
+        text(
+            "update public.clients set voice_enabled = true "
+            "where id = cast(:cid as uuid)"
+        ),
+        {"cid": seed_client["id"]},
+    )
+    r = await client_authed.get("/api/me")
+    assert r.status_code == 200
+    assert r.json()["voice_enabled"] is True
+
+
 # ── /api/cards ─────────────────────────────────────────────────────────────
 
 

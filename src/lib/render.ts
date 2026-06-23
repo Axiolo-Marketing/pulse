@@ -121,7 +121,8 @@ export interface CardHandlers {
   onFilesSelected: (files: FileList) => void;
   onUploadRemove: (uploadId: string) => void;
   onFilesContinue: (note?: string) => void;
-  // voice answer (record control, present on every card)
+  // voice answer (record control; only rendered when the engagement has
+  // voice enabled — see `RenderCardArgs.voiceEnabled`)
   onVoiceRecord: () => void;
   onVoicePause: () => void;
   onVoiceResume: () => void;
@@ -150,9 +151,13 @@ export interface RenderCardArgs {
   baseUrl: string;
   uploads: CompletedUpload[];
   pending: PendingUpload[];
-  /** Voice-recorder UI state for this card. Drives the record control
-   * rendered on every card below the primary input. */
+  /** Voice-recorder UI state for this card. Only consulted when
+   * `voiceEnabled` is true; otherwise no voice UI renders at all. */
   voice: VoiceState;
+  /** Whether this engagement has voice recording enabled (per-engagement
+   * toggle, default off). When false, no voice control — record button or
+   * playback — renders on any card. */
+  voiceEnabled: boolean;
   modalOpen: boolean;
   pickerOpen?: boolean;
   draftSelections?: Set<string>;
@@ -329,7 +334,7 @@ function renderViewBody(
     <p class="question">${escape(card.question)}</p>
     ${renderPriorHint(card, args.existingResponse)}
     ${renderInput(card, saving, args)}
-    ${renderVoiceControl(args.voice, saving)}
+    ${args.voiceEnabled ? renderVoiceControl(args.voice, saving) : ""}
     ${renderNoteField(card, saving, args.existingResponse)}
     <div class="actions">${renderActions(card, saving, args)}</div>
   `;
@@ -342,9 +347,11 @@ function formatTimer(totalSeconds: number): string {
   return `${mm}:${ss}`;
 }
 
-// Per-card voice recorder. Rendered on EVERY card, below the primary input.
-// A voice note supplements the typed answer; a voice-only answer still
-// counts as answered (app.ts forces state='answered' when one is present).
+// Per-card voice recorder. Rendered below the primary input on every card
+// of a voice-enabled engagement (gated by `RenderCardArgs.voiceEnabled` —
+// when off, this isn't called at all). A voice note supplements the typed
+// answer; a voice-only answer still counts as answered (app.ts forces
+// state='answered' when one is present).
 function renderVoiceControl(voice: VoiceState, saving: boolean): string {
   const errorHtml = voice.error
     ? `<p class="voice-error" role="alert">${escape(voice.error)}</p>`

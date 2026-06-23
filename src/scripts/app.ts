@@ -98,8 +98,14 @@ async function loadBootData(token: string): Promise<BootData | null> {
   const voiceUploads = new Map<string, UploadRow>();
   for (const row of uploadsList) {
     if (row.kind === "voice") {
-      // One voice note per card — last one wins if somehow duplicated.
-      voiceUploads.set(row.card_id, row);
+      // Voice answers are only surfaced when the engagement has voice
+      // enabled. If a recording predates the toggle being turned off, we
+      // simply don't seed it — the deck shows no voice UI, and the
+      // recording stays safely in the DB (still visible in /admin/).
+      if (client.voice_enabled) {
+        // One voice note per card — last one wins if somehow duplicated.
+        voiceUploads.set(row.card_id, row);
+      }
       continue;
     }
     const list = uploads.get(row.card_id) ?? [];
@@ -307,6 +313,7 @@ function runApp(ctx: RunCtx): void {
       uploads: uploads.get(card.id) ?? [],
       pending: pendingUploads,
       voice: voiceStateFor(card.id),
+      voiceEnabled: client.voice_enabled,
       modalOpen,
       pickerOpen,
       draftSelections,
@@ -571,6 +578,10 @@ function runApp(ctx: RunCtx): void {
 
   // Start (or restart, for "Re-record") a recording on the current card.
   const startVoiceRecording = async (): Promise<void> => {
+    // Defence: the record button isn't rendered when voice is disabled,
+    // so this is unreachable — but a disabled engagement must never start
+    // a recording even if some path tried to.
+    if (!client.voice_enabled) return;
     if (voiceMutating || recorder.state !== "idle") return;
     voiceMutating = true;
     const card = cards[index];

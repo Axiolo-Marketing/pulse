@@ -57,6 +57,8 @@ class ClientMe(BaseModel):
         org_name: Legacy free-text customer-org label.
         engagement_name: Optional engagement label.
         brief: Optional engagement brief.
+        voice_enabled: Whether the deck should offer the voice recorder.
+            Defaults ``False`` — voice is opt-in per engagement.
         created_at: Insert timestamp.
         last_active_at: Last client activity timestamp.
         org_logo_path: Owning org's logo path, or ``None``. The deck
@@ -72,6 +74,7 @@ class ClientMe(BaseModel):
     org_name: str | None = None
     engagement_name: str | None = None
     brief: str | None = None
+    voice_enabled: bool = False
     created_at: Any | None = None
     last_active_at: Any | None = None
     org_logo_path: str | None = None

@@ -577,6 +577,36 @@
   margin-top: 8px;
 }
 
+/* Voice-recording toggle: a horizontal checkbox row (overrides the
+   column layout the other .edit-field rows use) plus a helper line. */
+.new-eng-form .edit-field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-eng-form .edit-field--check .edit-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.new-eng-form .edit-field--check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.new-eng-form .edit-hint {
+  margin: -4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 .response-card-head-right {
   display: flex;
   align-items: center;

@@ -119,6 +119,12 @@ export interface Client {
   group_id?: string | null;
   created_at: string;
   last_active_at: string | null;
+  /** Whether voice recording is enabled for this engagement. Defaults
+   * `false` — voice is opt-in per engagement. The client deck shows the
+   * record control only when this is `true`; on `/api/me` the field is
+   * always present. Admin views also carry it (operators toggle it from
+   * the engagement edit form). */
+  voice_enabled: boolean;
   /** Optional brand logo path for the operator's organization. When
    * `/api/me` returns this, the client-facing deck renders it in the
    * top-bar instead of the default Axiolo wordmark. Backend wires this
@@ -437,6 +443,9 @@ export interface EngagementSummary {
   group_name: string | null;
   created_at: string;
   last_active_at: string | null;
+  /** Whether voice recording is enabled for this engagement (default
+   * `false`). Operators flip it from the engagement edit form. */
+  voice_enabled: boolean;
   answered_count: number;
   skipped_count: number;
   total_cards: number;
@@ -475,6 +484,9 @@ export interface UpdateClientArgs {
    * off `model_dump(exclude_unset=True)`, so an absent key never writes
    * the column. */
   group_id?: string | null;
+  /** Toggle the per-engagement voice recorder. Omit to leave it
+   * unchanged (same `exclude_unset` semantics as `group_id`). */
+  voice_enabled?: boolean;
 }
 
 export interface CreateCardArgs {
