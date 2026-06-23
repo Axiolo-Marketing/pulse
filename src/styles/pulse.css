@@ -8,6 +8,11 @@
   --muted:         #717171;
   --warning:       #F59E0B;
   --warning-soft:  #FEF3C7;
+  /* Success / "complete" — used by the derived-status pill. Soft green
+     background + a darker green text for legible contrast, matching the
+     soft-pill style of --primary-soft / --warning-soft. */
+  --success:       #047857;
+  --success-soft:  #D1FAE5;
   --white:         #FFFFFF;
 
   --radius:       12px;

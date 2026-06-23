@@ -18,6 +18,13 @@ import {
   type UploadRow,
 } from "../lib/api";
 import { applyBranding } from "../lib/branding";
+import {
+  engagementStatus,
+  STATUS_CSS_CLASS,
+  STATUS_LABELS,
+  STATUS_ORDER,
+  type EngagementStatus,
+} from "../lib/engagement-status";
 import { formatTimestamp } from "../lib/format-time";
 import { renderOrgSwitcher } from "./org-switcher";
 import {
@@ -712,9 +719,38 @@ async function draw(
 
 // ── list view ───────────────────────────────────────────────────────────
 
+// Sentinel for the "Unassigned" owner bucket in the owner filter. Real
+// owner names are matched verbatim; null owners collapse to this key.
+const UNASSIGNED_OWNER = " unassigned";
+
+type SortKey = "name" | "last_active" | "status";
+
+/** Client-side filter/sort selection for the engagement list. Module-level
+ * so it survives re-renders within a session (delete → reload keeps the
+ * operator's chosen view). Persisting across full reloads is out of scope. */
+const listControls: {
+  status: EngagementStatus | "all";
+  client: string; // client_id or "all"
+  owner: string; // owner_name, UNASSIGNED_OWNER, or "all"
+  sort: SortKey;
+} = {
+  status: "all",
+  client: "all",
+  owner: "all",
+  sort: "name",
+};
+
+/** Owner-filter key for a summary — its trimmed owner name, or the
+ * unassigned sentinel when no owner is attributed. */
+function ownerKey(s: EngagementSummary): string {
+  const name = s.owner_name?.trim();
+  return name ? name : UNASSIGNED_OWNER;
+}
+
 function engagementRowHtml(s: EngagementSummary): string {
   const completed = s.answered_count + s.skipped_count;
   const owner = s.owner_name?.trim() || s.owner_email?.trim() || "—";
+  const status = engagementStatus(s);
   return `
     <tr data-engagement-id="${escape(s.id)}">
       <td>
@@ -723,6 +759,7 @@ function engagementRowHtml(s: EngagementSummary): string {
       </td>
       <td>
         <span class="progress-pill">${completed} / ${s.total_cards}</span>
+        <span class="status-pill ${STATUS_CSS_CLASS[status]}">${STATUS_LABELS[status]}</span>
       </td>
       <td class="owner-cell">${escape(owner)}</td>
       <td class="last-active">${escape(formatTimestamp(s.last_active_at))}</td>
@@ -742,10 +779,32 @@ function engagementRowHtml(s: EngagementSummary): string {
     </tr>`;
 }
 
+/** Concise per-client rollup of derived statuses, e.g.
+ * "3 engagements · 1 complete · 2 in progress". Zero buckets are omitted;
+ * an empty client reads just "0 engagements". `members` is the full set of
+ * that client's engagements (pre-filter) so the rollup reflects the client,
+ * not the current filter view. */
+function clientRollupText(members: EngagementSummary[]): string {
+  const total = members.length;
+  const counts: Record<EngagementStatus, number> = {
+    complete: 0,
+    in_progress: 0,
+    waiting: 0,
+  };
+  for (const m of members) counts[engagementStatus(m)] += 1;
+
+  const parts = [`${total} engagement${total === 1 ? "" : "s"}`];
+  for (const status of STATUS_ORDER) {
+    const n = counts[status];
+    if (n > 0) parts.push(`${n} ${STATUS_LABELS[status].toLowerCase()}`);
+  }
+  return parts.join(" · ");
+}
+
 function clientSectionHtml(
   clientName: string,
   rowsHtml: string,
-  count: number,
+  members: EngagementSummary[],
 ): string {
   const body = rowsHtml
     ? `
@@ -758,10 +817,175 @@ function clientSectionHtml(
   return `
     <section class="client-section">
       <div class="client-header">
-        <h3 class="client-section-name">${escape(clientName)} <span class="client-count">${count}</span></h3>
+        <h3 class="client-section-name">${escape(clientName)} <span class="client-count">${members.length}</span></h3>
+        <span class="client-rollup">${escape(clientRollupText(members))}</span>
       </div>
       ${body}
     </section>`;
+}
+
+/** True when a summary passes the active status + owner filters. The
+ * client filter is applied at the section level (it hides whole sections),
+ * so it's intentionally not checked here. */
+function matchesFilters(s: EngagementSummary): boolean {
+  if (
+    listControls.status !== "all" &&
+    engagementStatus(s) !== listControls.status
+  ) {
+    return false;
+  }
+  if (listControls.owner !== "all" && ownerKey(s) !== listControls.owner) {
+    return false;
+  }
+  return true;
+}
+
+/** Comparator for the chosen sort key, applied WITHIN each client section
+ * (sections themselves stay alphabetical by client name). */
+function sortComparator(
+  key: SortKey,
+): (a: EngagementSummary, b: EngagementSummary) => number {
+  if (key === "name") {
+    return (a, b) =>
+      (a.engagement_name?.trim() || "Untitled engagement").localeCompare(
+        b.engagement_name?.trim() || "Untitled engagement",
+        undefined,
+        { sensitivity: "base" },
+      );
+  }
+  if (key === "last_active") {
+    // Newest first; nulls (never active) sort last.
+    return (a, b) => {
+      const ta = a.last_active_at ? Date.parse(a.last_active_at) : -Infinity;
+      const tb = b.last_active_at ? Date.parse(b.last_active_at) : -Infinity;
+      return tb - ta;
+    };
+  }
+  // "status" — order by STATUS_ORDER (complete → in progress → waiting),
+  // tie-broken by engagement name for stability.
+  const rank = (s: EngagementSummary): number =>
+    STATUS_ORDER.indexOf(engagementStatus(s));
+  return (a, b) => {
+    const d = rank(a) - rank(b);
+    if (d !== 0) return d;
+    return (a.engagement_name?.trim() || "Untitled engagement").localeCompare(
+      b.engagement_name?.trim() || "Untitled engagement",
+      undefined,
+      { sensitivity: "base" },
+    );
+  };
+}
+
+/** Build the filter/sort controls bar. Client + owner option lists are
+ * derived from the fetched data (distinct, sorted). Selections reflect the
+ * persisted `listControls` so a re-render keeps the operator's view. */
+function controlsBarHtml(
+  summaries: EngagementSummary[],
+  clients: ClientSummary[],
+): string {
+  const sel = (val: string, current: string): string =>
+    val === current ? " selected" : "";
+
+  const statusOpts = [
+    `<option value="all"${sel("all", listControls.status)}>All statuses</option>`,
+    ...STATUS_ORDER.map(
+      (st) =>
+        `<option value="${st}"${sel(st, listControls.status)}>${STATUS_LABELS[st]}</option>`,
+    ),
+  ].join("");
+
+  const clientOpts = [
+    `<option value="all"${sel("all", listControls.client)}>All clients</option>`,
+    ...clients.map(
+      (c) =>
+        `<option value="${escape(c.id)}"${sel(c.id, listControls.client)}>${escape(c.name)}</option>`,
+    ),
+  ].join("");
+
+  // Distinct owner names from the data + an "Unassigned" bucket when any
+  // engagement has no owner. Sorted case-insensitively; sentinel last.
+  const ownerNames = new Set<string>();
+  let hasUnassigned = false;
+  for (const s of summaries) {
+    const name = s.owner_name?.trim();
+    if (name) ownerNames.add(name);
+    else hasUnassigned = true;
+  }
+  const sortedOwners = [...ownerNames].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" }),
+  );
+  const ownerOpts = [
+    `<option value="all"${sel("all", listControls.owner)}>All owners</option>`,
+    ...sortedOwners.map(
+      (n) =>
+        `<option value="${escape(n)}"${sel(n, listControls.owner)}>${escape(n)}</option>`,
+    ),
+    hasUnassigned
+      ? `<option value="${escape(UNASSIGNED_OWNER)}"${sel(UNASSIGNED_OWNER, listControls.owner)}>Unassigned</option>`
+      : "",
+  ].join("");
+
+  const sortOpts = [
+    `<option value="name"${sel("name", listControls.sort)}>Engagement name (A–Z)</option>`,
+    `<option value="last_active"${sel("last_active", listControls.sort)}>Last active (newest)</option>`,
+    `<option value="status"${sel("status", listControls.sort)}>Status</option>`,
+  ].join("");
+
+  return `
+    <div class="list-controls" role="group" aria-label="Filter and sort engagements">
+      <label class="list-control">
+        <span class="list-control-label">Status</span>
+        <select class="input filter-select" data-control="status">${statusOpts}</select>
+      </label>
+      <label class="list-control">
+        <span class="list-control-label">Client</span>
+        <select class="input filter-select" data-control="client">${clientOpts}</select>
+      </label>
+      <label class="list-control">
+        <span class="list-control-label">Owner</span>
+        <select class="input filter-select" data-control="owner">${ownerOpts}</select>
+      </label>
+      <label class="list-control">
+        <span class="list-control-label">Sort</span>
+        <select class="input filter-select" data-control="sort">${sortOpts}</select>
+      </label>
+    </div>
+  `;
+}
+
+/** Wire the controls bar via one delegated `change` listener. Each select
+ * carries a `data-control` key; updating the matching `listControls` field
+ * and repainting the list region is all it takes. */
+function bindListControls(container: HTMLElement, paint: () => void): void {
+  const bar = container.querySelector<HTMLElement>(".list-controls");
+  if (!bar) return;
+  bar.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLSelectElement)) return;
+    const key = target.dataset.control;
+    // `target.value` is the browser-decoded attribute — i.e. the raw client/
+    // owner name (the option `value` is escape()'d for HTML and decoded back on
+    // read). So `listControls` holds raw strings that match the keys built in
+    // `matchesFilters` (`ownerKey(s)` / `c.id`); keep this invariant.
+    const value = target.value;
+    switch (key) {
+      case "status":
+        listControls.status = value as EngagementStatus | "all";
+        break;
+      case "client":
+        listControls.client = value;
+        break;
+      case "owner":
+        listControls.owner = value;
+        break;
+      case "sort":
+        listControls.sort = value as SortKey;
+        break;
+      default:
+        return;
+    }
+    paint();
+  });
 }
 
 function renderList(
@@ -798,22 +1022,67 @@ function renderList(
     byClient.set(s.client_id, list);
   }
 
-  // One section per client (the API returns clients ordered by name).
-  // Clients with zero engagements still render so the operator sees them.
-  const sections = clients
-    .map((c) => {
-      const members = byClient.get(c.id) ?? [];
-      const rowsHtml = members.map((s) => engagementRowHtml(s)).join("");
-      return clientSectionHtml(c.name, rowsHtml, members.length);
-    })
-    .join("");
+  // Drop a stale client selection (e.g. its only engagement was deleted and
+  // the client no longer exists) so the filter doesn't silently hide
+  // everything. Owner/status selections self-heal via the "no match" state.
+  if (
+    listControls.client !== "all" &&
+    !clients.some((c) => c.id === listControls.client)
+  ) {
+    listControls.client = "all";
+  }
 
   container.innerHTML = `
     ${header}
-    <div class="client-list">${sections}</div>
+    ${controlsBarHtml(summaries, clients)}
+    <div class="client-list" id="engagement-list-region"></div>
   `;
 
+  // Re-render only the list region from the current filter/sort selection.
+  // Called on first paint and on every control change — the header,
+  // controls bar, and the delegated row-action listener all persist.
+  const paint = (): void => {
+    const region = container.querySelector<HTMLElement>("#engagement-list-region");
+    if (!region) return;
+
+    const sort = sortComparator(listControls.sort);
+    let anyVisible = false;
+    const sections = clients
+      .map((c) => {
+        const members = byClient.get(c.id) ?? [];
+        // Client filter hides whole non-matching sections outright.
+        if (listControls.client !== "all" && c.id !== listControls.client) {
+          return "";
+        }
+        const visible = members
+          .filter(matchesFilters)
+          .sort(sort);
+        // A client section with no surviving engagements is hidden — but a
+        // genuinely-empty client (no engagements at all) still shows when no
+        // status/owner filter is active, so the operator sees it exists.
+        if (visible.length === 0) {
+          const noFilters =
+            listControls.status === "all" && listControls.owner === "all";
+          if (members.length === 0 && noFilters) {
+            anyVisible = true;
+            return clientSectionHtml(c.name, "", members);
+          }
+          return "";
+        }
+        anyVisible = true;
+        const rowsHtml = visible.map((s) => engagementRowHtml(s)).join("");
+        return clientSectionHtml(c.name, rowsHtml, members);
+      })
+      .join("");
+
+    region.innerHTML = anyVisible
+      ? sections
+      : `<div class="empty-card"><p>No engagements match the current filters.</p></div>`;
+  };
+
   bindListHeader(container, clients);
+  bindListControls(container, paint);
+  paint();
 
   // ── engagement row actions (view / copy / delete) ──
   container.addEventListener("click", async (e) => {
