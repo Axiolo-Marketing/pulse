@@ -47,8 +47,14 @@ async def _seed_org_with_client(
     token = secrets.token_hex(8)
     await db.execute(
         text(
-            "insert into public.engagements (name, token, org_id) "
-            "values (:n, :t, cast(:o as uuid))"
+            "with c as ("
+            "  insert into public.clients (org_id, name) "
+            "  values (cast(:o as uuid), :n) "
+            "  on conflict (org_id, name) do update set name = excluded.name "
+            "  returning id"
+            ") "
+            "insert into public.engagements (client_id, token, org_id) "
+            "select c.id, :t, cast(:o as uuid) from c"
         ),
         {"n": f"{label} Client", "t": token, "o": org_id},
     )

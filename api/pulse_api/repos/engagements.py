@@ -20,10 +20,11 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
     """
     result = await session.execute(
         text(
-            "select c.id::text, c.name, c.org_name, c.engagement_name, "
+            "select c.id::text, cl.name as name, c.org_name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.created_at, c.last_active_at, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.engagements c "
+            "join public.clients cl on cl.id = c.client_id "
             "left join public.organizations o on o.id = c.org_id "
             "limit 1"
         )
@@ -104,23 +105,30 @@ async def touch_last_active(session: AsyncSession) -> bool:
 
 async def list_all_with_counts(session: AsyncSession) -> list[dict]:
     """All engagements + per-engagement aggregates. The two FILTER counts
-    answer the operator's first-glance question: how far is this engagement?"""
+    answer the operator's first-glance question: how far is this engagement?
+
+    JOINs ``clients`` for the owning client (``client_id`` + ``client_name``)
+    and carries the raw ``created_by`` user id. The owner's display name /
+    email is enriched in a SECOND pass at the route layer against a
+    BYPASSRLS session — ``users`` is not granted to ``pulse_member`` (same
+    pattern the activity feed uses for actor display)."""
     result = await session.execute(
         text(
             """
             select
               c.id::text                                         as id,
-              c.name, c.org_name, c.engagement_name, c.token,
+              cl.id::text                                        as client_id,
+              cl.name                                            as client_name,
+              c.created_by::text                                 as created_by,
+              c.org_name, c.engagement_name, c.token,
               c.brief, c.voice_enabled, c.created_at, c.last_active_at,
-              c.group_id::text                                   as group_id,
-              g.name                                             as group_name,
               coalesce(count(r.*) filter (where r.state = 'answered'), 0)::int as answered_count,
               coalesce(count(r.*) filter (where r.state = 'skipped'),  0)::int as skipped_count,
               (select count(*) from public.cards where engagement_id = c.id)::int  as total_cards
             from public.engagements c
+            join public.clients cl on cl.id = c.client_id
             left join public.responses r on r.engagement_id = c.id
-            left join public.engagement_groups g on g.id = c.group_id
-            group by c.id, g.name
+            group by c.id, cl.id, cl.name
             order by c.created_at desc
             """
         )
@@ -128,14 +136,48 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
     return [dict(r) for r in result.mappings().all()]
 
 
+async def enrich_owner_display(
+    admin_session: AsyncSession, rows: list[dict]
+) -> list[dict]:
+    """Fill ``owner_name`` / ``owner_email`` on engagement summary rows.
+
+    ``list_all_with_counts`` runs on a ``pulse_member`` session which has
+    no grant on ``users``, so it only carries the raw ``created_by`` id.
+    This second pass resolves the display fields against a BYPASSRLS
+    ``admin_session`` (the same two-pass pattern the activity feed uses).
+    Mutates the rows in place (also returns them for convenience). Rows
+    with a NULL ``created_by`` — or whose user was removed — get
+    ``owner_name = owner_email = None``.
+    """
+    from pulse_api.repos import memberships as memberships_repo
+
+    owner_ids = sorted(
+        {str(r["created_by"]) for r in rows if r.get("created_by") is not None}
+    )
+    owner_map = (
+        await memberships_repo.list_user_display_fields(admin_session, owner_ids)
+        if owner_ids
+        else {}
+    )
+    for r in rows:
+        cb = r.get("created_by")
+        u = owner_map.get(str(cb)) if cb is not None else None
+        r["owner_name"] = (str(u["name"]) if u and u.get("name") else None)
+        r["owner_email"] = (str(u["email"]) if u and u.get("email") else None)
+    return rows
+
+
 async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
     try:
         result = await session.execute(
             text(
-                "select id::text, name, org_name, engagement_name, token, brief, "
-                "voice_enabled, group_id::text as group_id, "
-                "created_at, last_active_at from public.engagements "
-                "where id = cast(:cid as uuid)"
+                "select c.id::text, c.client_id::text as client_id, "
+                "cl.name as name, c.org_name, c.engagement_name, c.token, "
+                "c.brief, c.voice_enabled, c.created_by::text as created_by, "
+                "c.created_at, c.last_active_at "
+                "from public.engagements c "
+                "join public.clients cl on cl.id = c.client_id "
+                "where c.id = cast(:cid as uuid)"
             ),
             {"cid": engagement_id},
         )
@@ -148,39 +190,58 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
 async def create_engagement(
     session: AsyncSession,
     *,
-    name: str,
+    client_id: str,
     org_name: str | None,
     engagement_name: str | None,
     org_id: str,
+    created_by: str | None,
 ) -> dict:
-    """Insert a new engagement and return its row.
+    """Insert a new engagement under ``client_id`` and return its row.
+
+    The client owns the customer-facing name now, so this no longer takes
+    a ``name`` — the caller resolves ``client_id`` first (via
+    ``clients.get_or_create`` or an existing id). The returned ``name`` is
+    the client's name, joined back so the create response keeps the same
+    shape the admin API already returns.
 
     Args:
-        session: DB session (admin role in PR 1, member role in PR 2).
-        name: Customer-facing name.
+        session: DB session (``pulse_member`` role).
+        client_id: Owning client UUID (already resolved/verified in-org).
         org_name: Legacy customer-org text column (free-form).
         engagement_name: Optional engagement label.
         org_id: Owning organization UUID — NOT NULL on the column.
+        created_by: User who created the engagement (the active operator),
+            or ``None``.
 
     Returns:
-        Dict of the inserted row with the same keys the admin API
-        already returns for engagement rows.
+        Dict of the inserted row, including the joined client ``name`` +
+        ``client_id``.
     """
     token = secrets.token_hex(8)
     result = await session.execute(
         text(
-            "insert into public.engagements "
-            "(name, org_name, engagement_name, token, org_id) "
-            "values (:n, :o, :e, :t, cast(:org as uuid)) "
-            "returning id::text, name, org_name, engagement_name, token, brief, voice_enabled, "
-            "group_id::text as group_id, created_at, last_active_at"
+            "with ins as ("
+            "  insert into public.engagements "
+            "  (client_id, org_name, engagement_name, token, org_id, created_by) "
+            "  values (cast(:cid as uuid), :o, :e, :t, cast(:org as uuid), "
+            "          cast(:by as uuid)) "
+            "  returning id, client_id, org_name, engagement_name, token, brief, "
+            "            voice_enabled, created_by, created_at, last_active_at"
+            ") "
+            "select ins.id::text, ins.client_id::text as client_id, "
+            "cl.name as name, cl.name as client_name, "
+            "ins.org_name, ins.engagement_name, ins.token, "
+            "ins.brief, ins.voice_enabled, ins.created_by::text as created_by, "
+            "ins.created_at, ins.last_active_at "
+            "from ins join public.clients cl on cl.id = ins.client_id"
         ),
         {
-            "n": name,
+            "cid": client_id,
             "o": org_name,
             "e": engagement_name,
             "t": token,
             "org": org_id,
+            "by": created_by,
         },
     )
     return dict(result.mappings().one())
@@ -193,32 +254,25 @@ async def update_engagement(
     responsible for restricting which keys it forwards (so the wire body
     can't sneak in a token rotation by sending {'token': '...'}).
 
-    ``group_id`` is special-cased: it's a uuid column, so its bind is
-    cast explicitly. Passing ``group_id=None`` ungroups the engagement
-    (moves it to the implicit "Ungrouped" bucket)."""
+    All writable fields (``org_name``, ``engagement_name``, ``brief``,
+    ``voice_enabled``) are plain columns. The customer-facing name lives
+    on ``clients`` now and is NOT mutable through this path. The returned
+    row joins ``clients`` so ``name`` + ``client_id`` stay present."""
     if not fields:
         return await get_by_id(session, engagement_id)
-    # group_id is a uuid column — cast the bind so a NULL or a string id
-    # both bind cleanly. Every other field is plain text.
-    set_clauses = ", ".join(
-        f"{k} = cast(:{k} as uuid)" if k == "group_id" else f"{k} = :{k}"
-        for k in fields
-    )
+    set_clauses = ", ".join(f"{k} = :{k}" for k in fields)
     params = {"cid": engagement_id, **fields}
     try:
-        result = await session.execute(
+        await session.execute(
             text(
                 f"update public.engagements set {set_clauses} "
-                f"where id = cast(:cid as uuid) "
-                f"returning id::text, name, org_name, engagement_name, token, brief, voice_enabled, "
-                f"group_id::text as group_id, created_at, last_active_at"
+                f"where id = cast(:cid as uuid)"
             ),
             params,
         )
     except Exception:
         return None
-    row = result.mappings().one_or_none()
-    return dict(row) if row else None
+    return await get_by_id(session, engagement_id)
 
 
 async def list_upload_paths_for_engagement(

@@ -106,7 +106,11 @@ export type ResponseState =
 
 export interface Engagement {
   id: string;
+  /** The owning client's (company) name. On `/api/me` + admin detail
+   * views this is joined in server-side from `clients.name`. */
   name: string;
+  /** The owning client id (admin views; absent on `/api/me`). */
+  client_id?: string;
   /** Legacy free-form customer-org text on the engagement row (kept for
    * backwards compat). The post-multi-tenant operator-side org is
    * surfaced separately via `org_logo_path` + the brand wordmark. */
@@ -114,9 +118,6 @@ export interface Engagement {
   engagement_name: string | null;
   token?: string;       // present in admin views, omitted from /api/me
   brief: string | null;
-  /** Folder this engagement is in (admin views only; `null` when
-   * ungrouped or on the client-facing `/api/me` payload). */
-  group_id?: string | null;
   created_at: string;
   last_active_at: string | null;
   /** Whether voice recording is enabled for this engagement. Defaults
@@ -428,19 +429,21 @@ export interface OAuthAcceptResponse {
 
 export interface EngagementSummary {
   id: string;
-  name: string;
+  /** Owning client (company) id — the admin list buckets engagements by
+   * this. */
+  client_id: string;
+  /** Owning client name (joined server-side). */
+  client_name: string;
+  /** Engagement owner's display name, or `null` when the owner couldn't
+   * be attributed (e.g. backfilled engagements with no create audit, or
+   * a removed user). */
+  owner_name: string | null;
+  /** Engagement owner's email, or `null`. */
+  owner_email: string | null;
   org_name: string | null;
   engagement_name: string | null;
   token: string;
   brief: string | null;
-  /** Folder this engagement sits in, or `null` for the implicit
-   * "Ungrouped" bucket. Operators move engagements between folders via
-   * `adminApi.updateEngagement(id, { group_id })`. */
-  group_id: string | null;
-  /** Convenience name of the folder (joined server-side); `null` when
-   * ungrouped. The admin list buckets by `group_id` and labels by the
-   * folder list, so this is informational. */
-  group_name: string | null;
   created_at: string;
   last_active_at: string | null;
   /** Whether voice recording is enabled for this engagement (default
@@ -451,15 +454,15 @@ export interface EngagementSummary {
   total_cards: number;
 }
 
-/** One engagement folder (operator-only). The client deck never sees
- * folders. `client_count` is the number of engagements currently in the
- * folder (server-computed). */
-export interface GroupSummary {
+/** One real client (company), operator-only. Powers the admin list's
+ * client grouping and the new-engagement autocomplete. */
+export interface ClientSummary {
   id: string;
   name: string;
   created_at: string;
-  client_count: number;
 }
+
+export type Client = ClientSummary;
 
 export interface EngagementDetail {
   engagement: Engagement & { token: string };
@@ -469,23 +472,23 @@ export interface EngagementDetail {
 }
 
 export interface CreateEngagementArgs {
-  name: string;
+  /** Existing client to attach the engagement to (from the autocomplete).
+   * Provide this OR `client_name`. */
+  client_id?: string;
+  /** Free-form client name; the backend get-or-creates a client by name
+   * in the active org. Provide this OR `client_id`. */
+  client_name?: string;
   org_name?: string | null;
   engagement_name?: string | null;
 }
 
 export interface UpdateEngagementArgs {
-  name?: string;
   org_name?: string | null;
   engagement_name?: string | null;
   brief?: string | null;
-  /** Move the engagement into a folder, or `null` to ungroup it. Omit
-   * the key entirely to leave the folder untouched — the backend keys
-   * off `model_dump(exclude_unset=True)`, so an absent key never writes
-   * the column. */
-  group_id?: string | null;
   /** Toggle the per-engagement voice recorder. Omit to leave it
-   * unchanged (same `exclude_unset` semantics as `group_id`). */
+   * unchanged — the backend keys off `model_dump(exclude_unset=True)`,
+   * so an absent key never writes the column. */
   voice_enabled?: boolean;
 }
 
@@ -582,13 +585,13 @@ export const adminApi = {
   getEngagement: (id: string): Promise<EngagementDetail> =>
     request(`/api/admin/engagements/${id}`),
 
-  createEngagement: (args: CreateEngagementArgs): Promise<EngagementSummary> =>
+  createEngagement: (args: CreateEngagementArgs): Promise<Engagement> =>
     request("/api/admin/engagements", {
       method: "POST",
       body: JSON.stringify(args),
     }),
 
-  updateEngagement: (id: string, args: UpdateEngagementArgs): Promise<EngagementSummary> =>
+  updateEngagement: (id: string, args: UpdateEngagementArgs): Promise<Engagement> =>
     request(`/api/admin/engagements/${id}`, {
       method: "PATCH",
       body: JSON.stringify(args),
@@ -639,26 +642,13 @@ export const adminApi = {
     `${API_BASE}/api/admin/uploads/${uploadId}/download`,
 };
 
-/** Engagement folders (operator-only). Org-scoped on the backend via the
- * same `pulse_member` + `pulse.org_id` RLS as every `/api/admin/*`
- * surface, so a folder created here is invisible to other tenants. */
-export const groupsApi = {
-  list: (): Promise<GroupSummary[]> => request("/api/admin/groups"),
-
-  create: (name: string): Promise<GroupSummary> =>
-    request("/api/admin/groups", {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    }),
-
-  rename: (id: string, name: string): Promise<GroupSummary> =>
-    request(`/api/admin/groups/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ name }),
-    }),
-
-  delete: (id: string): Promise<void> =>
-    request(`/api/admin/groups/${id}`, { method: "DELETE" }),
+/** Real clients (companies), operator-only. Org-scoped on the backend via
+ * the same `pulse_member` + `pulse.org_id` RLS as every `/api/admin/*`
+ * surface, so a client listed here is invisible to other tenants. Clients
+ * are created as a side effect of `adminApi.createEngagement` (with a
+ * `client_name`), so there's no create/update/delete here. */
+export const clientsApi = {
+  list: (): Promise<ClientSummary[]> => request("/api/admin/clients"),
 };
 
 // ── Org switching, details, members, invites (operator surface) ───────────

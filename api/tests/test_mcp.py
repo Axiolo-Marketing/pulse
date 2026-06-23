@@ -284,7 +284,7 @@ async def test_create_then_delete_engagement_roundtrip(
         "tools/call",
         _tool_call_payload(
             "pulse_create_engagement",
-            {"name": "MCP roundtrip", "org_name": "Acme"},
+            {"client_name": "MCP roundtrip", "org_name": "Acme"},
         ),
         api_key=raw,
     )
@@ -292,11 +292,16 @@ async def test_create_then_delete_engagement_roundtrip(
     created = _structured(create_resp)
     client_id = created["id"]
     assert created["name"] == "MCP roundtrip"
+    assert created["client_name"] == "MCP roundtrip"
     assert created["org_name"] == "Acme"
-    # The row exists in the DB now.
+    # The engagement + its client row exist in the DB now.
     row = (
         await db.execute(
-            text("select name from public.engagements where id = cast(:i as uuid)"),
+            text(
+                "select cl.name from public.engagements e "
+                "join public.clients cl on cl.id = e.client_id "
+                "where e.id = cast(:i as uuid)"
+            ),
             {"i": client_id},
         )
     ).scalar_one_or_none()
@@ -394,7 +399,7 @@ async def test_create_engagement_then_import_deck_orders_cards(
         mcp_client,
         "tools/call",
         _tool_call_payload(
-            "pulse_create_engagement", {"name": "Deck import"}
+            "pulse_create_engagement", {"client_name": "Deck import"}
         ),
         api_key=raw,
     )
@@ -493,7 +498,7 @@ async def test_upload_attachment_then_add_card_links_path(
             mcp_client,
             "tools/call",
             _tool_call_payload(
-                "pulse_create_engagement", {"name": "Attachment link"}
+                "pulse_create_engagement", {"client_name": "Attachment link"}
             ),
             api_key=raw,
         )
@@ -547,7 +552,7 @@ async def test_remaining_tool_surface_roundtrip(
             mcp_client,
             "tools/call",
             _tool_call_payload(
-                "pulse_create_engagement", {"name": "Surface"}
+                "pulse_create_engagement", {"client_name": "Surface"}
             ),
             api_key=raw,
         )

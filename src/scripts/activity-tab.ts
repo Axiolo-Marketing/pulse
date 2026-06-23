@@ -43,10 +43,10 @@ const ACTIONS_PAGE_SIZE = 50;
 // Human-readable labels by action enum. Keep in sync with
 // `api/pulse_api/audit.py::AUDIT_ACTIONS`.
 const ACTION_LABELS: Record<string, string> = {
-  "client.create": "Created engagement",
-  "client.update": "Edited engagement",
-  "client.delete": "Deleted engagement",
-  "client.reset": "Reset engagement answers",
+  "engagement.create": "Created engagement",
+  "engagement.update": "Edited engagement",
+  "engagement.delete": "Deleted engagement",
+  "engagement.reset": "Reset engagement answers",
   "card.create": "Added card",
   "card.update": "Edited card",
   "card.delete": "Deleted card",
@@ -69,10 +69,10 @@ const ACTION_LABELS: Record<string, string> = {
 
 // Ordered list of actions for the filter dropdown — grouped by area.
 const FILTER_ACTIONS: ReadonlyArray<string> = [
-  "client.create",
-  "client.update",
-  "client.delete",
-  "client.reset",
+  "engagement.create",
+  "engagement.update",
+  "engagement.delete",
+  "engagement.reset",
   "card.create",
   "card.update",
   "card.delete",
@@ -290,7 +290,7 @@ function renderRow(entry: ActivityEntry): string {
 
 /** Produce the second half of an activity row's first line, after the
  * actor name. Returns escaped HTML. Examples:
- *   client.create → "created engagement <em>Renee</em>"
+ *   engagement.create → "created engagement <em>Renee</em>"
  *   member.role_change → "changed Sara's role from member to owner"
  */
 function formatActivityPhrase(
@@ -299,13 +299,13 @@ function formatActivityPhrase(
 ): string {
   const meta = entry.metadata ?? {};
   switch (entry.action) {
-    case "client.create":
+    case "engagement.create":
       return `created engagement ${emName(meta.name)}`;
-    case "client.update":
+    case "engagement.update":
       return `edited engagement ${emName(meta.name)}`;
-    case "client.delete":
+    case "engagement.delete":
       return `deleted engagement ${emName(meta.name)}`;
-    case "client.reset": {
+    case "engagement.reset": {
       const r = meta.responses_cleared ?? 0;
       const u = meta.uploads_cleared ?? 0;
       return `reset engagement answers (${r} response${r === 1 ? "" : "s"}, ${u} upload${u === 1 ? "" : "s"} cleared)`;

@@ -22,8 +22,8 @@ from pulse_api.config import settings
 ADMIN_ENDPOINTS = [
     ("GET",    "/api/admin/engagements",                                      None),
     ("GET",    "/api/admin/engagements/00000000-0000-0000-0000-000000000000", None),
-    ("POST",   "/api/admin/engagements",                                      {"name": "x"}),
-    ("PATCH",  "/api/admin/engagements/00000000-0000-0000-0000-000000000000", {"name": "y"}),
+    ("POST",   "/api/admin/engagements",                                      {"client_name": "x"}),
+    ("PATCH",  "/api/admin/engagements/00000000-0000-0000-0000-000000000000", {"engagement_name": "y"}),
     ("DELETE", "/api/admin/engagements/00000000-0000-0000-0000-000000000000", None),
     ("POST",   "/api/admin/engagements/00000000-0000-0000-0000-000000000000/reset", None),
     ("POST",   "/api/admin/engagements/00000000-0000-0000-0000-000000000000/cards",
@@ -149,11 +149,12 @@ async def test_create_engagement_generates_token(
 ) -> None:
     r = await admin_authed.post(
         "/api/admin/engagements",
-        json={"name": "New Client", "org_name": "Acme", "engagement_name": "Q3 review"},
+        json={"client_name": "New Client", "org_name": "Acme", "engagement_name": "Q3 review"},
     )
     assert r.status_code == 201
     body = r.json()
     assert body["name"] == "New Client"
+    assert body["client_name"] == "New Client"
     assert body["org_name"] == "Acme"
     # 16-hex-char token
     assert len(body["token"]) == 16
@@ -163,9 +164,9 @@ async def test_create_engagement_generates_token(
 @pytest.mark.parametrize(
     "payload, expected_status",
     [
-        ({"name": ""},                          422),  # min_length 1
-        ({},                                    422),  # missing name
-        ({"name": "ok"},                        201),  # org/engagement optional
+        ({"client_name": ""},                   422),  # min_length 1
+        ({},                                    422),  # neither client_id nor name
+        ({"client_name": "ok"},                 201),  # org/engagement optional
     ],
 )
 async def test_create_engagement_validation(
@@ -178,8 +179,8 @@ async def test_create_engagement_validation(
 async def test_create_two_engagements_have_distinct_tokens(
     admin_authed: AsyncClient,
 ) -> None:
-    r1 = await admin_authed.post("/api/admin/engagements", json={"name": "A"})
-    r2 = await admin_authed.post("/api/admin/engagements", json={"name": "B"})
+    r1 = await admin_authed.post("/api/admin/engagements", json={"client_name": "A"})
+    r2 = await admin_authed.post("/api/admin/engagements", json={"client_name": "B"})
     assert r1.json()["token"] != r2.json()["token"]
 
 
@@ -219,16 +220,16 @@ async def test_patch_engagement_does_not_accept_token_field(
     original = seed_client["token"]
     r = await admin_authed.patch(
         f"/api/admin/engagements/{seed_client['id']}",
-        json={"token": "ffffffffffffffff", "name": "still updates name"},
+        json={"token": "ffffffffffffffff", "engagement_name": "still updates"},
     )
     assert r.status_code == 200
     assert r.json()["token"] == original  # unchanged
-    assert r.json()["name"] == "still updates name"
+    assert r.json()["engagement_name"] == "still updates"
 
 
 async def test_patch_engagement_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
     r = await admin_authed.patch(
-        f"/api/admin/engagements/{uuid.uuid4()}", json={"name": "x"}
+        f"/api/admin/engagements/{uuid.uuid4()}", json={"engagement_name": "x"}
     )
     assert r.status_code == 404
 

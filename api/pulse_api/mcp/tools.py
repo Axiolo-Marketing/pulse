@@ -39,11 +39,13 @@ from pulse_api import storage
 from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.config import settings
 from pulse_api.mcp.server import (
+    _open_admin_session,
     _open_member_session,
     authenticate_request,
     mcp,
 )
 from pulse_api.repos import cards as cards_repo
+from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
@@ -56,14 +58,20 @@ from pulse_api.repos import uploads as uploads_repo
     name="pulse_list_engagements",
     description=(
         "List every engagement with progress counts (answered, skipped, "
-        "total cards) plus its folder (`group_id` + `group_name`, both "
-        "null when ungrouped). No arguments."
+        "total cards) plus its owning client (`client_id` + `client_name`) "
+        "and owner (`owner_name` / `owner_email`, null when unattributed). "
+        "No arguments."
     ),
 )
 async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
     _, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        return await engagements_repo.list_all_with_counts(session)
+        rows = await engagements_repo.list_all_with_counts(session)
+    # Owner display fields come from a separate BYPASSRLS session — the
+    # member session has no grant on ``users`` (same two-pass pattern the
+    # REST list + activity feed use).
+    async with _open_admin_session() as admin_session:
+        return await engagements_repo.enrich_owner_display(admin_session, rows)
 
 
 @mcp.tool(
@@ -92,24 +100,30 @@ async def pulse_get_engagement(
 @mcp.tool(
     name="pulse_create_engagement",
     description=(
-        "Create a new engagement. Returns the new row including the "
-        "freshly minted access token."
+        "Create a new engagement under a client. Pass `client_name` (the "
+        "company name); an existing client is reused, otherwise one is "
+        "created. Returns the new row including the freshly minted access "
+        "token and the resolved `client_id` + `name`."
     ),
 )
 async def pulse_create_engagement(
     ctx: Context,
-    name: str,
+    client_name: str,
     org_name: str | None = None,
     engagement_name: str | None = None,
 ) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
+        client = await clients_repo.get_or_create(
+            session, org_id=org_id, name=client_name
+        )
         row = await engagements_repo.create_engagement(
             session,
-            name=name,
+            client_id=str(client["id"]),
             org_name=org_name,
             engagement_name=engagement_name,
             org_id=org_id,
+            created_by=str(user.id),
         )
         await session.commit()
         return row
@@ -119,21 +133,19 @@ async def pulse_create_engagement(
     name="pulse_update_engagement",
     description=(
         "Patch an engagement. Only the provided fields change; unspecified "
-        "fields stay as-is. `token` cannot be changed here."
+        "fields stay as-is. `token` cannot be changed here, and the "
+        "customer-facing name lives on the client (not editable here)."
     ),
 )
 async def pulse_update_engagement(
     ctx: Context,
     engagement_id: str,
-    name: str | None = None,
     org_name: str | None = None,
     engagement_name: str | None = None,
     brief: str | None = None,
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
-    if name is not None:
-        fields["name"] = name
     if org_name is not None:
         fields["org_name"] = org_name
     if engagement_name is not None:

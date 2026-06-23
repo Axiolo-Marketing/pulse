@@ -327,40 +327,58 @@ async def axiolo_org(db: AsyncSession) -> dict[str, str]:
     return dict(row)
 
 
+async def _seed_engagement(
+    db: AsyncSession, *, org_id: str, name: str
+) -> dict[str, str]:
+    """Seed a client + an engagement owned by it, returning the engagement
+    row plus ``name`` (the client's name) + ``client_id``.
+
+    Post-0013 the engagement no longer carries its own ``name`` — the
+    owning ``clients`` row does. Tests still read ``["name"]`` to mean the
+    customer-facing name, so we surface the client name under that key.
+    """
+    token = secrets.token_hex(8)
+    client = (
+        await db.execute(
+            text(
+                "insert into public.clients (org_id, name) "
+                "values (cast(:org as uuid), :n) "
+                "on conflict (org_id, name) do update set name = excluded.name "
+                "returning id::text"
+            ),
+            {"org": org_id, "n": name},
+        )
+    ).mappings().one()
+    row = (
+        await db.execute(
+            text(
+                "insert into public.engagements (client_id, token, org_id) "
+                "values (cast(:cid as uuid), :t, cast(:org as uuid)) "
+                "returning id::text, token"
+            ),
+            {"cid": client["id"], "t": token, "org": org_id},
+        )
+    ).mappings().one()
+    return {
+        **dict(row),
+        "name": name,
+        "client_id": client["id"],
+        "org_id": org_id,
+    }
+
+
 @pytest.fixture
 async def seed_client(
     db: AsyncSession, axiolo_org: dict[str, str]
 ) -> dict[str, str]:
-    token = secrets.token_hex(8)
-    row = (
-        await db.execute(
-            text(
-                "insert into public.engagements (name, token, org_id) "
-                "values (:n, :t, cast(:org as uuid)) "
-                "returning id::text, token, name"
-            ),
-            {"n": "Renee", "t": token, "org": axiolo_org["id"]},
-        )
-    ).mappings().one()
-    return {**dict(row), "org_id": axiolo_org["id"]}
+    return await _seed_engagement(db, org_id=axiolo_org["id"], name="Renee")
 
 
 @pytest.fixture
 async def other_seeded_client(
     db: AsyncSession, axiolo_org: dict[str, str]
 ) -> dict[str, str]:
-    token = secrets.token_hex(8)
-    row = (
-        await db.execute(
-            text(
-                "insert into public.engagements (name, token, org_id) "
-                "values (:n, :t, cast(:org as uuid)) "
-                "returning id::text, token, name"
-            ),
-            {"n": "Josh", "t": token, "org": axiolo_org["id"]},
-        )
-    ).mappings().one()
-    return {**dict(row), "org_id": axiolo_org["id"]}
+    return await _seed_engagement(db, org_id=axiolo_org["id"], name="Josh")
 
 
 @pytest.fixture

@@ -195,27 +195,27 @@
   gap: 8px;
 }
 
-/* ── Engagement folders (flat) ── */
-.folder-list {
+/* ── Clients → engagements list ── */
+.client-list {
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
 
-.folder-section {
+.client-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.folder-header {
+.client-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.folder-name {
+.client-section-name {
   font-weight: 600;
   font-size: 15px;
   margin: 0;
@@ -225,7 +225,7 @@
   gap: 8px;
 }
 
-.folder-count {
+.client-count {
   display: inline-flex;
   min-width: 20px;
   justify-content: center;
@@ -237,13 +237,7 @@
   font-weight: 600;
 }
 
-.folder-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.folder-empty {
+.client-empty {
   background: var(--white);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
@@ -252,14 +246,10 @@
   font-size: 13px;
 }
 
-.engagement-table .move-cell {
-  white-space: nowrap;
-}
-
-.move-folder-select {
-  font-size: 13px;
-  padding: 6px 8px;
-  max-width: 180px;
+/* Native datalist autocomplete in the new-engagement dialog. No custom
+ * popover — the browser renders the suggestion list from the <datalist>. */
+.client-autocomplete {
+  width: 100%;
 }
 
 .sr-only {
@@ -336,6 +326,12 @@
   font-size: 12px;
 }
 
+.engagement-table .owner-cell {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .engagement-table .last-active {
   color: var(--muted);
   font-size: 13px;
@@ -346,24 +342,6 @@
   white-space: nowrap;
   text-align: right;
 }
-
-.action-link {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--primary);
-  background: transparent;
-  border: 0;
-  padding: 6px 10px;
-  cursor: pointer;
-  border-radius: 6px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.action-link:hover { background: var(--primary-soft); }
-
-.action-link.danger { color: var(--warning); }
-.action-link.danger:hover { background: var(--warning-soft); }
 
 /* Engagement row actions as icon buttons (view / copy / delete). The label
    lives in `aria-label` (screen readers) + `title` (a native hover tooltip
@@ -678,6 +656,15 @@
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+/* Read-only value row in the edit-engagement dialog (e.g. the client
+   name, which lives on the client and isn't editable here). */
+.edit-static {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 2px 0;
 }
 
 .edit-grid .input,

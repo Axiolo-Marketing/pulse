@@ -70,8 +70,15 @@ async def _seed_client(db: AsyncSession, *, org_id: str, name: str) -> str:
     row = (
         await db.execute(
             text(
-                "insert into public.engagements (name, token, org_id) "
-                "values (:n, :t, cast(:o as uuid)) returning id::text"
+                "with c as ("
+                "  insert into public.clients (org_id, name) "
+                "  values (cast(:o as uuid), :n) "
+                "  on conflict (org_id, name) do update set name = excluded.name "
+                "  returning id"
+                ") "
+                "insert into public.engagements (client_id, token, org_id) "
+                "select c.id, :t, cast(:o as uuid) from c "
+                "returning id::text"
             ),
             {"n": name, "t": secrets.token_hex(8), "o": org_id},
         )

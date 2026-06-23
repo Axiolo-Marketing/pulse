@@ -20,17 +20,14 @@ The following action strings are the canonical taxonomy. The Activity
 UI maps them to human-readable labels. Tests assert that every action
 string emitted by the route layer appears in this list.
 
-* ``client.create``         — new engagement (a row in ``clients``)
-* ``client.update``         — engagement field change
-* ``client.delete``         — engagement permanently removed
-* ``client.reset``          — engagement responses + uploads wiped for re-run
+* ``engagement.create``     — new engagement (a row in ``engagements``)
+* ``engagement.update``     — engagement field change
+* ``engagement.delete``     — engagement permanently removed
+* ``engagement.reset``      — engagement responses + uploads wiped for re-run
 * ``card.create``           — single card added to an engagement
 * ``card.update``           — card field change
 * ``card.delete``           — card removed
 * ``card.import``           — bulk markdown import (one row per call)
-* ``group.create``          — new engagement folder
-* ``group.update``          — engagement folder renamed
-* ``group.delete``          — engagement folder deleted (members ungrouped)
 * ``attachment.upload``     — admin uploaded an active-reference file
 * ``org.update``            — org name changed
 * ``org.branding``          — org branding/theme overrides changed
@@ -59,20 +56,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # listed in both places.
 AUDIT_ACTIONS: frozenset[str] = frozenset(
     {
-        # Engagement (client) lifecycle
-        "client.create",
-        "client.update",
-        "client.delete",
-        "client.reset",
+        # Engagement lifecycle
+        "engagement.create",
+        "engagement.update",
+        "engagement.delete",
+        "engagement.reset",
         # Card lifecycle
         "card.create",
         "card.update",
         "card.delete",
         "card.import",
-        # Engagement folders
-        "group.create",
-        "group.update",
-        "group.delete",
         # Attachments
         "attachment.upload",
         # Organization
@@ -140,7 +133,7 @@ async def record_audit(
             is permitted for actions not tied to a single operator
             (e.g. system maintenance, but Pulse has none today).
         action: Stable enum string. Must be one of :data:`AUDIT_ACTIONS`.
-        target_type: Object class the action affected (``"client"``,
+        target_type: Object class the action affected (``"engagement"``,
             ``"card"``, ``"member"``, ``"invite"``, ``"org"``,
             ``"api_key"``, ``"attachment"``).
         target_id: Stringified UUID/identifier of the affected object.

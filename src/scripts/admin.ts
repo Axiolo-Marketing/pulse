@@ -2,15 +2,15 @@ import {
   adminApi,
   ApiError,
   authApi,
-  groupsApi,
+  clientsApi,
   orgsApi,
   type AuthUser,
   type Card,
   type ClientResponse,
+  type ClientSummary,
   type Engagement,
   type EngagementDetail,
   type EngagementSummary,
-  type GroupSummary,
   type OrgDetails,
   type OrgSummary,
   type ResponseType,
@@ -598,11 +598,11 @@ async function draw(
   if (route.kind === "list") {
     container.innerHTML = `<div class="loading">Loading engagements...</div>`;
     try {
-      const [summaries, groups] = await Promise.all([
+      const [summaries, clients] = await Promise.all([
         adminApi.listEngagements(),
-        groupsApi.list(),
+        clientsApi.list(),
       ]);
-      renderList(container, summaries, groups);
+      renderList(container, summaries, clients);
     } catch (err) {
       console.error("load engagements:", err);
       container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
@@ -712,51 +712,20 @@ async function draw(
 
 // ── list view ───────────────────────────────────────────────────────────
 
-/** Synthetic group id for the implicit "Ungrouped" bucket. Engagements
- * with `group_id === null` collect here; it's never sent to the backend
- * as an id (the bucket is just `null` on the wire). */
-const UNGROUPED = "__ungrouped__";
-
-/** Build the `<option>` list for a "move to folder" / modal folder
- * select. `selectedId` (null → Ungrouped) marks the current folder. */
-function folderOptionsHtml(
-  groups: GroupSummary[],
-  selectedId: string | null,
-): string {
-  const ungroupedSel = selectedId === null ? " selected" : "";
-  const opts = groups
-    .map(
-      (g) =>
-        `<option value="${escape(g.id)}"${selectedId === g.id ? " selected" : ""}>${escape(g.name)}</option>`,
-    )
-    .join("");
-  return `<option value="${UNGROUPED}"${ungroupedSel}>Ungrouped</option>${opts}`;
-}
-
-function engagementRowHtml(
-  s: EngagementSummary,
-  groups: GroupSummary[],
-): string {
+function engagementRowHtml(s: EngagementSummary): string {
   const completed = s.answered_count + s.skipped_count;
+  const owner = s.owner_name?.trim() || s.owner_email?.trim() || "—";
   return `
     <tr data-engagement-id="${escape(s.id)}">
       <td>
-        <div class="client-name">${escape(s.name)}</div>
+        <div class="client-name">${escape(s.engagement_name?.trim() || "Untitled engagement")}</div>
         <div class="org-name">${escape(s.org_name ?? "")}</div>
       </td>
-      <td>${escape(s.engagement_name ?? "")}</td>
       <td>
         <span class="progress-pill">${completed} / ${s.total_cards}</span>
       </td>
+      <td class="owner-cell">${escape(owner)}</td>
       <td class="last-active">${escape(formatTimestamp(s.last_active_at))}</td>
-      <td class="move-cell">
-        <label class="move-folder">
-          <span class="sr-only">Move to folder</span>
-          <select class="input move-folder-select" data-action="move" aria-label="Move ${escape(s.name)} to folder">
-            ${folderOptionsHtml(groups, s.group_id)}
-          </select>
-        </label>
-      </td>
       <td class="actions">
         <div class="action-icons">
           <button class="action-icon" type="button" data-action="view" aria-label="View responses" title="View responses">
@@ -773,19 +742,11 @@ function engagementRowHtml(
     </tr>`;
 }
 
-function folderSectionHtml(
-  heading: string,
-  groupId: string | null,
+function clientSectionHtml(
+  clientName: string,
   rowsHtml: string,
   count: number,
-  controls: boolean,
 ): string {
-  const groupAttr = groupId === null ? UNGROUPED : escape(groupId);
-  const folderControls = controls
-    ? `
-        <button class="action-link" type="button" data-folder-action="rename">Rename</button>
-        <button class="action-link danger" type="button" data-folder-action="delete">Delete folder</button>`
-    : "";
   const body = rowsHtml
     ? `
       <div class="engagement-table-wrap">
@@ -793,12 +754,11 @@ function folderSectionHtml(
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>`
-    : `<div class="folder-empty">No engagements in this folder yet.</div>`;
+    : `<div class="client-empty">No engagements for this client yet.</div>`;
   return `
-    <section class="folder-section" data-group-id="${groupAttr}">
-      <div class="folder-header">
-        <h3 class="folder-name">${escape(heading)} <span class="folder-count">${count}</span></h3>
-        <div class="folder-actions">${folderControls}</div>
+    <section class="client-section">
+      <div class="client-header">
+        <h3 class="client-section-name">${escape(clientName)} <span class="client-count">${count}</span></h3>
       </div>
       ${body}
     </section>`;
@@ -807,129 +767,53 @@ function folderSectionHtml(
 function renderList(
   container: HTMLElement,
   summaries: EngagementSummary[],
-  groups: GroupSummary[],
+  clients: ClientSummary[],
 ): void {
   const header = `
     <div class="engagement-list-header">
       <h2 class="engagement-list-h">Engagements</h2>
       <div class="engagement-list-actions">
-        <button class="btn-secondary-sm" type="button" data-action="new-folder">+ New folder</button>
         <button class="btn-primary-sm" type="button" data-action="new-engagement">+ New engagement</button>
       </div>
     </div>
   `;
 
-  if (summaries.length === 0 && groups.length === 0) {
+  if (summaries.length === 0 && clients.length === 0) {
     container.innerHTML = `
       ${header}
       <div class="empty-card">
         <p>No engagements yet. Click + New engagement to create your first one.</p>
       </div>
     `;
-    bindListHeader(container, groups);
+    bindListHeader(container, clients);
     return;
   }
 
-  // Bucket engagements by folder. Server already orders by created_at
+  // Bucket engagements by client. Server already orders by created_at
   // desc, so iterating `summaries` keeps that order within each bucket.
-  const byGroup = new Map<string, EngagementSummary[]>();
-  const ungrouped: EngagementSummary[] = [];
+  const byClient = new Map<string, EngagementSummary[]>();
   for (const s of summaries) {
-    if (s.group_id === null) {
-      ungrouped.push(s);
-    } else {
-      const list = byGroup.get(s.group_id) ?? [];
-      list.push(s);
-      byGroup.set(s.group_id, list);
-    }
+    const list = byClient.get(s.client_id) ?? [];
+    list.push(s);
+    byClient.set(s.client_id, list);
   }
 
-  // Folder sections (alphabetical — the API returns them ordered by
-  // name), then the Ungrouped bucket last. Empty folders still render.
-  const sections = groups
-    .map((g) => {
-      const members = byGroup.get(g.id) ?? [];
-      const rowsHtml = members.map((s) => engagementRowHtml(s, groups)).join("");
-      return folderSectionHtml(g.name, g.id, rowsHtml, members.length, true);
+  // One section per client (the API returns clients ordered by name).
+  // Clients with zero engagements still render so the operator sees them.
+  const sections = clients
+    .map((c) => {
+      const members = byClient.get(c.id) ?? [];
+      const rowsHtml = members.map((s) => engagementRowHtml(s)).join("");
+      return clientSectionHtml(c.name, rowsHtml, members.length);
     })
     .join("");
 
-  const ungroupedHtml =
-    ungrouped.length > 0 || groups.length > 0
-      ? folderSectionHtml(
-          "Ungrouped",
-          null,
-          ungrouped.map((s) => engagementRowHtml(s, groups)).join(""),
-          ungrouped.length,
-          false,
-        )
-      : "";
-
   container.innerHTML = `
     ${header}
-    <div class="folder-list">${sections}${ungroupedHtml}</div>
+    <div class="client-list">${sections}</div>
   `;
 
-  bindListHeader(container, groups);
-
-  // ── select change → move engagement to a folder ──
-  container.addEventListener("change", async (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLSelectElement)) return;
-    if (target.dataset.action !== "move") return;
-    const row = target.closest<HTMLElement>("tr[data-engagement-id]");
-    if (!row) return;
-    const engagementId = row.dataset.engagementId!;
-    const raw = target.value;
-    const newGroupId = raw === UNGROUPED ? null : raw;
-    try {
-      await adminApi.updateEngagement(engagementId, { group_id: newGroupId });
-      toast(newGroupId === null ? "Moved to Ungrouped" : "Moved to folder");
-      await reloadList(container);
-    } catch (err) {
-      console.error("move engagement:", err);
-      toast("Could not move engagement");
-      await reloadList(container);
-    }
-  });
-
-  // ── folder rename / delete ──
-  container.addEventListener("click", async (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    const folderBtn = target.closest<HTMLButtonElement>("[data-folder-action]");
-    if (!folderBtn) return;
-    const section = folderBtn.closest<HTMLElement>(".folder-section");
-    const groupId = section?.dataset.groupId;
-    if (!groupId || groupId === UNGROUPED) return;
-    const group = groups.find((g) => g.id === groupId);
-    if (!group) return;
-
-    if (folderBtn.dataset.folderAction === "rename") {
-      openRenameFolderModal(container, group);
-      return;
-    }
-    if (folderBtn.dataset.folderAction === "delete") {
-      const n = group.client_count;
-      openConfirmModal({
-        title: "Delete folder",
-        body: [
-          `Delete the folder "${group.name}"?`,
-          n > 0
-            ? `Its ${n} engagement${n === 1 ? "" : "s"} will move to Ungrouped — they are NOT deleted.`
-            : "This folder is empty.",
-        ].join("\n"),
-        confirmLabel: "Delete folder",
-        danger: true,
-        onConfirm: async () => {
-          await groupsApi.delete(group.id);
-          toast("Folder deleted");
-          await reloadList(container);
-        },
-      });
-      return;
-    }
-  });
+  bindListHeader(container, clients);
 
   // ── engagement row actions (view / copy / delete) ──
   container.addEventListener("click", async (e) => {
@@ -938,7 +822,7 @@ function renderList(
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn) return;
     const action = btn.dataset.action;
-    if (action === "new-engagement" || action === "new-folder") return; // handled in bindListHeader
+    if (action === "new-engagement") return; // handled in bindListHeader
 
     const row = btn.closest<HTMLElement>("tr[data-engagement-id]");
     if (!row) return;
@@ -956,7 +840,7 @@ function renderList(
         toast("Link copied to clipboard");
         return;
       case "delete": {
-        const label = [summary.name, summary.engagement_name].filter(Boolean).join(" · ");
+        const label = [summary.client_name, summary.engagement_name].filter(Boolean).join(" · ");
         const totalCards = summary.total_cards;
         const completed = summary.answered_count + summary.skipped_count;
         const body = [
@@ -983,131 +867,32 @@ function renderList(
   });
 }
 
-/** Wire the list header's "New folder" + "New engagement" buttons.
- * Factored out so the empty-state and populated paths share it. */
-function bindListHeader(container: HTMLElement, groups: GroupSummary[]): void {
+/** Wire the list header's "New engagement" button. Factored out so the
+ * empty-state and populated paths share it. */
+function bindListHeader(
+  container: HTMLElement,
+  clients: ClientSummary[],
+): void {
   container
     .querySelector<HTMLButtonElement>("[data-action='new-engagement']")
-    ?.addEventListener("click", () => openNewEngagementModal(container, groups));
-  container
-    .querySelector<HTMLButtonElement>("[data-action='new-folder']")
-    ?.addEventListener("click", () => openNewFolderModal(container));
-}
-
-// ── folder modals ────────────────────────────────────────────────────────
-
-function openNewFolderModal(container: HTMLElement): void {
-  openFolderNameModal({
-    title: "New folder",
-    label: "Folder name",
-    initial: "",
-    submitLabel: "Create folder",
-    onSubmit: async (name) => {
-      await groupsApi.create(name);
-      toast("Folder created");
-      await reloadList(container);
-    },
-  });
-}
-
-function openRenameFolderModal(
-  container: HTMLElement,
-  group: GroupSummary,
-): void {
-  openFolderNameModal({
-    title: "Rename folder",
-    label: "Folder name",
-    initial: group.name,
-    submitLabel: "Save",
-    onSubmit: async (name) => {
-      await groupsApi.rename(group.id, name);
-      toast("Folder renamed");
-      await reloadList(container);
-    },
-  });
-}
-
-interface FolderNameModalOptions {
-  title: string;
-  label: string;
-  initial: string;
-  submitLabel: string;
-  onSubmit: (name: string) => Promise<void>;
-}
-
-function openFolderNameModal(opts: FolderNameModalOptions): void {
-  const modalEl = document.createElement("div");
-  modalEl.className = "modal";
-  modalEl.innerHTML = `
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-panel new-eng-panel">
-      <header class="modal-header">
-        <span class="modal-title">${escape(opts.title)}</span>
-        <button class="modal-close" type="button" data-close aria-label="Close">×</button>
-      </header>
-      <form class="new-eng-form" id="folder-name-form">
-        <label class="edit-field">
-          <span class="edit-label">${escape(opts.label)}</span>
-          <input class="input" id="folder-name" type="text" autofocus required value="${escape(opts.initial)}" />
-        </label>
-        <div class="edit-actions">
-          <button class="btn-primary-sm" type="submit">${escape(opts.submitLabel)}</button>
-          <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
-        </div>
-      </form>
-    </div>
-  `;
-  document.body.appendChild(modalEl);
-
-  const close = (): void => {
-    modalEl.remove();
-    document.removeEventListener("keydown", onKey);
-  };
-  const onKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape") close();
-  };
-  document.addEventListener("keydown", onKey);
-
-  for (const el of modalEl.querySelectorAll<HTMLElement>("[data-close]")) {
-    el.addEventListener("click", close);
-  }
-
-  modalEl
-    .querySelector<HTMLFormElement>("#folder-name-form")!
-    .addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const name = (
-        modalEl.querySelector<HTMLInputElement>("#folder-name")?.value ?? ""
-      ).trim();
-      if (!name) {
-        modalEl.querySelector<HTMLInputElement>("#folder-name")?.focus();
-        return;
-      }
-      const submitBtn = modalEl.querySelector<HTMLButtonElement>("button[type='submit']");
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.textContent = "Working...";
-      }
-      try {
-        await opts.onSubmit(name);
-        close();
-      } catch (err) {
-        console.error("folder name modal:", err);
-        toast("Could not save folder");
-        if (submitBtn) {
-          submitBtn.disabled = false;
-          submitBtn.textContent = opts.submitLabel;
-        }
-      }
-    });
+    ?.addEventListener("click", () => openNewEngagementModal(container, clients));
 }
 
 // ── new engagement modal ────────────────────────────────────────────────
 
 function openNewEngagementModal(
   container: HTMLElement,
-  groups: GroupSummary[],
+  clients: ClientSummary[],
 ): void {
+  // Existing client names → ids, for the autocomplete. A typed value that
+  // matches an existing name (case-insensitive) reuses its id; anything
+  // else is sent as `client_name` and the backend get-or-creates.
+  const byName = new Map<string, string>();
+  for (const c of clients) byName.set(c.name.trim().toLowerCase(), c.id);
+  const datalistOptions = clients
+    .map((c) => `<option value="${escape(c.name)}"></option>`)
+    .join("");
+
   const modalEl = document.createElement("div");
   modalEl.className = "modal";
   modalEl.innerHTML = `
@@ -1119,8 +904,18 @@ function openNewEngagementModal(
       </header>
       <form class="new-eng-form" id="new-eng-form">
         <label class="edit-field">
-          <span class="edit-label">Client name (required)</span>
-          <input class="input" id="ne-name" type="text" autofocus required />
+          <span class="edit-label">Client (required)</span>
+          <input
+            class="input client-autocomplete"
+            id="ne-client"
+            type="text"
+            list="client-datalist"
+            autocomplete="off"
+            autofocus
+            required
+            placeholder="Pick an existing client or type a new one"
+          />
+          <datalist id="client-datalist">${datalistOptions}</datalist>
         </label>
         <label class="edit-field">
           <span class="edit-label">Organization (optional)</span>
@@ -1129,12 +924,6 @@ function openNewEngagementModal(
         <label class="edit-field">
           <span class="edit-label">Engagement name (optional)</span>
           <input class="input" id="ne-eng" type="text" />
-        </label>
-        <label class="edit-field">
-          <span class="edit-label">Folder (optional)</span>
-          <select class="input" id="ne-folder">
-            ${folderOptionsHtml(groups, null)}
-          </select>
         </label>
         <label class="edit-field edit-field--check">
           <input type="checkbox" id="ne-voice" />
@@ -1165,14 +954,13 @@ function openNewEngagementModal(
 
   modalEl.querySelector<HTMLFormElement>("#new-eng-form")!.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const name = (modalEl.querySelector<HTMLInputElement>("#ne-name")?.value ?? "").trim();
+    const clientInput = modalEl.querySelector<HTMLInputElement>("#ne-client");
+    const clientValue = (clientInput?.value ?? "").trim();
     const org = (modalEl.querySelector<HTMLInputElement>("#ne-org")?.value ?? "").trim();
     const eng = (modalEl.querySelector<HTMLInputElement>("#ne-eng")?.value ?? "").trim();
-    const folderRaw = modalEl.querySelector<HTMLSelectElement>("#ne-folder")?.value ?? UNGROUPED;
-    const groupId = folderRaw === UNGROUPED ? null : folderRaw;
     const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ne-voice")?.checked ?? false;
-    if (!name) {
-      modalEl.querySelector<HTMLInputElement>("#ne-name")?.focus();
+    if (!clientValue) {
+      clientInput?.focus();
       return;
     }
 
@@ -1182,20 +970,23 @@ function openNewEngagementModal(
       submitBtn.textContent = "Creating...";
     }
 
+    // Match the typed value to an existing client (case-insensitive). A
+    // hit sends `client_id`; a miss sends `client_name` and the backend
+    // get-or-creates a real client by name.
+    const existingId = byName.get(clientValue.toLowerCase());
+    const createArgs = existingId
+      ? { client_id: existingId }
+      : { client_name: clientValue };
+
     try {
       const created = await adminApi.createEngagement({
-        name,
+        ...createArgs,
         org_name: org || null,
         engagement_name: eng || null,
       });
-      // Create accepts neither group_id nor voice_enabled — both are
-      // assigned via PATCH. Fold them into a single follow-up update so a
-      // new engagement lands in the right folder with voice on if asked.
       // Voice defaults off server-side, so only PATCH when it's checked.
-      const patch: UpdateEngagementArgs = {};
-      if (groupId !== null) patch.group_id = groupId;
-      if (voiceEnabled) patch.voice_enabled = true;
-      if (Object.keys(patch).length > 0) {
+      if (voiceEnabled) {
+        const patch: UpdateEngagementArgs = { voice_enabled: true };
         await adminApi.updateEngagement(created.id, patch);
       }
       close();
@@ -1318,23 +1109,17 @@ function openEditEngagementModal(
         <button class="modal-close" type="button" data-close aria-label="Close">×</button>
       </header>
       <form class="new-eng-form" id="edit-eng-form">
-        <label class="edit-field">
-          <span class="edit-label">Client name (required)</span>
-          <input class="input" id="ee-name" type="text" autofocus required value="${escape(client.name)}" />
-        </label>
+        <div class="edit-field">
+          <span class="edit-label">Client</span>
+          <div class="edit-static">${escape(client.name)}</div>
+        </div>
         <label class="edit-field">
           <span class="edit-label">Organization (optional)</span>
-          <input class="input" id="ee-org" type="text" value="${escape(client.org_name ?? "")}" />
+          <input class="input" id="ee-org" type="text" autofocus value="${escape(client.org_name ?? "")}" />
         </label>
         <label class="edit-field">
           <span class="edit-label">Engagement name (optional)</span>
           <input class="input" id="ee-eng" type="text" value="${escape(client.engagement_name ?? "")}" />
-        </label>
-        <label class="edit-field">
-          <span class="edit-label">Folder (optional)</span>
-          <select class="input" id="ee-folder" disabled>
-            <option value="${UNGROUPED}" selected>Loading folders…</option>
-          </select>
         </label>
         <label class="edit-field edit-field--check">
           <input type="checkbox" id="ee-voice" ${client.voice_enabled ? "checked" : ""} />
@@ -1349,23 +1134,6 @@ function openEditEngagementModal(
     </div>
   `;
   document.body.appendChild(modalEl);
-
-  const folderSelect = modalEl.querySelector<HTMLSelectElement>("#ee-folder")!;
-  // Populate the folder dropdown asynchronously; the rest of the form is
-  // usable immediately. If the fetch fails the select stays disabled and
-  // the save simply omits group_id (leaves the folder untouched).
-  let foldersLoaded = false;
-  void groupsApi
-    .list()
-    .then((groups) => {
-      folderSelect.innerHTML = folderOptionsHtml(groups, client.group_id ?? null);
-      folderSelect.disabled = false;
-      foldersLoaded = true;
-    })
-    .catch((err) => {
-      console.error("load folders for edit:", err);
-      folderSelect.innerHTML = `<option value="${UNGROUPED}" selected>Folders unavailable</option>`;
-    });
 
   const close = (): void => {
     modalEl.remove();
@@ -1382,13 +1150,8 @@ function openEditEngagementModal(
 
   modalEl.querySelector<HTMLFormElement>("#edit-eng-form")!.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const name = (modalEl.querySelector<HTMLInputElement>("#ee-name")?.value ?? "").trim();
     const org = (modalEl.querySelector<HTMLInputElement>("#ee-org")?.value ?? "").trim();
     const eng = (modalEl.querySelector<HTMLInputElement>("#ee-eng")?.value ?? "").trim();
-    if (!name) {
-      modalEl.querySelector<HTMLInputElement>("#ee-name")?.focus();
-      return;
-    }
 
     const submitBtn = modalEl.querySelector<HTMLButtonElement>("button[type='submit']");
     if (submitBtn) {
@@ -1398,21 +1161,13 @@ function openEditEngagementModal(
 
     const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ee-voice")?.checked ?? false;
     const args: UpdateEngagementArgs = {
-      name,
       org_name: org || null,
       engagement_name: eng || null,
       voice_enabled: voiceEnabled,
     };
-    // Only send group_id once the folder list loaded — otherwise we'd
-    // send the placeholder value and accidentally ungroup the engagement.
-    if (foldersLoaded) {
-      const raw = folderSelect.value;
-      args.group_id = raw === UNGROUPED ? null : raw;
-    }
 
     try {
       const updated = await adminApi.updateEngagement(client.id, args);
-      client.group_id = updated.group_id ?? null;
       client.voice_enabled = updated.voice_enabled;
       onSaved({
         name: updated.name,
@@ -1439,11 +1194,11 @@ function openEditEngagementModal(
 // untouched.
 async function reloadList(container: HTMLElement): Promise<void> {
   try {
-    const [summaries, groups] = await Promise.all([
+    const [summaries, clients] = await Promise.all([
       adminApi.listEngagements(),
-      groupsApi.list(),
+      clientsApi.list(),
     ]);
-    renderList(container, summaries, groups);
+    renderList(container, summaries, clients);
   } catch (err) {
     console.error("reload list:", err);
     container.innerHTML = `<div class="error"><h1 class="error-title">Could not load</h1><p class="error-body">Please refresh.</p></div>`;
@@ -1734,7 +1489,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       }
     });
 
-    articleEl.querySelector<HTMLButtonElement>("[data-action='delete-card']")?.addEventListener("click", async () => {
+    articleEl.querySelector<HTMLButtonElement>("[data-action='delete-card']")?.addEventListener("click", () => {
       const responseCount =
         responses.get(card.id) && responses.get(card.id)!.state !== "viewed" ? "an existing response" : null;
       const uploadList = uploads.get(card.id) ?? [];
@@ -1742,25 +1497,29 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       if (responseCount) warningParts.push("the response on file");
       if (uploadList.length) warningParts.push(`${uploadList.length} uploaded file${uploadList.length === 1 ? "" : "s"}`);
       const warning = warningParts.length
-        ? `\n\nThis will also remove ${warningParts.join(" and ")}. This cannot be undone.`
-        : "\n\nThis cannot be undone.";
-      const ok = window.confirm(`Delete card ${card.order_index}: "${card.title}"?${warning}`);
-      if (!ok) return;
-
-      try {
-        await adminApi.deleteCard(card.id);
-      } catch (err) {
-        console.error("delete card:", err);
-        toast("Could not delete");
-        return;
-      }
-
-      const idx = cards.findIndex((c) => c.id === card.id);
-      if (idx >= 0) cards.splice(idx, 1);
-      responses.delete(card.id);
-      uploads.delete(card.id);
-      articleEl.remove();
-      toast("Card deleted");
+        ? `This will also remove ${warningParts.join(" and ")}. This cannot be undone.`
+        : "This cannot be undone.";
+      openConfirmModal({
+        title: "Delete card",
+        body: [`Delete card ${card.order_index}: "${card.title}"?`, warning].join("\n"),
+        confirmLabel: "Delete",
+        danger: true,
+        onConfirm: async () => {
+          try {
+            await adminApi.deleteCard(card.id);
+          } catch (err) {
+            console.error("delete card:", err);
+            toast("Could not delete");
+            return;
+          }
+          const idx = cards.findIndex((c) => c.id === card.id);
+          if (idx >= 0) cards.splice(idx, 1);
+          responses.delete(card.id);
+          uploads.delete(card.id);
+          articleEl.remove();
+          toast("Card deleted");
+        },
+      });
     });
   };
 

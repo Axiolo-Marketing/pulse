@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import storage
@@ -21,10 +22,11 @@ from pulse_api.auth.middleware import (
     get_org_scoped_session,
 )
 from pulse_api.card_import import CardImportError, parse_markdown
+from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
+from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
-from pulse_api.repos import groups as groups_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 
@@ -39,7 +41,16 @@ router = APIRouter(
 
 
 class CreateEngagementRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
+    """New-engagement payload.
+
+    Provide EITHER an existing ``client_id`` (chosen from the
+    autocomplete) OR a ``client_name`` (typed free-form); the route
+    resolves a real client, get-or-creating one by name when only
+    ``client_name`` is given. At least one of the two is required.
+    """
+
+    client_id: str | None = None
+    client_name: str | None = Field(default=None, min_length=1, max_length=200)
     org_name: str | None = None
     engagement_name: str | None = None
 
@@ -49,26 +60,15 @@ class UpdateEngagementRequest(BaseModel):
     `token` is intentionally not accepted here — rotation goes through
     its own POST endpoint so it's an explicit action.
 
-    `group_id` moves the engagement into a folder; send `null` to
-    ungroup it (move to the implicit "Ungrouped" bucket). It's
-    distinguished from "not provided" via `model_dump(exclude_unset=True)`
-    in the handler, so a body without the key never touches the column.
+    The customer-facing name lives on the owning ``Client`` now and is
+    not editable through this path. ``voice_enabled`` toggles the
+    per-engagement voice recorder; omitting it (the
+    `model_dump(exclude_unset=True)` path) leaves the flag untouched."""
 
-    `voice_enabled` toggles the per-engagement voice recorder. Omitting it
-    (the same `exclude_unset` path) leaves the flag untouched."""
-
-    name: str | None = None
     org_name: str | None = None
     engagement_name: str | None = None
     brief: str | None = None
-    group_id: str | None = None
     voice_enabled: bool | None = None
-
-
-class GroupRequest(BaseModel):
-    """Create/rename payload for an engagement folder."""
-
-    name: str = Field(min_length=1, max_length=200)
 
 
 RESPONSE_TYPES = (
@@ -116,10 +116,23 @@ class ImportMarkdownRequest(BaseModel):
 @router.get("/engagements")
 async def list_engagements(
     session: AsyncSession = Depends(get_org_scoped_session),
+    admin_session: AsyncSession = Depends(get_admin_session),
     _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> list[dict[str, Any]]:
-    """List engagements visible to the active org — RLS handles the scope."""
-    return await engagements_repo.list_all_with_counts(session)
+    """List engagements visible to the active org — RLS handles the scope.
+
+    The owner display fields (``owner_name`` / ``owner_email``) are
+    enriched in a second pass against the BYPASSRLS ``admin_session``
+    because ``users`` is not granted to ``pulse_member`` (same two-pass
+    pattern the activity feed uses).
+    """
+    rows = await engagements_repo.list_all_with_counts(session)
+    # Drop any SET LOCAL ROLE the test harness left on this shared admin session
+    # from a prior member-scoped query, so enrich_owner_display's unrestricted
+    # `users` read runs as the BYPASSRLS admin role (no-op in production, where
+    # the admin session is a separate engine).
+    await admin_session.execute(text("reset role"))
+    return await engagements_repo.enrich_owner_display(admin_session, rows)
 
 
 @router.get("/engagements/{engagement_id}")
@@ -149,28 +162,68 @@ async def create_engagement(
 ) -> dict[str, Any]:
     """Create a new engagement under the operator's active organization.
 
-    ``org_id`` comes from the resolved membership — never from the wire
-    body. RLS WITH CHECK would reject any other value anyway.
+    Resolves the owning client first: an existing ``client_id`` (verified
+    in-org via RLS) or a ``client_name`` that get-or-creates a real
+    client. ``org_id`` + ``created_by`` come from the resolved membership,
+    never the wire body — RLS WITH CHECK would reject any other org anyway.
+
+    The real client is auto-created as a side effect of the engagement
+    create; it is intentionally NOT separately audited (the
+    ``engagement.create`` row covers it).
     """
     user, membership = org_member
+    client_id = await _resolve_client_id(session, req, membership.org_id)
     row = await engagements_repo.create_engagement(
         session,
-        name=req.name,
+        client_id=client_id,
         org_name=req.org_name,
         engagement_name=req.engagement_name,
         org_id=str(membership.org_id),
+        created_by=str(user.id),
     )
     await record_audit(
         session,
         org_id=membership.org_id,
         user_id=user.id,
-        action="client.create",
-        target_type="client",
+        action="engagement.create",
+        target_type="engagement",
         target_id=row["id"],
         metadata={"name": row.get("name")},
     )
     await session.commit()
     return row
+
+
+async def _resolve_client_id(
+    session: AsyncSession,
+    req: CreateEngagementRequest,
+    org_id: Any,
+) -> str:
+    """Resolve the owning client for a new engagement.
+
+    Prefers an explicit ``client_id`` (404 if it doesn't resolve in the
+    active org — RLS hides cross-org clients). Falls back to
+    get-or-creating a client by ``client_name``. Raises 422 when neither
+    is provided.
+    """
+    if req.client_id is not None:
+        client = await clients_repo.get_by_id(session, req.client_id)
+        if client is None:
+            raise HTTPException(status_code=404, detail="client not found")
+        return str(client["id"])
+    if req.client_name is not None:
+        name = req.client_name.strip()
+        if not name:
+            raise HTTPException(
+                status_code=422, detail="client_name must not be blank"
+            )
+        client = await clients_repo.get_or_create(
+            session, org_id=org_id, name=name
+        )
+        return str(client["id"])
+    raise HTTPException(
+        status_code=422, detail="client_id or client_name is required"
+    )
 
 
 @router.patch("/engagements/{engagement_id}")
@@ -184,14 +237,6 @@ async def update_engagement(
 ) -> dict[str, Any]:
     user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
-    # A non-null group_id must reference a folder in the caller's org.
-    # RLS already blocks cross-org folders (a foreign id matches no row,
-    # so the FK update would null it silently), but we reject explicitly
-    # with 404 so a typo / stale id surfaces instead of quietly ungrouping.
-    target_group = fields.get("group_id")
-    if target_group is not None:
-        if await groups_repo.get_by_id(session, target_group) is None:
-            raise HTTPException(status_code=404, detail="folder not found")
     row = await engagements_repo.update_engagement(session, engagement_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
@@ -199,8 +244,8 @@ async def update_engagement(
         session,
         org_id=membership.org_id,
         user_id=user.id,
-        action="client.update",
-        target_type="client",
+        action="engagement.update",
+        target_type="engagement",
         target_id=engagement_id,
         metadata={
             "changed_fields": sorted(fields.keys()),
@@ -237,8 +282,8 @@ async def delete_engagement(
         session,
         org_id=membership.org_id,
         user_id=user.id,
-        action="client.delete",
-        target_type="client",
+        action="engagement.delete",
+        target_type="engagement",
         target_id=engagement_id,
         metadata={"name": (snapshot or {}).get("name") if snapshot else None},
     )
@@ -277,8 +322,8 @@ async def reset_engagement(
         session,
         org_id=membership.org_id,
         user_id=user.id,
-        action="client.reset",
-        target_type="client",
+        action="engagement.reset",
+        target_type="engagement",
         target_id=engagement_id,
         metadata={
             "responses_cleared": responses_cleared,
@@ -299,109 +344,22 @@ async def reset_engagement(
     }
 
 
-# ── Engagement folders (engagement_groups table) ───────────────────────────
+# ── Clients (real clients/companies) ───────────────────────────────────────
 
 
-@router.get("/groups")
-async def list_groups(
+@router.get("/clients")
+async def list_clients(
     session: AsyncSession = Depends(get_org_scoped_session),
     _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
 ) -> list[dict[str, Any]]:
-    """List the active org's folders + per-folder engagement counts.
+    """List the active org's real clients, ordered by name.
 
-    RLS narrows the result to the active org. The list is ordered by
-    name; empty folders are included (the UI still renders them).
+    Powers the admin list's client grouping and the new-engagement
+    autocomplete. RLS narrows the result to the active org. Clients are
+    auto-created as a side effect of ``POST /engagements`` (with a
+    ``client_name``), so there is no create/update/delete route here.
     """
-    return await groups_repo.list_for_org(session)
-
-
-@router.post("/groups", status_code=201)
-async def create_group(
-    req: GroupRequest,
-    session: AsyncSession = Depends(get_org_scoped_session),
-    org_member: tuple[User, OrganizationMembership] = Depends(
-        get_current_org_member
-    ),
-) -> dict[str, Any]:
-    """Create a folder under the operator's active organization.
-
-    ``org_id`` comes from the resolved membership — never the wire body.
-    RLS WITH CHECK would reject any other value anyway.
-    """
-    user, membership = org_member
-    row = await groups_repo.create(
-        session, name=req.name, org_id=membership.org_id
-    )
-    await record_audit(
-        session,
-        org_id=membership.org_id,
-        user_id=user.id,
-        action="group.create",
-        target_type="group",
-        target_id=row["id"],
-        metadata={"name": row.get("name")},
-    )
-    await session.commit()
-    return row
-
-
-@router.patch("/groups/{group_id}")
-async def rename_group(
-    group_id: str,
-    req: GroupRequest,
-    session: AsyncSession = Depends(get_org_scoped_session),
-    org_member: tuple[User, OrganizationMembership] = Depends(
-        get_current_org_member
-    ),
-) -> dict[str, Any]:
-    user, membership = org_member
-    row = await groups_repo.rename(session, group_id, req.name)
-    if row is None:
-        raise HTTPException(status_code=404, detail="folder not found")
-    await record_audit(
-        session,
-        org_id=membership.org_id,
-        user_id=user.id,
-        action="group.update",
-        target_type="group",
-        target_id=group_id,
-        metadata={"name": row.get("name")},
-    )
-    await session.commit()
-    return row
-
-
-@router.delete("/groups/{group_id}", status_code=204)
-async def delete_group(
-    group_id: str,
-    session: AsyncSession = Depends(get_org_scoped_session),
-    org_member: tuple[User, OrganizationMembership] = Depends(
-        get_current_org_member
-    ),
-) -> None:
-    """Delete a folder. Its engagements are ungrouped, never deleted.
-
-    The ``clients.group_id`` FK is ``on delete set null``, so any
-    engagements in this folder return to the implicit "Ungrouped" bucket
-    in the same transaction.
-    """
-    user, membership = org_member
-    # Snapshot the name BEFORE the delete so the activity row renders a
-    # label instead of a stale UUID once the row is gone.
-    snapshot = await groups_repo.get_by_id(session, group_id)
-    deleted = await groups_repo.delete(session, group_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="folder not found")
-    await record_audit(
-        session,
-        org_id=membership.org_id,
-        user_id=user.id,
-        action="group.delete",
-        target_type="group",
-        target_id=group_id,
-        metadata={"name": (snapshot or {}).get("name") if snapshot else None},
-    )
-    await session.commit()
+    return await clients_repo.list_for_org(session)
 
 
 # ── Cards ──────────────────────────────────────────────────────────────────
@@ -446,7 +404,7 @@ async def add_card(
         target_type="card",
         target_id=row["id"],
         metadata={
-            "client_id": engagement_id,
+            "engagement_id": engagement_id,
             "title": row.get("title"),
             "response_type": req.response_type,
         },
@@ -505,7 +463,7 @@ async def import_cards_markdown(
         org_id=membership.org_id,
         user_id=user.id,
         action="card.import",
-        target_type="client",
+        target_type="engagement",
         target_id=engagement_id,
         # One audit row per import call, not per card — the bulk import
         # is the operator's single user action. ``count`` lets the UI

@@ -866,7 +866,7 @@ the user action (atomic — a failed action rolls back the audit too). The
 
 | Domain | Actions |
 |---|---|
-| Client | `client.create`, `client.update`, `client.delete`, `client.reset` |
+| Engagement | `engagement.create`, `engagement.update`, `engagement.delete`, `engagement.reset` |
 | Card | `card.create`, `card.update`, `card.delete`, `card.import` |
 | Attachment | `attachment.upload` |
 | Org | `org.create`, `org.update`, `org.delete`, `org.logo_set`, `org.logo_remove` |

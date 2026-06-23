@@ -29,8 +29,8 @@ class AuditLog(SQLModel, table=True):
         org_id: FK into `organizations`.
         user_id: FK into `users`; nullable for actions that aren't tied
             to a single operator (e.g. system maintenance jobs).
-        action: Stable enum-like string (`client.create`, `member.invite`).
-        target_type: The object class the action affected (`client`,
+        action: Stable enum-like string (`engagement.create`, `member.invite`).
+        target_type: The object class the action affected (`engagement`,
             `card`, `member`, etc.).
         target_id: Stringified UUID/identifier of the affected object.
         event_metadata: JSONB blob with action-specific fields. Stored

@@ -81,8 +81,15 @@ async def _seed_one_set(
     ids["engagements"] = (
         await db.execute(
             text(
-                "insert into public.engagements (name, token, org_id) "
-                "values (:n, :t, cast(:o as uuid)) returning id::text"
+                "with c as ("
+                "  insert into public.clients (org_id, name) "
+                "  values (cast(:o as uuid), :n) "
+                "  on conflict (org_id, name) do update set name = excluded.name "
+                "  returning id"
+                ") "
+                "insert into public.engagements (client_id, token, org_id) "
+                "select c.id, :t, cast(:o as uuid) from c "
+                "returning id::text"
             ),
             {"n": f"{label}-engagement", "t": engagement_token, "o": org_id},
         )
@@ -353,7 +360,7 @@ async def test_member_cannot_write_to_other_org(
         # UPDATE matches zero rows. No exception, just no-op.
         result = await db_conn.execute(
             text(
-                "update public.engagements set name = 'leak' "
+                "update public.engagements set engagement_name = 'leak' "
                 "where id = cast(:cid as uuid)"
             ),
             {"cid": other_engagement_id},
@@ -368,7 +375,7 @@ async def test_member_cannot_write_to_other_org(
         name = (
             await db_conn.execute(
                 text(
-                    "select name from public.engagements "
+                    "select engagement_name from public.engagements "
                     "where id = cast(:cid as uuid)"
                 ),
                 {"cid": other_engagement_id},

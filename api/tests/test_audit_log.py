@@ -176,12 +176,12 @@ async def test_record_audit_atomically_with_caller(
         db,
         org_id=axiolo_org["id"],
         user_id=None,
-        action="client.create",
-        target_type="client",
+        action="engagement.create",
+        target_type="engagement",
         target_id="11111111-1111-1111-1111-111111111111",
     )
     rows = await _fetch_audit_rows(
-        db, org_id=axiolo_org["id"], action="client.create"
+        db, org_id=axiolo_org["id"], action="engagement.create"
     )
     assert any(r["target_id"] == "11111111-1111-1111-1111-111111111111" for r in rows)
 
@@ -194,14 +194,16 @@ async def test_audit_client_create(
     db: AsyncSession,
     seed_admin_user: dict[str, str],
 ) -> None:
-    r = await admin_authed.post("/api/admin/engagements", json={"name": "Acme"})
+    r = await admin_authed.post(
+        "/api/admin/engagements", json={"client_name": "Acme"}
+    )
     assert r.status_code == 201
 
     rows = await _fetch_audit_rows(
-        db, org_id=seed_admin_user["org_id"], action="client.create"
+        db, org_id=seed_admin_user["org_id"], action="engagement.create"
     )
     assert len(rows) == 1
-    assert rows[0]["target_type"] == "client"
+    assert rows[0]["target_type"] == "engagement"
     assert rows[0]["target_id"] == r.json()["id"]
     assert rows[0]["user_id"] == seed_admin_user["id"]
     assert (rows[0]["metadata"] or {}).get("name") == "Acme"
@@ -215,16 +217,16 @@ async def test_audit_client_update_captures_changed_fields(
 ) -> None:
     r = await admin_authed.patch(
         f"/api/admin/engagements/{seed_client['id']}",
-        json={"name": "Renamed", "brief": "Hello"},
+        json={"engagement_name": "Renamed", "brief": "Hello"},
     )
     assert r.status_code == 200
 
     rows = await _fetch_audit_rows(
-        db, org_id=seed_admin_user["org_id"], action="client.update"
+        db, org_id=seed_admin_user["org_id"], action="engagement.update"
     )
     assert len(rows) == 1
     md = rows[0]["metadata"] or {}
-    assert sorted(md.get("changed_fields") or []) == ["brief", "name"]
+    assert sorted(md.get("changed_fields") or []) == ["brief", "engagement_name"]
 
 
 async def test_audit_client_delete_snapshots_name(
@@ -238,7 +240,7 @@ async def test_audit_client_delete_snapshots_name(
     assert r.status_code == 204
 
     rows = await _fetch_audit_rows(
-        db, org_id=seed_admin_user["org_id"], action="client.delete"
+        db, org_id=seed_admin_user["org_id"], action="engagement.delete"
     )
     assert len(rows) == 1
     assert (rows[0]["metadata"] or {}).get("name") == name
@@ -566,14 +568,14 @@ async def test_audit_logs_cross_org_isolation(
     await db.execute(
         text(
             "insert into public.audit_logs (org_id, action) "
-            "values (cast(:o as uuid), 'client.create')"
+            "values (cast(:o as uuid), 'engagement.create')"
         ),
         {"o": axiolo_org["id"]},
     )
     await db.execute(
         text(
             "insert into public.audit_logs (org_id, action) "
-            "values (cast(:o as uuid), 'client.create')"
+            "values (cast(:o as uuid), 'engagement.create')"
         ),
         {"o": other_org_id},
     )
@@ -613,12 +615,12 @@ async def _seed_activity_rows(
                 "(org_id, user_id, action, target_type, target_id, "
                 " metadata, created_at) "
                 "values (cast(:o as uuid), cast(:u as uuid), :a, "
-                "        'client', :t, '{}'::jsonb, :ts)"
+                "        'engagement', :t, '{}'::jsonb, :ts)"
             ),
             {
                 "o": org_id,
                 "u": user_id,
-                "a": "client.create",
+                "a": "engagement.create",
                 "t": f"target-{i}",
                 "ts": ts,
             },
@@ -698,7 +700,7 @@ async def test_activity_list_cursor_handles_duplicate_timestamps(
                     "(org_id, user_id, action, target_type, target_id, "
                     " metadata, created_at) "
                     "values (cast(:o as uuid), cast(:u as uuid), "
-                    "        'client.create', 'client', :t, '{}'::jsonb, :ts) "
+                    "        'engagement.create', 'engagement', :t, '{}'::jsonb, :ts) "
                     "returning id::text"
                 ),
                 {
@@ -761,7 +763,7 @@ async def test_activity_list_limit_is_clamped(
 @pytest.mark.parametrize(
     "filter_action, expected_min",
     [
-        ("client.create", 60),
+        ("engagement.create", 60),
         ("card.create", 0),  # nothing seeded for this action
     ],
 )
@@ -863,7 +865,7 @@ async def test_activity_list_includes_actor_display(
     seed_admin_user: dict[str, str],
 ) -> None:
     """The two-pass enrichment populates the ``actor.email`` field."""
-    await admin_authed.post("/api/admin/engagements", json={"name": "A"})
+    await admin_authed.post("/api/admin/engagements", json={"client_name": "A"})
 
     r = await admin_authed.get("/api/orgs/me/activity")
     assert r.status_code == 200

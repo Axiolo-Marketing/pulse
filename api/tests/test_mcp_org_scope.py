@@ -188,13 +188,24 @@ async def _make_org(db: AsyncSession, name: str) -> str:
 
 
 async def _seed_client(db: AsyncSession, *, org_id: str, name: str) -> str:
+    client = (
+        await db.execute(
+            text(
+                "insert into public.clients (org_id, name) "
+                "values (cast(:o as uuid), :n) "
+                "on conflict (org_id, name) do update set name = excluded.name "
+                "returning id::text"
+            ),
+            {"o": org_id, "n": name},
+        )
+    ).mappings().one()
     row = (
         await db.execute(
             text(
-                "insert into public.engagements (name, token, org_id) "
-                "values (:n, :t, cast(:o as uuid)) returning id::text"
+                "insert into public.engagements (client_id, token, org_id) "
+                "values (cast(:c as uuid), :t, cast(:o as uuid)) returning id::text"
             ),
-            {"n": name, "t": secrets.token_hex(8), "o": org_id},
+            {"c": client["id"], "t": secrets.token_hex(8), "o": org_id},
         )
     ).mappings().one()
     return row["id"]
@@ -261,7 +272,7 @@ async def test_mcp_tool_scoped_to_key_org(
             mcp_client,
             "tools/call",
             _tool_call_payload(
-                tool_name, {"name": "MCP scope test", "org_name": "From MCP"}
+                tool_name, {"client_name": "MCP scope test", "org_name": "From MCP"}
             ),
             api_key=raw,
         )
