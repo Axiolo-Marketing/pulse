@@ -3,8 +3,8 @@
 Two-axis coverage:
   • Auth gate: anonymous → 401, non-admin user → 403, admin → 2xx, across
     every endpoint × method.
-  • Happy paths + key invariants: rotate-token invalidates the old token,
-    delete cascades to responses + uploads, response_type can't be patched.
+  • Happy paths + key invariants: delete cascades to responses + uploads,
+    response_type can't be patched.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ ADMIN_ENDPOINTS = [
     ("POST",   "/api/admin/clients",                                      {"name": "x"}),
     ("PATCH",  "/api/admin/clients/00000000-0000-0000-0000-000000000000", {"name": "y"}),
     ("DELETE", "/api/admin/clients/00000000-0000-0000-0000-000000000000", None),
-    ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/rotate-token", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/reset", None),
     ("POST",   "/api/admin/clients/00000000-0000-0000-0000-000000000000/cards",
         {"category": "C", "title": "T", "context": "X", "question": "Q", "response_type": "short-text"}),
@@ -280,40 +279,6 @@ async def test_list_engagements_includes_voice_enabled(
     assert r.status_code == 200
     row = next(c for c in r.json() if c["id"] == seed_client["id"])
     assert row["voice_enabled"] is False
-
-
-# ── POST /api/admin/clients/{id}/rotate-token ─────────────────────────────
-
-
-async def test_rotate_token_invalidates_old_token(
-    admin_authed: AsyncClient, client: AsyncClient, seed_client: dict[str, str]
-) -> None:
-    # Old token works (client side)
-    client.headers["X-Pulse-Token"] = seed_client["token"]
-    pre = await client.get("/api/me")
-    assert pre.status_code == 200
-
-    # Rotate
-    r = await admin_authed.post(f"/api/admin/clients/{seed_client['id']}/rotate-token")
-    assert r.status_code == 200
-    new_token = r.json()["token"]
-    assert new_token != seed_client["token"]
-    assert len(new_token) == 16
-
-    # Old token no longer matches anything
-    client.headers["X-Pulse-Token"] = seed_client["token"]
-    post_old = await client.get("/api/me")
-    assert post_old.status_code == 404
-
-    # New token works
-    client.headers["X-Pulse-Token"] = new_token
-    post_new = await client.get("/api/me")
-    assert post_new.status_code == 200
-
-
-async def test_rotate_token_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
-    r = await admin_authed.post(f"/api/admin/clients/{uuid.uuid4()}/rotate-token")
-    assert r.status_code == 404
 
 
 # ── DELETE /api/admin/clients/{id} ────────────────────────────────────────

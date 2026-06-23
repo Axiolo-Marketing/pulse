@@ -46,7 +46,6 @@ const ACTION_LABELS: Record<string, string> = {
   "client.create": "Created engagement",
   "client.update": "Edited engagement",
   "client.delete": "Deleted engagement",
-  "client.rotate_token": "Rotated engagement token",
   "client.reset": "Reset engagement answers",
   "card.create": "Added card",
   "card.update": "Edited card",
@@ -73,7 +72,6 @@ const FILTER_ACTIONS: ReadonlyArray<string> = [
   "client.create",
   "client.update",
   "client.delete",
-  "client.rotate_token",
   "client.reset",
   "card.create",
   "card.update",
@@ -307,8 +305,6 @@ function formatActivityPhrase(
       return `edited engagement ${emName(meta.name)}`;
     case "client.delete":
       return `deleted engagement ${emName(meta.name)}`;
-    case "client.rotate_token":
-      return `rotated the token for ${emName(meta.name)}`;
     case "client.reset": {
       const r = meta.responses_cleared ?? 0;
       const u = meta.uploads_cleared ?? 0;

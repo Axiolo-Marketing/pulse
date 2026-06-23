@@ -109,7 +109,6 @@ Tom is the consultant running every engagement. He uses Pulse from a desktop bro
 - Edits card wording when needed (admin → Edit on each card)
 - Exports responses to ClickUp (admin → Copy as Markdown, per-card or whole engagement)
 - Shares the brief with the client or team (admin → Copy brief as Markdown)
-- Rotates the token if the link leaks (admin → Rotate token)
 
 Tom is the only operator. There is no multi-user admin in v1. The admin is gated by a single shared password.
 
@@ -475,13 +474,11 @@ Header with "+ New engagement" button. Table with one row per client:
 
 | Client | Engagement | Progress | Last active | Actions |
 |---|---|---|---|---|
-| Client name<br>Org | Engagement name | answered+skipped / total | Local timezone, relative under 24h | View · Copy link · Rotate token |
+| Client name<br>Org | Engagement name | answered+skipped / total | Local timezone, relative under 24h | View · Copy link · Delete |
 
 **+ New engagement** opens a modal: client name (required), org (optional), engagement name (optional). Submit inserts the row, generates a fresh 16-hex-char token, navigates to the new client's detail view.
 
 **Copy link** writes the production URL with the current token.
-
-**Rotate token** generates a fresh 16-hex-char token, PATCHes the row, copies the new URL. The old URL stops working immediately.
 
 ### Engagement Detail
 
@@ -687,7 +684,7 @@ The whole flow happens in `/admin/` — no terminal, no git, no files.
 
 **Hygiene:**
 
-- If the link leaks or you want to start over, click **Rotate token**. Old URL stops working immediately.
+- If the link leaks, delete the engagement to invalidate it (the token can no longer be rotated in place).
 - Don't share the admin URL or password with the client.
 - The brief is the single source of truth for engagement narrative — you don't need to keep notes anywhere else.
 
@@ -801,7 +798,7 @@ No formal SLA. Tom owns the entire stack. Deploys when satisfied.
 
 ### 14.7 Token Format
 
-16 hex chars, generated via `encode(gen_random_bytes(8), 'hex')` (SQL) or `crypto.getRandomValues(new Uint8Array(8))` (admin rotate). 64 bits of entropy.
+16 hex chars, generated server-side at engagement creation via `secrets.token_hex(8)` (Python). 64 bits of entropy.
 
 ### 14.8 Bundle Isolation
 
@@ -869,7 +866,7 @@ the user action (atomic — a failed action rolls back the audit too). The
 
 | Domain | Actions |
 |---|---|
-| Client | `client.create`, `client.update`, `client.delete`, `client.rotate_token` |
+| Client | `client.create`, `client.update`, `client.delete`, `client.reset` |
 | Card | `card.create`, `card.update`, `card.delete`, `card.import` |
 | Attachment | `attachment.upload` |
 | Org | `org.create`, `org.update`, `org.delete`, `org.logo_set`, `org.logo_remove` |

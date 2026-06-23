@@ -13,7 +13,6 @@ Mappings to the REST routes (see ``routes/admin_api.py`` and
     pulse_create_engagement     ←  POST   /api/admin/clients
     pulse_update_engagement     ←  PATCH  /api/admin/clients/{id}
     pulse_delete_engagement     ←  DELETE /api/admin/clients/{id}
-    pulse_rotate_token          ←  POST   /api/admin/clients/{id}/rotate-token
     pulse_import_deck           ←  POST   /api/admin/clients/{id}/cards/import-markdown
     pulse_add_card              ←  POST   /api/admin/clients/{id}/cards
     pulse_update_card           ←  PATCH  /api/admin/cards/{id}
@@ -120,8 +119,7 @@ async def pulse_create_engagement(
     name="pulse_update_engagement",
     description=(
         "Patch an engagement. Only the provided fields change; unspecified "
-        "fields stay as-is. `token` cannot be set here — use "
-        "pulse_rotate_token."
+        "fields stay as-is. `token` cannot be changed here."
     ),
 )
 async def pulse_update_engagement(
@@ -178,25 +176,6 @@ async def pulse_delete_engagement(
     for path in upload_paths:
         storage.delete_upload(path)
     return {"ok": True}
-
-
-@mcp.tool(
-    name="pulse_rotate_token",
-    description=(
-        "Generate a fresh access token for an engagement. The old URL "
-        "stops working immediately."
-    ),
-)
-async def pulse_rotate_token(
-    ctx: Context, client_id: str
-) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
-    async with _open_member_session(org_id) as session:
-        row = await clients_repo.rotate_token(session, client_id)
-        if row is None:
-            raise ValueError("engagement not found")
-        await session.commit()
-        return row
 
 
 # ── Cards ────────────────────────────────────────────────────────────────

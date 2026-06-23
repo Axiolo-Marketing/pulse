@@ -259,7 +259,6 @@ async def test_tools_list_returns_eleven_tools(
             "pulse_create_engagement",
             "pulse_update_engagement",
             "pulse_delete_engagement",
-            "pulse_rotate_token",
             "pulse_import_deck",
             "pulse_add_card",
             "pulse_update_card",
@@ -554,7 +553,6 @@ async def test_remaining_tool_surface_roundtrip(
         )
     )
     cid = eng["id"]
-    original_token = eng["token"]
 
     # get_engagement
     got = _structured(
@@ -582,17 +580,6 @@ async def test_remaining_tool_surface_roundtrip(
     )
     assert updated["org_name"] == "Org"
     assert updated["brief"] == "Hello"
-
-    # rotate_token
-    rotated = _structured(
-        await _mcp_call(
-            mcp_client,
-            "tools/call",
-            _tool_call_payload("pulse_rotate_token", {"client_id": cid}),
-            api_key=raw,
-        )
-    )
-    assert rotated["token"] != original_token
 
     # add_card
     card = _structured(

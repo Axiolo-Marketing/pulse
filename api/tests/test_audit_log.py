@@ -244,27 +244,6 @@ async def test_audit_client_delete_snapshots_name(
     assert (rows[0]["metadata"] or {}).get("name") == name
 
 
-async def test_audit_client_rotate_token(
-    admin_authed: AsyncClient,
-    db: AsyncSession,
-    seed_admin_user: dict[str, str],
-    seed_client: dict[str, str],
-) -> None:
-    r = await admin_authed.post(
-        f"/api/admin/clients/{seed_client['id']}/rotate-token"
-    )
-    assert r.status_code == 200
-
-    rows = await _fetch_audit_rows(
-        db, org_id=seed_admin_user["org_id"], action="client.rotate_token"
-    )
-    assert len(rows) == 1
-    # Never leak the raw token into metadata.
-    metadata = rows[0]["metadata"] or {}
-    new_token = r.json()["token"]
-    assert all(v != new_token for v in metadata.values())
-
-
 async def test_audit_card_create_and_update_and_delete(
     admin_authed: AsyncClient,
     db: AsyncSession,

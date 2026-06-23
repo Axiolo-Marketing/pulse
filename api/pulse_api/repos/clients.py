@@ -253,22 +253,3 @@ async def delete_engagement(session: AsyncSession, client_id: str) -> bool:
     except Exception:
         return False
     return result.rowcount > 0
-
-
-async def rotate_token(session: AsyncSession, client_id: str) -> dict | None:
-    """Generate a fresh 16-hex token. The old URL stops working immediately."""
-    new_token = secrets.token_hex(8)
-    try:
-        result = await session.execute(
-            text(
-                "update public.clients set token = :t "
-                "where id = cast(:cid as uuid) "
-                "returning id::text, name, org_name, engagement_name, token, brief, voice_enabled, "
-                "group_id::text as group_id, created_at, last_active_at"
-            ),
-            {"t": new_token, "cid": client_id},
-        )
-    except Exception:
-        return None
-    row = result.mappings().one_or_none()
-    return dict(row) if row else None

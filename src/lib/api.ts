@@ -594,9 +594,6 @@ export const adminApi = {
       body: JSON.stringify(args),
     }),
 
-  rotateToken: (id: string): Promise<EngagementSummary> =>
-    request(`/api/admin/clients/${id}/rotate-token`, { method: "POST" }),
-
   deleteEngagement: (id: string): Promise<void> =>
     request(`/api/admin/clients/${id}`, { method: "DELETE" }),
 

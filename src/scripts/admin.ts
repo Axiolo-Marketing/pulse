@@ -760,7 +760,6 @@ function engagementRowHtml(
       <td class="actions">
         <button class="action-link" type="button" data-action="view">View responses</button>
         <button class="action-link" type="button" data-action="copy-link">Copy link</button>
-        <button class="action-link danger" type="button" data-action="rotate">Rotate token</button>
         <button class="action-link danger" type="button" data-action="delete">Delete</button>
       </td>
     </tr>`;
@@ -924,7 +923,7 @@ function renderList(
     }
   });
 
-  // ── engagement row actions (view / copy / rotate / delete) ──
+  // ── engagement row actions (view / copy / delete) ──
   container.addEventListener("click", async (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -948,18 +947,6 @@ function renderList(
         await navigator.clipboard.writeText(`${PROD_URL}?t=${summary.token}`);
         toast("Link copied to clipboard");
         return;
-      case "rotate": {
-        openConfirmModal({
-          title: "Rotate token",
-          body: `Rotate ${summary.name}'s token? The current link will stop working immediately.`,
-          confirmLabel: "Rotate",
-          danger: true,
-          onConfirm: async () => {
-            await rotateToken(container, summary.id);
-          },
-        });
-        return;
-      }
       case "delete": {
         const label = [summary.name, summary.engagement_name].filter(Boolean).join(" · ");
         const totalCards = summary.total_cards;
@@ -1437,21 +1424,8 @@ function openEditEngagementModal(
   });
 }
 
-async function rotateToken(container: HTMLElement, clientId: string): Promise<void> {
-  try {
-    const updated = await adminApi.rotateToken(clientId);
-    await navigator.clipboard.writeText(`${PROD_URL}?t=${updated.token}`);
-    toast("New token copied to clipboard");
-  } catch (err) {
-    console.error("rotate token:", err);
-    toast("Could not rotate token");
-    return;
-  }
-  await reloadList(container);
-}
-
 // Re-fetch + re-render the engagement list in place. Used by handlers
-// that mutate the list (rotate token, delete) and don't have a
+// that mutate the list (delete) and don't have a
 // `ShellState` handle to pass to `draw`. The list view is self-contained
 // — it doesn't need org switcher state because the shell header is
 // untouched.
@@ -2192,7 +2166,7 @@ Any HTML deliverables for this engagement. Drop files in \`public/deliverables/\
 
 - [ ] All required cards answered
 - [ ] Responses exported to ClickUp
-- [ ] Token rotated or revoked if access should end
+- [ ] Engagement deleted if access should end
 `;
 
 function renderBriefView(client: Client): string {

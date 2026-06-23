@@ -299,33 +299,6 @@ async def reset_engagement(
     }
 
 
-@router.post("/clients/{client_id}/rotate-token")
-async def rotate_token(
-    client_id: str,
-    session: AsyncSession = Depends(get_org_scoped_session),
-    org_member: tuple[User, OrganizationMembership] = Depends(
-        get_current_org_member
-    ),
-) -> dict[str, Any]:
-    user, membership = org_member
-    row = await clients_repo.rotate_token(session, client_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="engagement not found")
-    await record_audit(
-        session,
-        org_id=membership.org_id,
-        user_id=user.id,
-        action="client.rotate_token",
-        target_type="client",
-        target_id=client_id,
-        # Don't capture the raw token — it's the live secret. Just note
-        # the engagement name so the activity row is human-readable.
-        metadata={"name": row.get("name")},
-    )
-    await session.commit()
-    return row
-
-
 # ── Engagement folders (engagement_groups table) ───────────────────────────
 
 
