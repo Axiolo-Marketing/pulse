@@ -20,7 +20,7 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
     """
     result = await session.execute(
         text(
-            "select c.id::text, cl.name as name, c.org_name, c.engagement_name, "
+            "select c.id::text, cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.created_at, c.last_active_at, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.engagements c "
@@ -120,7 +120,7 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               cl.id::text                                        as client_id,
               cl.name                                            as client_name,
               c.created_by::text                                 as created_by,
-              c.org_name, c.engagement_name, c.token,
+              c.engagement_name, c.token,
               c.brief, c.voice_enabled, c.created_at, c.last_active_at,
               coalesce(count(r.*) filter (where r.state = 'answered'), 0)::int as answered_count,
               coalesce(count(r.*) filter (where r.state = 'skipped'),  0)::int as skipped_count,
@@ -172,7 +172,7 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
         result = await session.execute(
             text(
                 "select c.id::text, c.client_id::text as client_id, "
-                "cl.name as name, c.org_name, c.engagement_name, c.token, "
+                "cl.name as name, c.engagement_name, c.token, "
                 "c.brief, c.voice_enabled, c.created_by::text as created_by, "
                 "c.created_at, c.last_active_at "
                 "from public.engagements c "
@@ -191,7 +191,6 @@ async def create_engagement(
     session: AsyncSession,
     *,
     client_id: str,
-    org_name: str | None,
     engagement_name: str | None,
     org_id: str,
     created_by: str | None,
@@ -207,7 +206,6 @@ async def create_engagement(
     Args:
         session: DB session (``pulse_member`` role).
         client_id: Owning client UUID (already resolved/verified in-org).
-        org_name: Legacy customer-org text column (free-form).
         engagement_name: Optional engagement label.
         org_id: Owning organization UUID — NOT NULL on the column.
         created_by: User who created the engagement (the active operator),
@@ -222,22 +220,21 @@ async def create_engagement(
         text(
             "with ins as ("
             "  insert into public.engagements "
-            "  (client_id, org_name, engagement_name, token, org_id, created_by) "
-            "  values (cast(:cid as uuid), :o, :e, :t, cast(:org as uuid), "
+            "  (client_id, engagement_name, token, org_id, created_by) "
+            "  values (cast(:cid as uuid), :e, :t, cast(:org as uuid), "
             "          cast(:by as uuid)) "
-            "  returning id, client_id, org_name, engagement_name, token, brief, "
+            "  returning id, client_id, engagement_name, token, brief, "
             "            voice_enabled, created_by, created_at, last_active_at"
             ") "
             "select ins.id::text, ins.client_id::text as client_id, "
             "cl.name as name, cl.name as client_name, "
-            "ins.org_name, ins.engagement_name, ins.token, "
+            "ins.engagement_name, ins.token, "
             "ins.brief, ins.voice_enabled, ins.created_by::text as created_by, "
             "ins.created_at, ins.last_active_at "
             "from ins join public.clients cl on cl.id = ins.client_id"
         ),
         {
             "cid": client_id,
-            "o": org_name,
             "e": engagement_name,
             "t": token,
             "org": org_id,
@@ -254,8 +251,8 @@ async def update_engagement(
     responsible for restricting which keys it forwards (so the wire body
     can't sneak in a token rotation by sending {'token': '...'}).
 
-    All writable fields (``org_name``, ``engagement_name``, ``brief``,
-    ``voice_enabled``) are plain columns. The customer-facing name lives
+    All writable fields (``engagement_name``, ``brief``, ``voice_enabled``)
+    are plain columns. The customer-facing name lives
     on ``clients`` now and is NOT mutable through this path. The returned
     row joins ``clients`` so ``name`` + ``client_id`` stay present."""
     if not fields:

@@ -325,9 +325,8 @@ function runApp(ctx: RunCtx): void {
       // Operator-org branding on the client deck: the logo object URL was
       // resolved once on boot (token in a header, not the URL). A null
       // logo keeps the Axiolo wordmark. `orgName` is left unset — the
-      // `Engagement` payload's `org_name` is the *customer* org (legacy
-      // free-form text), not the operator org, so it would mislabel the
-      // mark; `renderCard` falls back to a generic "Organization" alt.
+      // engagement payload carries no operator-org name, so `renderCard`
+      // falls back to a generic "Organization" alt.
       orgLogoSrc,
     });
   };

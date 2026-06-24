@@ -24,9 +24,6 @@ class Engagement(SQLModel, table=True):
             owner couldn't be backfilled from the original create audit
             row. ``on delete set null`` keeps the engagement if the user
             is removed.
-        org_name: Optional customer org name (legacy column; predates
-            multi-tenant orgs and stays as plain text on the engagement
-            row).
         engagement_name: Optional human label for the engagement.
         token: 16-hex magic-link token the client uses in `?t=`.
         brief: Free-text brief shown in admin.
@@ -43,7 +40,6 @@ class Engagement(SQLModel, table=True):
     org_id: uuid.UUID = Field(foreign_key="organizations.id", index=True)
     client_id: uuid.UUID = Field(foreign_key="clients.id")
     created_by: uuid.UUID | None = Field(default=None, foreign_key="users.id")
-    org_name: str | None = None
     engagement_name: str | None = None
     token: str = Field(unique=True, index=True)
     brief: str | None = None

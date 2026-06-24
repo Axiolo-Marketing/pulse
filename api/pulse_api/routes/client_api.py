@@ -46,16 +46,14 @@ class ViewRequest(BaseModel):
 class ClientMe(BaseModel):
     """Bootstrap payload for the client deck (``GET /api/me``).
 
-    Mirrors the legacy free-text fields (``org_name`` is the consultant's
-    label for their customer's company — distinct from the owning
-    organization's ``org_logo_path`` / ``org_branding``, which come from
-    the multi-tenant ``organizations`` row). Unknown/extra keys are
-    permitted so the contract can grow without a breaking change.
+    The owning organization's branding rides along via ``org_logo_path`` /
+    ``org_branding``, which come from the multi-tenant ``organizations``
+    row. Unknown/extra keys are permitted so the contract can grow without
+    a breaking change.
 
     Attributes:
         id: Engagement (client) UUID.
         name: Customer-facing engagement contact name.
-        org_name: Legacy free-text customer-org label.
         engagement_name: Optional engagement label.
         brief: Optional engagement brief.
         voice_enabled: Whether the deck should offer the voice recorder.
@@ -72,7 +70,6 @@ class ClientMe(BaseModel):
 
     id: str
     name: str
-    org_name: str | None = None
     engagement_name: str | None = None
     brief: str | None = None
     voice_enabled: bool = False

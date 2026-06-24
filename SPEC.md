@@ -269,7 +269,7 @@ foreign key. RLS scopes reads/writes by `pulse.org_id` GUC set per request.
 |---|---|---|
 | id | uuid PK | |
 | org_id | uuid FK → organizations | **NOT NULL** — every client belongs to one org |
-| name, org_name, engagement_name | text | |
+| name, engagement_name | text | |
 | token | text not null unique | 16-hex-char magic-link credential |
 | brief | text | markdown |
 | created_at, last_active_at | timestamptz | |

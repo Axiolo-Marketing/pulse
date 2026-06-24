@@ -14,7 +14,6 @@ Usage:
     export PULSE_ADMIN_PASSWORD='...'
     python3 tools/apply-deck.py path/to/deck.md
     python3 tools/apply-deck.py deck.md --dry-run        # parse + validate only
-    python3 tools/apply-deck.py deck.md --org 'Acme Co'  # set org_name
     python3 tools/apply-deck.py deck.md --base-url http://localhost:14321
 
 Defaults to the production portal (https://pulse.axiolo.com). Zero third-party
@@ -102,7 +101,6 @@ def parse_deck(text: str) -> tuple[dict, list[dict]]:
     header = text[: headings[0].start()]
     engagement_name = _header_field(header, "Engagement")
     client_name = _header_field(header, "Client")
-    org_name = _header_field(header, "Org")  # rarely present; --org overrides
     if not engagement_name:
         raise DeckError("Header is missing '**Engagement:**'.")
     if not client_name:
@@ -111,7 +109,6 @@ def parse_deck(text: str) -> tuple[dict, list[dict]]:
     engagement = {
         "engagement_name": engagement_name,
         "name": client_name,
-        "org_name": org_name,
         "recipient": _header_field(header, "Recipient"),
     }
 
@@ -240,16 +237,19 @@ class PulseClient:
             comment=None, comment_url=None, rest={"HttpOnly": None}, rfc2109=False,
         ))
 
-    def list_clients(self) -> list[dict]:
-        return self._request("GET", "/api/admin/clients")
+    def list_engagements(self) -> list[dict]:
+        return self._request("GET", "/api/admin/engagements")
 
-    def create_client(self, name: str, org_name: str | None,
-                      engagement_name: str | None) -> dict:
-        return self._request("POST", "/api/admin/clients", {
-            "name": name, "org_name": org_name, "engagement_name": engagement_name,
+    def create_engagement(self, client_name: str,
+                          engagement_name: str | None) -> dict:
+        # `client_name` get-or-creates the real client (company) in the
+        # active org; the backend resolves/creates the `clients` row and
+        # attaches the new engagement to it.
+        return self._request("POST", "/api/admin/engagements", {
+            "client_name": client_name, "engagement_name": engagement_name,
         })
 
-    def create_card(self, client_id: str, card: dict) -> dict:
+    def create_card(self, engagement_id: str, card: dict) -> dict:
         body = {
             "category": card["category"],
             "title": card["title"],
@@ -260,7 +260,9 @@ class PulseClient:
             "skip_allowed": card["skip_allowed"],
             "attachment_path": card["attachment_path"],
         }
-        return self._request("POST", f"/api/admin/clients/{client_id}/cards", body)
+        return self._request(
+            "POST", f"/api/admin/engagements/{engagement_id}/cards", body
+        )
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -272,7 +274,6 @@ def main() -> int:
                     help=f"Portal base URL (default {DEFAULT_BASE_URL}).")
     ap.add_argument("--name", default=None,
                     help="Override the client name (default: the deck's **Client:** line).")
-    ap.add_argument("--org", default=None, help="org_name for the engagement (optional).")
     ap.add_argument("--email", default=os.environ.get("PULSE_ADMIN_EMAIL"))
     ap.add_argument("--password", default=os.environ.get("PULSE_ADMIN_PASSWORD"))
     ap.add_argument("--session", default=os.environ.get("PULSE_SESSION"),
@@ -297,8 +298,6 @@ def main() -> int:
 
     if args.name:
         engagement["name"] = args.name
-    if args.org:
-        engagement["org_name"] = args.org
 
     print(f"Parsed deck: {engagement['engagement_name']!r}")
     print(f"  Client:     {engagement['name']}")
@@ -335,7 +334,7 @@ def main() -> int:
             print(f"\nLogged in to {args.base_url} as {args.email}.")
 
         if not args.force:
-            existing = client.list_clients()
+            existing = client.list_engagements()
             dupe = [c for c in existing
                     if (c.get("engagement_name") or "").strip().lower()
                     == engagement["engagement_name"].strip().lower()]
@@ -346,16 +345,15 @@ def main() -> int:
                       "a second one.", file=sys.stderr)
                 return 1
 
-        row = client.create_client(
-            name=engagement["name"],
-            org_name=engagement["org_name"],
+        row = client.create_engagement(
+            client_name=engagement["name"],
             engagement_name=engagement["engagement_name"],
         )
-        client_id, token = row["id"], row.get("token")
-        print(f"Created engagement {client_id}.")
+        engagement_id, token = row["id"], row.get("token")
+        print(f"Created engagement {engagement_id}.")
 
         for c in cards:
-            client.create_card(client_id, c)
+            client.create_card(engagement_id, c)
             print(f"  + card {c['n']:>2}/{len(cards)}: {c['title']}")
     except DeckError as e:
         print(f"\nerror: {e}", file=sys.stderr)

@@ -272,7 +272,7 @@ async def test_mcp_tool_scoped_to_key_org(
             mcp_client,
             "tools/call",
             _tool_call_payload(
-                tool_name, {"client_name": "MCP scope test", "org_name": "From MCP"}
+                tool_name, {"client_name": "MCP scope test"}
             ),
             api_key=raw,
         )

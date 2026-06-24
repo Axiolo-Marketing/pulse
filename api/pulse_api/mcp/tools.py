@@ -109,7 +109,6 @@ async def pulse_get_engagement(
 async def pulse_create_engagement(
     ctx: Context,
     client_name: str,
-    org_name: str | None = None,
     engagement_name: str | None = None,
 ) -> dict[str, Any]:
     user, org_id = await authenticate_request(ctx)
@@ -120,7 +119,6 @@ async def pulse_create_engagement(
         row = await engagements_repo.create_engagement(
             session,
             client_id=str(client["id"]),
-            org_name=org_name,
             engagement_name=engagement_name,
             org_id=org_id,
             created_by=str(user.id),
@@ -140,14 +138,11 @@ async def pulse_create_engagement(
 async def pulse_update_engagement(
     ctx: Context,
     engagement_id: str,
-    org_name: str | None = None,
     engagement_name: str | None = None,
     brief: str | None = None,
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
-    if org_name is not None:
-        fields["org_name"] = org_name
     if engagement_name is not None:
         fields["engagement_name"] = engagement_name
     if brief is not None:

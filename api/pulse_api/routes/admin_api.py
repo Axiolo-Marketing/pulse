@@ -51,7 +51,6 @@ class CreateEngagementRequest(BaseModel):
 
     client_id: str | None = None
     client_name: str | None = Field(default=None, min_length=1, max_length=200)
-    org_name: str | None = None
     engagement_name: str | None = None
 
 
@@ -65,7 +64,6 @@ class UpdateEngagementRequest(BaseModel):
     per-engagement voice recorder; omitting it (the
     `model_dump(exclude_unset=True)` path) leaves the flag untouched."""
 
-    org_name: str | None = None
     engagement_name: str | None = None
     brief: str | None = None
     voice_enabled: bool | None = None
@@ -176,7 +174,6 @@ async def create_engagement(
     row = await engagements_repo.create_engagement(
         session,
         client_id=client_id,
-        org_name=req.org_name,
         engagement_name=req.engagement_name,
         org_id=str(membership.org_id),
         created_by=str(user.id),

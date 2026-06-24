@@ -864,7 +864,6 @@ function engagementRowHtml(s: EngagementSummary): string {
     <div class="engagement-row" data-engagement-id="${escape(s.id)}">
       <div class="er-name">
         <div class="client-name">${escape(s.engagement_name?.trim() || "Untitled engagement")}</div>
-        <div class="org-name">${escape(s.org_name ?? "")}</div>
       </div>
       <div class="er-count">
         <span class="progress-pill progress-pill--${statusMod}" title="${escape(STATUS_LABELS[status])}">${completed} / ${s.total_cards}</span>
@@ -1293,10 +1292,6 @@ function openNewEngagementModal(
           <datalist id="client-datalist">${datalistOptions}</datalist>
         </label>
         <label class="edit-field">
-          <span class="edit-label">Organization (optional)</span>
-          <input class="input" id="ne-org" type="text" />
-        </label>
-        <label class="edit-field">
           <span class="edit-label">Engagement name (optional)</span>
           <input class="input" id="ne-eng" type="text" />
         </label>
@@ -1331,7 +1326,6 @@ function openNewEngagementModal(
     e.preventDefault();
     const clientInput = modalEl.querySelector<HTMLInputElement>("#ne-client");
     const clientValue = (clientInput?.value ?? "").trim();
-    const org = (modalEl.querySelector<HTMLInputElement>("#ne-org")?.value ?? "").trim();
     const eng = (modalEl.querySelector<HTMLInputElement>("#ne-eng")?.value ?? "").trim();
     const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ne-voice")?.checked ?? false;
     if (!clientValue) {
@@ -1356,7 +1350,6 @@ function openNewEngagementModal(
     try {
       const created = await adminApi.createEngagement({
         ...createArgs,
-        org_name: org || null,
         engagement_name: eng || null,
       });
       // Voice defaults off server-side, so only PATCH when it's checked.
@@ -1382,7 +1375,7 @@ function openNewEngagementModal(
 // ── edit engagement modal ───────────────────────────────────────────────
 
 function renderDetailHeader(client: Engagement): string {
-  const subtitle = [client.org_name, client.engagement_name]
+  const subtitle = [client.engagement_name]
     .filter((s) => s && s.trim().length > 0)
     .map((s) => escape(s as string))
     .join(" · ");
@@ -1472,7 +1465,7 @@ function openConfirmModal(opts: ConfirmModalOptions): void {
 
 function openEditEngagementModal(
   client: Engagement & { token: string },
-  onSaved: (updated: { name: string; org_name: string | null; engagement_name: string | null }) => void,
+  onSaved: (updated: { name: string; engagement_name: string | null }) => void,
 ): void {
   const modalEl = document.createElement("div");
   modalEl.className = "modal";
@@ -1489,12 +1482,8 @@ function openEditEngagementModal(
           <div class="edit-static">${escape(client.name)}</div>
         </div>
         <label class="edit-field">
-          <span class="edit-label">Organization (optional)</span>
-          <input class="input" id="ee-org" type="text" autofocus value="${escape(client.org_name ?? "")}" />
-        </label>
-        <label class="edit-field">
           <span class="edit-label">Engagement name (optional)</span>
-          <input class="input" id="ee-eng" type="text" value="${escape(client.engagement_name ?? "")}" />
+          <input class="input" id="ee-eng" type="text" autofocus value="${escape(client.engagement_name ?? "")}" />
         </label>
         <label class="edit-field edit-field--check">
           <input type="checkbox" id="ee-voice" ${client.voice_enabled ? "checked" : ""} />
@@ -1525,7 +1514,6 @@ function openEditEngagementModal(
 
   modalEl.querySelector<HTMLFormElement>("#edit-eng-form")!.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const org = (modalEl.querySelector<HTMLInputElement>("#ee-org")?.value ?? "").trim();
     const eng = (modalEl.querySelector<HTMLInputElement>("#ee-eng")?.value ?? "").trim();
 
     const submitBtn = modalEl.querySelector<HTMLButtonElement>("button[type='submit']");
@@ -1536,7 +1524,6 @@ function openEditEngagementModal(
 
     const voiceEnabled = modalEl.querySelector<HTMLInputElement>("#ee-voice")?.checked ?? false;
     const args: UpdateEngagementArgs = {
-      org_name: org || null,
       engagement_name: eng || null,
       voice_enabled: voiceEnabled,
     };
@@ -1546,7 +1533,6 @@ function openEditEngagementModal(
       client.voice_enabled = updated.voice_enabled;
       onSaved({
         name: updated.name,
-        org_name: updated.org_name,
         engagement_name: updated.engagement_name,
       });
       close();
@@ -1670,7 +1656,6 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     headerEl.querySelector<HTMLButtonElement>("#edit-engagement")?.addEventListener("click", () => {
       openEditEngagementModal(client, (updated) => {
         client.name = updated.name;
-        client.org_name = updated.org_name;
         client.engagement_name = updated.engagement_name;
         headerEl.innerHTML = renderDetailHeader(client);
         bindHeaderActions();
@@ -2691,7 +2676,7 @@ function slugify(s: string): string {
 
 function downloadFilename(client: Engagement): string {
   const today = new Date().toISOString().slice(0, 10);
-  const parts = [client.org_name, client.engagement_name]
+  const parts = [client.engagement_name]
     .map((s) => s?.trim())
     .filter((s): s is string => !!s)
     .map(slugify);

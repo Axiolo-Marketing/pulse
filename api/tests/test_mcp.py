@@ -284,7 +284,7 @@ async def test_create_then_delete_engagement_roundtrip(
         "tools/call",
         _tool_call_payload(
             "pulse_create_engagement",
-            {"client_name": "MCP roundtrip", "org_name": "Acme"},
+            {"client_name": "MCP roundtrip"},
         ),
         api_key=raw,
     )
@@ -293,7 +293,6 @@ async def test_create_then_delete_engagement_roundtrip(
     client_id = created["id"]
     assert created["name"] == "MCP roundtrip"
     assert created["client_name"] == "MCP roundtrip"
-    assert created["org_name"] == "Acme"
     # The engagement + its client row exist in the DB now.
     row = (
         await db.execute(
@@ -578,12 +577,12 @@ async def test_remaining_tool_surface_roundtrip(
             "tools/call",
             _tool_call_payload(
                 "pulse_update_engagement",
-                {"engagement_id": cid, "org_name": "Org", "brief": "Hello"},
+                {"engagement_id": cid, "engagement_name": "Org", "brief": "Hello"},
             ),
             api_key=raw,
         )
     )
-    assert updated["org_name"] == "Org"
+    assert updated["engagement_name"] == "Org"
     assert updated["brief"] == "Hello"
 
     # add_card

@@ -345,14 +345,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.engagement-row .org-name {
-  color: var(--muted);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .engagement-row .progress-pill {
   display: inline-flex;
   padding: 4px 10px;
@@ -1046,7 +1038,6 @@
     padding: 12px;
     font-size: 13px;
   }
-  .engagement-row .org-name,
   .er-owner,
   .er-last-active { display: none; }
   .detail-header { flex-direction: column; align-items: flex-start; }

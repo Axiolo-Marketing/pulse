@@ -149,13 +149,13 @@ async def test_create_engagement_generates_token(
 ) -> None:
     r = await admin_authed.post(
         "/api/admin/engagements",
-        json={"client_name": "New Client", "org_name": "Acme", "engagement_name": "Q3 review"},
+        json={"client_name": "New Client", "engagement_name": "Q3 review"},
     )
     assert r.status_code == 201
     body = r.json()
     assert body["name"] == "New Client"
     assert body["client_name"] == "New Client"
-    assert body["org_name"] == "Acme"
+    assert body["engagement_name"] == "Q3 review"
     # 16-hex-char token
     assert len(body["token"]) == 16
     assert all(ch in "0123456789abcdef" for ch in body["token"])
@@ -205,9 +205,10 @@ async def test_patch_engagement_partial_only_writes_provided_fields(
         f"/api/admin/engagements/{seed_client['id']}", json={"brief": "v1"}
     )
     r = await admin_authed.patch(
-        f"/api/admin/engagements/{seed_client['id']}", json={"org_name": "New Org"}
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"engagement_name": "New Eng"},
     )
-    assert r.json()["org_name"] == "New Org"
+    assert r.json()["engagement_name"] == "New Eng"
     # brief was NOT overwritten by the second PATCH
     assert r.json()["brief"] == "v1"
 
@@ -266,10 +267,11 @@ async def test_patch_engagement_omitting_voice_enabled_leaves_it(
         json={"voice_enabled": True},
     )
     r = await admin_authed.patch(
-        f"/api/admin/engagements/{seed_client['id']}", json={"org_name": "New Org"}
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"engagement_name": "New Eng"},
     )
     assert r.status_code == 200
-    assert r.json()["org_name"] == "New Org"
+    assert r.json()["engagement_name"] == "New Eng"
     assert r.json()["voice_enabled"] is True  # untouched by the second PATCH
 
 

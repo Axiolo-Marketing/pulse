@@ -111,10 +111,6 @@ export interface Engagement {
   name: string;
   /** The owning client id (admin views; absent on `/api/me`). */
   client_id?: string;
-  /** Legacy free-form customer-org text on the engagement row (kept for
-   * backwards compat). The post-multi-tenant operator-side org is
-   * surfaced separately via `org_logo_path` + the brand wordmark. */
-  org_name: string | null;
   engagement_name: string | null;
   token?: string;       // present in admin views, omitted from /api/me
   brief: string | null;
@@ -440,7 +436,6 @@ export interface EngagementSummary {
   owner_name: string | null;
   /** Engagement owner's email, or `null`. */
   owner_email: string | null;
-  org_name: string | null;
   engagement_name: string | null;
   token: string;
   brief: string | null;
@@ -478,12 +473,10 @@ export interface CreateEngagementArgs {
   /** Free-form client name; the backend get-or-creates a client by name
    * in the active org. Provide this OR `client_id`. */
   client_name?: string;
-  org_name?: string | null;
   engagement_name?: string | null;
 }
 
 export interface UpdateEngagementArgs {
-  org_name?: string | null;
   engagement_name?: string | null;
   brief?: string | null;
   /** Toggle the per-engagement voice recorder. Omit to leave it

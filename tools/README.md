@@ -26,7 +26,6 @@ python3 tools/apply-deck.py deck.md --dry-run
 python3 tools/apply-deck.py deck.md
 
 # Options
-python3 tools/apply-deck.py deck.md --org 'Acme Co'        # set org_name
 python3 tools/apply-deck.py deck.md --base-url http://localhost:14321  # local dev
 python3 tools/apply-deck.py deck.md --force                # allow a same-named 2nd engagement
 ```
