@@ -72,6 +72,25 @@
   notify: Restart pulse-api
 
 # ── 3. Migrations ─────────────────────────────────────────────────────────
+# Fresh DB snapshot immediately before `alembic upgrade head`, so any deploy
+# that applies a destructive migration has a same-minute rollback point (the
+# 03:15 daily dump can be hours stale). Pulse-scoped: same DB, pgpass, and
+# backup dir as the daily cron. `pipefail` means a failed dump aborts the play
+# BEFORE migrating — never migrate a DB you couldn't back up. Skipped under
+# `--check` (shell tasks don't run in check mode), so the dry run stays read-only.
+- name: Snapshot the Pulse DB before migrating
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    PGPASSFILE={{ pulse_env_dir }}/pgpass
+    pg_dump --host={{ pulse_db_host }} --port={{ pulse_db_port }}
+    --username={{ pulse_db_owner }} --dbname={{ pulse_db_name }}
+    | gzip > {{ pulse_backup_dir }}/db-predeploy-$(date +%FT%H%M%S).sql.gz
+    && find {{ pulse_backup_dir }} -maxdepth 1 -name 'db-predeploy-*.sql.gz' -mtime +30 -delete
+  args:
+    executable: /bin/bash
+  become_user: "{{ pulse_user }}"
+  changed_when: true
+
 - name: Run alembic upgrade head
   ansible.builtin.command: "{{ pulse_venv_dir }}/bin/alembic upgrade head"
   args:
