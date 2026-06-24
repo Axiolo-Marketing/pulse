@@ -231,11 +231,22 @@ disk. nginx is deployed once in HTTP bootstrap mode if the cert does not
 exist, certbot obtains the cert via webroot, then nginx is deployed again
 with HTTPS enabled.
 
-**Migration safety.** Each `alembic upgrade head` is wrapped in a Postgres
-transaction (Alembic's default), so a failing migration rolls back cleanly
-and `pulse-api` is restarted against the previous schema. The 0004 data
-migration is the only one that reads env vars at execution time — keep
-`SUPERADMIN_EMAILS` in `/etc/pulse/pulse.env` from then on.
+**Migration safety.** Immediately before `alembic upgrade head`, the `backend`
+role takes a fresh `pg_dump` → `/var/backups/pulse/db-predeploy-<ts>.sql.gz`
+(the "Snapshot the Pulse DB before migrating" task). `pipefail` means a dump
+that fails aborts the play *before* any migration runs — you never migrate a
+DB you couldn't back up — and the snapshot is same-minute, not up to a day
+stale like the 03:15 cron dump. It's skipped under `--check` (shell tasks
+don't run in check mode), so the dry run stays read-only. Each `alembic
+upgrade head` is then wrapped in a Postgres transaction (Alembic's default),
+so a failing migration rolls back cleanly and `pulse-api` is restarted against
+the previous schema. The 0004 data migration is the only one that reads env
+vars at execution time — keep `SUPERADMIN_EMAILS` in `/etc/pulse/pulse.env`
+from then on.
+
+To roll a deploy back, restore the snapshot it took:
+`gunzip -c /var/backups/pulse/db-predeploy-<ts>.sql.gz | psql pulse` (stop
+`pulse-api` first, then redeploy the prior git ref).
 
 ## Backups
 
@@ -243,6 +254,10 @@ Daily, via `/etc/cron.d/pulse-backup`:
 - `pg_dump pulse | gzip` → `/var/backups/pulse/db-YYYY-MM-DD.sql.gz`
 - `rsync -a --delete /var/lib/pulse/uploads/ /var/backups/pulse/uploads/`
 - 30-day local retention.
+
+Per deploy, via the `backend` role (see Migration safety above):
+- `pg_dump pulse | gzip` → `/var/backups/pulse/db-predeploy-<ts>.sql.gz`, taken
+  right before `alembic upgrade head`; same 30-day local retention.
 
 Off-box copies are out of scope for the playbook. Recommended: set up
 `rclone` (or aws-cli) on the host with credentials for an R2/B2 bucket,
