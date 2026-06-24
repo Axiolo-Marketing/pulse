@@ -41,21 +41,6 @@
   color: var(--muted);
 }
 
-.admin-logout {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  padding: 8px 12px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  border-radius: 6px;
-}
-.admin-logout:hover { color: var(--ink); }
-
 .admin-container {
   width: 100%;
   max-width: 960px;
@@ -1088,6 +1073,136 @@
 }
 .admin-header-link:hover { color: var(--ink); }
 .admin-header-link.active { color: var(--ink); }
+
+/* Account menu — collapses Settings / Superadmin / Sign out behind the user's
+   avatar. The popover mirrors the org-switcher (shared pop keyframe). */
+.user-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.user-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1.5px solid transparent;
+  border-radius: 999px;
+  padding: 4px 10px 4px 4px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  min-height: 36px;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.user-menu-trigger:hover { background: var(--surface-muted); color: var(--ink); }
+.user-menu-trigger.active { color: var(--ink); }
+.user-menu-trigger[aria-expanded="true"] {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
+.user-menu-avatar {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-weight: 700;
+  font-size: 12px;
+}
+.user-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.user-menu-caret {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.user-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  margin: 0;
+  padding: 6px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: org-switcher-pop 0.14s ease;
+}
+.user-menu-panel[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .user-menu-panel { animation: none; }
+}
+
+.user-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.user-menu-head-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-menu-head-email {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+}
+.user-menu-item:hover,
+.user-menu-item:focus-visible {
+  background: var(--surface-muted);
+  outline: none;
+}
+.user-menu-item.active { background: var(--primary-soft); color: var(--primary-dark); }
+
+.user-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
 
 .settings-page {
   display: flex;

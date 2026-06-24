@@ -505,9 +505,11 @@ function renderShell(user: AuthUser): string {
   // gates every `/api/superadmin/*` call independently — but hiding the
   // nav entry keeps the page from misleading non-super users into
   // clicking through to a route they'd 404 on.
-  const superLink = user.is_superadmin
-    ? `<a class="admin-header-link" href="#superadmin" id="nav-superadmin">Superadmin</a>`
+  const superItem = user.is_superadmin
+    ? `<a class="user-menu-item" role="menuitem" href="#superadmin" id="nav-superadmin" tabindex="-1">Superadmin</a>`
     : "";
+  const displayName = user.name?.trim() || user.email;
+  const initial = (displayName.charAt(0) || "?").toUpperCase();
   return `
     <div class="admin-page">
       <header class="admin-header" role="banner">
@@ -522,9 +524,24 @@ function renderShell(user: AuthUser): string {
         </div>
         <nav class="admin-header-actions" aria-label="Primary">
           <a class="admin-header-link" href="#" id="nav-engagements">Engagements</a>
-          <a class="admin-header-link" href="#settings/personal" id="nav-settings">Settings</a>
-          ${superLink}
-          <button class="admin-logout" type="button" id="logout">Sign out</button>
+          <div class="user-menu" data-state="closed">
+            <button type="button" class="user-menu-trigger" id="user-menu-trigger"
+              aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-panel">
+              <span class="user-menu-avatar" aria-hidden="true">${escape(initial)}</span>
+              <span class="user-menu-name">${escape(displayName)}</span>
+              <span class="user-menu-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="user-menu-panel" id="user-menu-panel" role="menu" aria-label="Account" hidden>
+              <div class="user-menu-head">
+                ${user.name?.trim() ? `<span class="user-menu-head-name">${escape(user.name.trim())}</span>` : ""}
+                <span class="user-menu-head-email">${escape(user.email)}</span>
+              </div>
+              <a class="user-menu-item" role="menuitem" href="#settings/personal" id="nav-settings" tabindex="-1">Settings</a>
+              ${superItem}
+              <div class="user-menu-sep" role="separator"></div>
+              <button class="user-menu-item" role="menuitem" type="button" id="logout" tabindex="-1">Sign out</button>
+            </div>
+          </div>
         </nav>
       </header>
       <div class="admin-container">
@@ -552,7 +569,92 @@ function attachShellHandlers(mount: HTMLElement, state: ShellState): void {
       e.preventDefault();
       window.location.hash = "";
     });
+  attachUserMenu(mount);
   void state;
+}
+
+/** Account dropdown collapsing Settings / Superadmin / Sign out. Mirrors the
+ * org-switcher popover: click/Enter/Space toggles, ↑/↓ move between items,
+ * Escape and outside-click close, Tab lets focus leave. The menu items keep
+ * their original ids (`nav-settings` / `nav-superadmin` / `logout`) so the
+ * routing + logout handlers and `setActiveNav` keep working unchanged. */
+function attachUserMenu(mount: HTMLElement): void {
+  const root = mount.querySelector<HTMLElement>(".user-menu");
+  if (!root) return;
+  const trigger = root.querySelector<HTMLButtonElement>(".user-menu-trigger");
+  const panel = root.querySelector<HTMLElement>(".user-menu-panel");
+  if (!trigger || !panel) return;
+  const items = Array.from(
+    panel.querySelectorAll<HTMLElement>(".user-menu-item"),
+  );
+
+  const open = (): void => {
+    if (root.dataset.state === "open") return;
+    root.dataset.state = "open";
+    panel.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    items[0]?.focus();
+    document.addEventListener("click", outsideClick, true);
+    document.addEventListener("keydown", keyHandler, true);
+  };
+
+  const close = (returnFocus = true): void => {
+    if (root.dataset.state !== "open") return;
+    root.dataset.state = "closed";
+    panel.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", outsideClick, true);
+    document.removeEventListener("keydown", keyHandler, true);
+    if (returnFocus) trigger.focus();
+  };
+
+  const outsideClick = (e: MouseEvent): void => {
+    if (!root.contains(e.target as Node)) close(false);
+  };
+
+  const keyHandler = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key === "Tab") {
+      close(false);
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const cur = items.findIndex((it) => it === document.activeElement);
+      const next =
+        e.key === "ArrowDown"
+          ? (cur + 1) % items.length
+          : (cur - 1 + items.length) % items.length;
+      items[next]?.focus();
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      items[0]?.focus();
+      return;
+    }
+    if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1]?.focus();
+      return;
+    }
+  };
+
+  trigger.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (root.dataset.state === "open") close();
+    else open();
+  });
+
+  // Choosing an item collapses the menu. The link items (Settings /
+  // Superadmin) navigate via their href; Sign out has its own handler.
+  for (const item of items) {
+    item.addEventListener("click", () => close(false));
+  }
 }
 
 function renderShellOrg(mount: HTMLElement, state: ShellState): void {
@@ -594,6 +696,11 @@ function setActiveNav(mount: HTMLElement, route: Route): void {
   setActive("nav-engagements", route.kind === "list" || route.kind === "detail");
   setActive("nav-settings", route.kind === "settings");
   setActive("nav-superadmin", route.kind === "superadmin");
+  // The trigger itself shows active while in any of its collapsed sub-pages.
+  setActive(
+    "user-menu-trigger",
+    route.kind === "settings" || route.kind === "superadmin",
+  );
 }
 
 async function draw(
