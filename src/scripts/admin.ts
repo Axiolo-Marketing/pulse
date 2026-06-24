@@ -20,7 +20,6 @@ import {
 import { applyBranding } from "../lib/branding";
 import {
   engagementStatus,
-  STATUS_CSS_CLASS,
   STATUS_LABELS,
   STATUS_ORDER,
   type EngagementStatus,
@@ -751,19 +750,21 @@ function engagementRowHtml(s: EngagementSummary): string {
   const completed = s.answered_count + s.skipped_count;
   const owner = s.owner_name?.trim() || s.owner_email?.trim() || "—";
   const status = engagementStatus(s);
+  // Status is conveyed by the count pill's colour; the label rides along as a
+  // `title` (hover + assistive tech) so it isn't a colour-only signal.
+  const statusMod = status.replace("_", "-"); // in_progress → in-progress
   return `
-    <tr data-engagement-id="${escape(s.id)}">
-      <td>
+    <div class="engagement-row" data-engagement-id="${escape(s.id)}">
+      <div class="er-name">
         <div class="client-name">${escape(s.engagement_name?.trim() || "Untitled engagement")}</div>
         <div class="org-name">${escape(s.org_name ?? "")}</div>
-      </td>
-      <td>
-        <span class="progress-pill">${completed} / ${s.total_cards}</span>
-        <span class="status-pill ${STATUS_CSS_CLASS[status]}">${STATUS_LABELS[status]}</span>
-      </td>
-      <td class="owner-cell">${escape(owner)}</td>
-      <td class="last-active">${escape(formatTimestamp(s.last_active_at))}</td>
-      <td class="actions">
+      </div>
+      <div class="er-count">
+        <span class="progress-pill progress-pill--${statusMod}" title="${escape(STATUS_LABELS[status])}">${completed} / ${s.total_cards}</span>
+      </div>
+      <div class="er-owner">${escape(owner)}</div>
+      <div class="er-last-active">${escape(formatTimestamp(s.last_active_at))}</div>
+      <div class="er-actions">
         <div class="action-icons">
           <button class="action-icon" type="button" data-action="view" aria-label="View responses" title="View responses">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -775,8 +776,8 @@ function engagementRowHtml(s: EngagementSummary): string {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
           </button>
         </div>
-      </td>
-    </tr>`;
+      </div>
+    </div>`;
 }
 
 /** Concise per-client rollup of derived statuses, e.g.
@@ -807,12 +808,7 @@ function clientSectionHtml(
   members: EngagementSummary[],
 ): string {
   const body = rowsHtml
-    ? `
-      <div class="engagement-table-wrap">
-        <table class="engagement-table">
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      </div>`
+    ? `<div class="engagement-card">${rowsHtml}</div>`
     : `<div class="client-empty">No engagements for this client yet.</div>`;
   return `
     <section class="client-section">
@@ -1087,13 +1083,16 @@ function renderList(
   // ── engagement row actions (view / copy / delete) ──
   container.addEventListener("click", async (e) => {
     const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
+    // `Element`, not `HTMLElement`: clicking the icon glyph makes the event
+    // target an SVG element (the <path>), which isn't an HTMLElement — guarding
+    // on HTMLElement would swallow clicks that land on the icon itself.
+    if (!(target instanceof Element)) return;
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn) return;
     const action = btn.dataset.action;
     if (action === "new-engagement") return; // handled in bindListHeader
 
-    const row = btn.closest<HTMLElement>("tr[data-engagement-id]");
+    const row = btn.closest<HTMLElement>("[data-engagement-id]");
     if (!row) return;
     const engagementId = row.dataset.engagementId!;
 

@@ -209,6 +209,9 @@
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+  /* Equal-width columns so the four controls fill the bar and its right edge
+     lines up with the engagement cards below. */
+  flex: 1 1 0;
 }
 
 .list-control-label {
@@ -222,8 +225,8 @@
 /* Reuses the .input look, but overrides the full-width + bottom-margin the
    form fields carry so the selects sit inline in the bar. */
 .filter-select {
-  width: auto;
-  min-width: 150px;
+  width: 100%;
+  min-width: 0;
   margin: 0;
   padding: 8px 12px;
   font-size: 14px;
@@ -324,90 +327,75 @@
   color: var(--muted);
 }
 
-.engagement-table-wrap {
+/* Each client's engagements render as a card of CSS-grid rows. One shared
+   grid template across every row is what lines columns up across all client
+   sections — per-table auto/fixed sizing couldn't do that reliably. */
+.engagement-card {
   background: var(--white);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 
-.engagement-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.engagement-table th,
-.engagement-table td {
-  text-align: left;
+.engagement-row {
+  display: grid;
+  /* name (flex) · count · owner · last-active · actions. fr proportions keep
+     the same spread at any card width; minmax(0,…) lets the text cells clip. */
+  grid-template-columns:
+    minmax(0, 31fr) minmax(0, 12fr) minmax(0, 18fr) minmax(0, 26fr) minmax(0, 13fr);
+  align-items: center;
+  column-gap: 16px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
+  font-size: 14px;
 }
+.engagement-row:last-child { border-bottom: 0; }
 
-.engagement-table th {
-  background: var(--surface-muted);
-  font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--muted);
-}
+.er-name { min-width: 0; }
 
-.engagement-table tr:last-child td {
-  border-bottom: 0;
-}
-
-.engagement-table .client-name {
+.engagement-row .client-name {
   font-weight: 600;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-.engagement-table .org-name {
+.engagement-row .org-name {
   color: var(--muted);
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.engagement-table .progress-pill {
+.engagement-row .progress-pill {
   display: inline-flex;
-  padding: 4px 10px;
-  border-radius: var(--radius-pill, 999px);
-  background: var(--primary-soft);
-  color: var(--primary-dark);
-  font-weight: 600;
-  font-size: 12px;
-}
-
-/* Derived-status pill — reuses the soft-pill pattern, sits beside the
-   progress pill. One soft colour per status; the text label carries the
-   meaning so it stays accessible (no colour-only signalling). */
-.status-pill {
-  display: inline-flex;
-  margin-left: 6px;
   padding: 4px 10px;
   border-radius: var(--radius-pill, 999px);
   font-weight: 600;
   font-size: 12px;
   white-space: nowrap;
 }
-.status-pill--complete    { background: var(--success-soft); color: var(--success); }
-.status-pill--in-progress { background: var(--primary-soft);  color: var(--primary-dark); }
-.status-pill--waiting     { background: var(--warning-soft);  color: var(--warning); }
 
-.engagement-table .owner-cell {
+/* The count pill carries the derived status as colour (the standalone status
+   badge is gone). Soft background + matching text, one per status. The status
+   label still rides along as the pill's `title` so it isn't colour-only. */
+.engagement-row .progress-pill--complete    { background: var(--success-soft); color: var(--success); }
+.engagement-row .progress-pill--in-progress { background: var(--primary-soft);  color: var(--primary-dark); }
+.engagement-row .progress-pill--waiting     { background: var(--warning-soft);  color: var(--warning); }
+
+.er-owner,
+.er-last-active {
   color: var(--muted);
   font-size: 13px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.engagement-table .last-active {
-  color: var(--muted);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.engagement-table .actions {
-  white-space: nowrap;
-  text-align: right;
+/* Action icons sit in the last column, pinned to the card's right edge. */
+.er-actions {
+  justify-self: end;
 }
 
 /* Engagement row actions as icon buttons (view / copy / delete). The label
@@ -1065,9 +1053,17 @@
 }
 
 @media (max-width: 600px) {
-  .engagement-table th,
-  .engagement-table td { padding: 10px 12px; font-size: 13px; }
-  .engagement-table .org-name { display: none; }
+  /* Drop owner + last-active on phones; keep name · count · actions. The
+     hidden grid items leave the flow, so the 3-column template maps 1:1. */
+  .engagement-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    column-gap: 10px;
+    padding: 12px;
+    font-size: 13px;
+  }
+  .engagement-row .org-name,
+  .er-owner,
+  .er-last-active { display: none; }
   .detail-header { flex-direction: column; align-items: flex-start; }
   .client-header { flex-direction: column; align-items: flex-start; gap: 4px; }
   .client-rollup { text-align: left; }
