@@ -77,14 +77,15 @@ async def get_anon_session(
                 text("select set_config('pulse.token', :t, true)"),
                 {"t": x_pulse_token},
             )
-            # Resolve the engagement's org_id so cross-table reads (audit
-            # logs, org-scoped extras coming in PR 2+) stay tenant-scoped.
-            # Returns empty string if no row matches the token — NULLIF in
-            # the RLS helper turns that into NULL and the policy rejects.
+            # Resolve the recipient's org_id so cross-table reads (audit
+            # logs, org-scoped extras) stay tenant-scoped. The token now
+            # lives on the recipient (migration 0015). Returns empty string
+            # if no row matches — NULLIF in the RLS helper turns that into
+            # NULL and the policy rejects.
             org_row = (
                 await conn.execute(
                     text(
-                        "select coalesce((select org_id::text from public.engagements "
+                        "select coalesce((select org_id::text from public.recipients "
                         "where token = :t limit 1), '')"
                     ),
                     {"t": x_pulse_token},

@@ -13,6 +13,7 @@ from pulse_api.models.organization_membership import (
     MemberRole,
     OrganizationMembership,
 )
+from pulse_api.models.recipient import Recipient
 from pulse_api.models.response import Response
 from pulse_api.models.upload import Upload
 from pulse_api.models.user import User
@@ -31,6 +32,7 @@ __all__ = [
     "Organization",
     "OrganizationInvite",
     "OrganizationMembership",
+    "Recipient",
     "Response",
     "Upload",
     "User",

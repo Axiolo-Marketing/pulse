@@ -50,15 +50,18 @@ def test_sanitize_filename_caps_length() -> None:
 def test_build_storage_path_uses_uuid_prefix() -> None:
     import re
 
-    cid, kid = str(uuid.uuid4()), str(uuid.uuid4())
-    p = storage.build_storage_path(engagement_id=cid, card_id=kid, filename="x.pdf")
+    cid, rid, kid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    p = storage.build_storage_path(
+        engagement_id=cid, recipient_id=rid, card_id=kid, filename="x.pdf"
+    )
     parts = p.split("/")
     assert parts[0] == cid
-    assert parts[1] == kid
-    # Third segment: <uuid>-<sanitized_filename>. UUIDs contain dashes so
+    assert parts[1] == rid
+    assert parts[2] == kid
+    # Fourth segment: <uuid>-<sanitized_filename>. UUIDs contain dashes so
     # a simple split on '-' would mis-parse. Match the 36-char UUID prefix.
-    m = re.match(r"^([0-9a-f-]{36})-(.+)$", parts[2])
-    assert m, f"unexpected third segment shape: {parts[2]!r}"
+    m = re.match(r"^([0-9a-f-]{36})-(.+)$", parts[3])
+    assert m, f"unexpected last segment shape: {parts[3]!r}"
     assert uuid.UUID(m.group(1))
     assert m.group(2) == "x.pdf"
 
@@ -74,12 +77,19 @@ def test_build_storage_path_uses_uuid_prefix() -> None:
 )
 def test_build_storage_path_rejects_non_uuid_ids(bad_client_id: str, bad_card_id: str) -> None:
     with pytest.raises(StoragePathError):
-        storage.build_storage_path(engagement_id=bad_client_id, card_id=bad_card_id, filename="x")
+        storage.build_storage_path(
+            engagement_id=bad_client_id,
+            recipient_id=str(uuid.uuid4()),
+            card_id=bad_card_id,
+            filename="x",
+        )
 
 
 def test_build_storage_path_sanitizes_filename() -> None:
-    cid, kid = str(uuid.uuid4()), str(uuid.uuid4())
-    p = storage.build_storage_path(engagement_id=cid, card_id=kid, filename="../../../etc/passwd")
+    cid, rid, kid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    p = storage.build_storage_path(
+        engagement_id=cid, recipient_id=rid, card_id=kid, filename="../../../etc/passwd"
+    )
     # Last segment must NOT contain ..
     assert "/.." not in p
     assert p.endswith("-passwd")
@@ -122,8 +132,10 @@ def test_resolve_within_upload_dir_normalizes_redundant_dot_segments(tmp_uploads
 
 
 def test_write_and_delete_roundtrip(tmp_uploads_dir) -> None:
-    cid, kid = str(uuid.uuid4()), str(uuid.uuid4())
-    rel = storage.build_storage_path(engagement_id=cid, card_id=kid, filename="data.bin")
+    cid, rid, kid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    rel = storage.build_storage_path(
+        engagement_id=cid, recipient_id=rid, card_id=kid, filename="data.bin"
+    )
     storage.write_upload(relative_path=rel, content=b"hello world")
 
     target = storage.resolve_within_upload_dir(rel)

@@ -1,9 +1,9 @@
 """Repository helpers for `engagements`. Caller's session role determines
-what rows are visible: `pulse_anon` sees only the row matching the
-request's token; `pulse_admin` (BYPASSRLS) sees all rows.
+what rows are visible: `pulse_anon` sees only the engagement resolved from
+the request's recipient token; `pulse_admin` (BYPASSRLS) sees all rows.
+The magic-link token lives on `recipients` now (migration 0015), so an
+engagement is just the shared card set + per-recipient progress rollup.
 """
-import secrets
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +21,13 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
     result = await session.execute(
         text(
             "select c.id::text, cl.name as name, c.engagement_name, "
-            "c.brief, c.voice_enabled, c.created_at, c.last_active_at, "
+            "c.brief, c.voice_enabled, c.created_at, "
+            "r.last_active_at, r.name as recipient_name, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.engagements c "
             "join public.clients cl on cl.id = c.client_id "
+            "join public.recipients r "
+            "  on r.engagement_id = c.id and r.token = public.pulse_request_token() "
             "left join public.organizations o on o.id = c.org_id "
             "limit 1"
         )
@@ -65,11 +68,11 @@ async def voice_enabled_for_my_engagement(session: AsyncSession) -> bool:
 
     Runs on the ``pulse_anon`` session. This is the security gate the upload
     route consults before accepting a ``kind='voice'`` upload, so it filters
-    on ``pulse_request_token()`` EXPLICITLY (like ``touch_last_active``)
-    rather than leaning on RLS alone — the flag is then correct even if RLS
-    were ever not engaged. Returns ``False`` when no engagement resolves
-    (unknown token) — the upload route treats that as "voice not allowed",
-    the safe default.
+    on the token's resolved engagement (``pulse_request_engagement_id()``)
+    EXPLICITLY rather than leaning on RLS alone — the flag is then correct
+    even if RLS were ever not engaged. Returns ``False`` when no engagement
+    resolves (unknown token) — the upload route treats that as "voice not
+    allowed", the safe default.
 
     Args:
         session: ``pulse_anon`` session with ``pulse.token`` set.
@@ -81,19 +84,19 @@ async def voice_enabled_for_my_engagement(session: AsyncSession) -> bool:
     result = await session.execute(
         text(
             "select voice_enabled from public.engagements "
-            "where token = public.pulse_request_token() limit 1"
+            "where id = public.pulse_request_engagement_id() limit 1"
         )
     )
     return bool(result.scalar_one_or_none())
 
 
 async def touch_last_active(session: AsyncSession) -> bool:
-    """Updates last_active_at on the token-bound engagement. Returns True if
+    """Updates last_active_at on the token-bound recipient. Returns True if
     a row was updated. RLS + the column-scoped grant restrict this to the
-    token's own row and to that one column."""
+    token's own recipient row and to that one column."""
     result = await session.execute(
         text(
-            "update public.engagements set last_active_at = now() "
+            "update public.recipients set last_active_at = now() "
             "where token = public.pulse_request_token() returning id"
         )
     )
@@ -104,14 +107,19 @@ async def touch_last_active(session: AsyncSession) -> bool:
 
 
 async def list_all_with_counts(session: AsyncSession) -> list[dict]:
-    """All engagements + per-engagement aggregates. The two FILTER counts
-    answer the operator's first-glance question: how far is this engagement?
+    """All engagements + a per-engagement *recipient* rollup. Progress is now
+    per respondent, so the first-glance metric is "how many recipients have
+    finished?" — ``completed_recipients`` of ``recipients_count`` — rather
+    than a single answered/skipped count.
 
-    JOINs ``clients`` for the owning client (``client_id`` + ``client_name``)
-    and carries the raw ``created_by`` user id. The owner's display name /
-    email is enriched in a SECOND pass at the route layer against a
-    BYPASSRLS session — ``users`` is not granted to ``pulse_member`` (same
-    pattern the activity feed uses for actor display)."""
+    A recipient counts as complete when their answered+skipped responses
+    reach ``total_cards`` (and the deck has cards). ``last_active_at`` is the
+    most-recent activity across the engagement's recipients.
+
+    JOINs ``clients`` for the owning client and carries the raw
+    ``created_by`` id; the owner's display name/email is enriched in a
+    SECOND pass at the route layer (``users`` isn't granted to
+    ``pulse_member``)."""
     result = await session.execute(
         text(
             """
@@ -120,15 +128,27 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               cl.id::text                                        as client_id,
               cl.name                                            as client_name,
               c.created_by::text                                 as created_by,
-              c.engagement_name, c.token,
-              c.brief, c.voice_enabled, c.created_at, c.last_active_at,
-              coalesce(count(r.*) filter (where r.state = 'answered'), 0)::int as answered_count,
-              coalesce(count(r.*) filter (where r.state = 'skipped'),  0)::int as skipped_count,
-              (select count(*) from public.cards where engagement_id = c.id)::int  as total_cards
+              c.engagement_name, c.brief, c.voice_enabled,
+              c.reminders_enabled, c.created_at,
+              (select count(*) from public.cards cd
+                 where cd.engagement_id = c.id)::int             as total_cards,
+              (select count(*) from public.recipients rc
+                 where rc.engagement_id = c.id)::int             as recipients_count,
+              (select max(rc.last_active_at) from public.recipients rc
+                 where rc.engagement_id = c.id)                  as last_active_at,
+              (
+                select count(*) from public.recipients rc
+                where rc.engagement_id = c.id
+                  and (select count(*) from public.cards cd2
+                         where cd2.engagement_id = c.id) > 0
+                  and (select count(*) from public.responses rr
+                         where rr.recipient_id = rc.id
+                           and rr.state in ('answered', 'skipped'))
+                      >= (select count(*) from public.cards cd3
+                            where cd3.engagement_id = c.id)
+              )::int                                             as completed_recipients
             from public.engagements c
             join public.clients cl on cl.id = c.client_id
-            left join public.responses r on r.engagement_id = c.id
-            group by c.id, cl.id, cl.name
             order by c.created_at desc
             """
         )
@@ -172,9 +192,9 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
         result = await session.execute(
             text(
                 "select c.id::text, c.client_id::text as client_id, "
-                "cl.name as name, c.engagement_name, c.token, "
-                "c.brief, c.voice_enabled, c.created_by::text as created_by, "
-                "c.created_at, c.last_active_at "
+                "cl.name as name, c.engagement_name, "
+                "c.brief, c.voice_enabled, c.reminders_enabled, "
+                "c.created_by::text as created_by, c.created_at "
                 "from public.engagements c "
                 "join public.clients cl on cl.id = c.client_id "
                 "where c.id = cast(:cid as uuid)"
@@ -213,30 +233,29 @@ async def create_engagement(
 
     Returns:
         Dict of the inserted row, including the joined client ``name`` +
-        ``client_id``.
+        ``client_id``. No token — the deck link is minted per recipient
+        (the operator adds recipients on the engagement after creating it).
     """
-    token = secrets.token_hex(8)
     result = await session.execute(
         text(
             "with ins as ("
             "  insert into public.engagements "
-            "  (client_id, engagement_name, token, org_id, created_by) "
-            "  values (cast(:cid as uuid), :e, :t, cast(:org as uuid), "
+            "  (client_id, engagement_name, org_id, created_by) "
+            "  values (cast(:cid as uuid), :e, cast(:org as uuid), "
             "          cast(:by as uuid)) "
-            "  returning id, client_id, engagement_name, token, brief, "
-            "            voice_enabled, created_by, created_at, last_active_at"
+            "  returning id, client_id, engagement_name, brief, "
+            "            voice_enabled, reminders_enabled, created_by, created_at"
             ") "
             "select ins.id::text, ins.client_id::text as client_id, "
             "cl.name as name, cl.name as client_name, "
-            "ins.engagement_name, ins.token, "
-            "ins.brief, ins.voice_enabled, ins.created_by::text as created_by, "
-            "ins.created_at, ins.last_active_at "
+            "ins.engagement_name, "
+            "ins.brief, ins.voice_enabled, ins.reminders_enabled, "
+            "ins.created_by::text as created_by, ins.created_at "
             "from ins join public.clients cl on cl.id = ins.client_id"
         ),
         {
             "cid": client_id,
             "e": engagement_name,
-            "t": token,
             "org": org_id,
             "by": created_by,
         },

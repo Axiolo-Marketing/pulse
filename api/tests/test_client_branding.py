@@ -89,13 +89,20 @@ async def _seed_org_with_owner_and_client(
                 "  on conflict (org_id, name) do update set name = excluded.name "
                 "  returning id"
                 ") "
-                "insert into public.engagements (client_id, token, org_id) "
-                "select c.id, :t, cast(:o as uuid) from c "
+                "insert into public.engagements (client_id, org_id) "
+                "select c.id, cast(:o as uuid) from c "
                 "returning id::text"
             ),
-            {"n": f"{label} Client", "t": token, "o": org_id},
+            {"n": f"{label} Client", "o": org_id},
         )
     ).mappings().one()["id"]
+    await db.execute(
+        text(
+            "insert into public.recipients (engagement_id, org_id, token) "
+            "values (cast(:e as uuid), cast(:o as uuid), :t)"
+        ),
+        {"e": client_id, "o": org_id, "t": token},
+    )
 
     return {
         "org_id": org_id,

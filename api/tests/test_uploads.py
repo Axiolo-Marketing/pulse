@@ -42,8 +42,9 @@ async def test_upload_writes_file_and_inserts_row(
     on_disk = storage.resolve_within_upload_dir(body["storage_path"])
     assert on_disk.exists()
     assert on_disk.read_bytes() == b"hello pdf bytes"
-    # client_id segment is the first directory component
-    assert body["storage_path"].split("/")[1] == card_id
+    # Path layout is {engagement_id}/{recipient_id}/{card_id}/<uuid>-<name>,
+    # so the card_id is the third directory component.
+    assert body["storage_path"].split("/")[2] == card_id
 
 
 async def test_upload_defaults_kind_to_file(
@@ -407,6 +408,7 @@ async def test_download_cannot_target_other_clients_upload(
 
     rel = storage.build_storage_path(
         engagement_id=other_seeded_client["id"],
+        recipient_id=other_seeded_client["recipient_id"],
         card_id=card_row["id"],
         filename="secret.txt",
     )
@@ -416,8 +418,12 @@ async def test_download_cannot_target_other_clients_upload(
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, engagement_id, file_name, file_size_bytes, storage_path, mime_type) "
-                "values (cast(:k as uuid), cast(:c as uuid), 'secret.txt', 14, :sp, 'text/plain') "
+                "(card_id, engagement_id, recipient_id, file_name, "
+                " file_size_bytes, storage_path, mime_type) "
+                "values (cast(:k as uuid), cast(:c as uuid), "
+                "        (select id from public.recipients "
+                "           where engagement_id = cast(:c as uuid) limit 1), "
+                "        'secret.txt', 14, :sp, 'text/plain') "
                 "returning id::text"
             ),
             {"k": card_row["id"], "c": other_seeded_client["id"], "sp": rel},
@@ -486,10 +492,12 @@ async def test_delete_other_clients_upload_returns_404(
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, engagement_id, file_name, file_size_bytes, storage_path, "
-                " mime_type, org_id) "
-                "values (cast(:k as uuid), cast(:c as uuid), 'x.bin', 1, "
-                "        'fake/path', null, cast(:o as uuid)) "
+                "(card_id, engagement_id, recipient_id, file_name, "
+                " file_size_bytes, storage_path, mime_type, org_id) "
+                "values (cast(:k as uuid), cast(:c as uuid), "
+                "        (select id from public.recipients "
+                "           where engagement_id = cast(:c as uuid) limit 1), "
+                "        'x.bin', 1, 'fake/path', null, cast(:o as uuid)) "
                 "returning id::text"
             ),
             {

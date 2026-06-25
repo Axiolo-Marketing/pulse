@@ -64,13 +64,15 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="empty file")
 
     engagement_id = await uploads_repo.get_current_engagement_id(session)
-    if engagement_id is None:
-        # Token didn't resolve to an engagement — same shape as RLS rejection.
+    recipient_id = await uploads_repo.get_current_recipient_id(session)
+    if engagement_id is None or recipient_id is None:
+        # Token didn't resolve to a recipient — same shape as RLS rejection.
         raise HTTPException(status_code=404, detail="client not found")
 
     try:
         relative_path = storage.build_storage_path(
             engagement_id=engagement_id,
+            recipient_id=recipient_id,
             card_id=card_id,
             filename=file.filename or "file",
         )

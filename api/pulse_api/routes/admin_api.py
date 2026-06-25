@@ -27,6 +27,7 @@ from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
+from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 
@@ -56,17 +57,27 @@ class CreateEngagementRequest(BaseModel):
 
 class UpdateEngagementRequest(BaseModel):
     """Partial update. Fields omitted from the request body stay as-is.
-    `token` is intentionally not accepted here — rotation goes through
-    its own POST endpoint so it's an explicit action.
 
     The customer-facing name lives on the owning ``Client`` now and is
-    not editable through this path. ``voice_enabled`` toggles the
-    per-engagement voice recorder; omitting it (the
-    `model_dump(exclude_unset=True)` path) leaves the flag untouched."""
+    not editable through this path; magic-link tokens live on recipients.
+    ``voice_enabled`` toggles the per-engagement voice recorder and
+    ``reminders_enabled`` pauses/resumes the scheduled reminder fan-out;
+    omitting either (the `model_dump(exclude_unset=True)` path) leaves it
+    untouched."""
 
     engagement_name: str | None = None
     brief: str | None = None
     voice_enabled: bool | None = None
+    reminders_enabled: bool | None = None
+
+
+class AddRecipientRequest(BaseModel):
+    """Add a respondent to an engagement. ``email`` is required (it's the
+    identifier and where invites/reminders go); ``name`` is an optional
+    label used to greet the recipient."""
+
+    email: str = Field(min_length=3, max_length=320)
+    name: str | None = Field(default=None, max_length=200)
 
 
 RESPONSE_TYPES = (
@@ -144,6 +155,7 @@ async def get_engagement(
         raise HTTPException(status_code=404, detail="engagement not found")
     return {
         "engagement": engagement,
+        "recipients": await recipients_repo.list_for_engagement(session, engagement_id),
         "cards": await cards_repo.list_for_engagement(session, engagement_id),
         "responses": await responses_repo.list_for_engagement(session, engagement_id),
         "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
@@ -339,6 +351,101 @@ async def reset_engagement(
         "responses_cleared": responses_cleared,
         "uploads_cleared": len(removed_uploads),
     }
+
+
+# ── Recipients (per-engagement respondents) ────────────────────────────────
+
+
+@router.get("/engagements/{engagement_id}/recipients")
+async def list_recipients(
+    engagement_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
+) -> list[dict[str, Any]]:
+    """Recipients on one engagement, each with its own progress rollup. RLS
+    scopes to the active org."""
+    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    return await recipients_repo.list_for_engagement(session, engagement_id)
+
+
+@router.post("/engagements/{engagement_id}/recipients", status_code=201)
+async def add_recipient(
+    engagement_id: str,
+    req: AddRecipientRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    """Add a respondent and mint their private deck token. The operator
+    sends the invite separately. 404 if the engagement isn't in the active
+    org; 409 if the email is already a recipient of this engagement."""
+    user, membership = org_member
+    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    email = req.email.strip()
+    if await recipients_repo.email_exists(
+        session, engagement_id=engagement_id, email=email
+    ):
+        raise HTTPException(status_code=409, detail="recipient already added")
+    row = await recipients_repo.add(
+        session,
+        engagement_id=engagement_id,
+        org_id=str(membership.org_id),
+        email=email,
+        name=(req.name.strip() or None) if req.name else None,
+    )
+    if row is None:
+        raise HTTPException(status_code=400, detail="could not add recipient")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="recipient.add",
+        target_type="recipient",
+        target_id=row["id"],
+        metadata={"engagement_id": engagement_id, "email": email},
+    )
+    await session.commit()
+    return row
+
+
+@router.delete(
+    "/engagements/{engagement_id}/recipients/{recipient_id}", status_code=204
+)
+async def remove_recipient(
+    engagement_id: str,
+    recipient_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> None:
+    """Remove a recipient — the FK cascade wipes their responses/uploads and
+    their deck link stops working. On-disk files are cleaned best-effort
+    after commit."""
+    user, membership = org_member
+    upload_paths = await recipients_repo.list_upload_paths_for_recipient(
+        session, recipient_id
+    )
+    removed = await recipients_repo.remove(
+        session, engagement_id=engagement_id, recipient_id=recipient_id
+    )
+    if removed is None:
+        raise HTTPException(status_code=404, detail="recipient not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="recipient.remove",
+        target_type="recipient",
+        target_id=recipient_id,
+        metadata={"engagement_id": engagement_id, "email": removed.get("email")},
+    )
+    await session.commit()
+    for path in upload_paths:
+        storage.delete_upload(path)
 
 
 # ── Clients (real clients/companies) ───────────────────────────────────────

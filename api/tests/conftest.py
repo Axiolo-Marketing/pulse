@@ -206,7 +206,7 @@ async def client(
         org_id = (
             await db_conn.execute(
                 text(
-                    "select coalesce((select org_id::text from public.engagements "
+                    "select coalesce((select org_id::text from public.recipients "
                     "where token = :t limit 1), '')"
                 ),
                 {"t": x_pulse_token},
@@ -330,12 +330,14 @@ async def axiolo_org(db: AsyncSession) -> dict[str, str]:
 async def _seed_engagement(
     db: AsyncSession, *, org_id: str, name: str
 ) -> dict[str, str]:
-    """Seed a client + an engagement owned by it, returning the engagement
-    row plus ``name`` (the client's name) + ``client_id``.
+    """Seed a client + an engagement + one default recipient, returning the
+    engagement id plus ``name`` (the client's name), ``client_id``, the
+    recipient's ``token`` (the deck link credential), and ``recipient_id``.
 
-    Post-0013 the engagement no longer carries its own ``name`` — the
-    owning ``clients`` row does. Tests still read ``["name"]`` to mean the
-    customer-facing name, so we surface the client name under that key.
+    Post-0015 the magic-link token lives on ``recipients``, not the
+    engagement. Most tests use a single respondent, so this seeds one
+    recipient carrying the token and surfaces it as ``["token"]`` — the
+    same key ``client_authed`` and the client-path tests already read.
     """
     token = secrets.token_hex(8)
     client = (
@@ -349,18 +351,30 @@ async def _seed_engagement(
             {"org": org_id, "n": name},
         )
     ).mappings().one()
-    row = (
+    eng = (
         await db.execute(
             text(
-                "insert into public.engagements (client_id, token, org_id) "
-                "values (cast(:cid as uuid), :t, cast(:org as uuid)) "
-                "returning id::text, token"
+                "insert into public.engagements (client_id, org_id) "
+                "values (cast(:cid as uuid), cast(:org as uuid)) "
+                "returning id::text"
             ),
-            {"cid": client["id"], "t": token, "org": org_id},
+            {"cid": client["id"], "org": org_id},
+        )
+    ).mappings().one()
+    recipient = (
+        await db.execute(
+            text(
+                "insert into public.recipients (engagement_id, org_id, token) "
+                "values (cast(:eid as uuid), cast(:org as uuid), :t) "
+                "returning id::text"
+            ),
+            {"eid": eng["id"], "org": org_id, "t": token},
         )
     ).mappings().one()
     return {
-        **dict(row),
+        "id": eng["id"],
+        "token": token,
+        "recipient_id": recipient["id"],
         "name": name,
         "client_id": client["id"],
         "org_id": org_id,

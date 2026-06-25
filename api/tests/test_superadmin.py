@@ -486,10 +486,10 @@ async def test_delete_org_with_clients_returns_409(
             "  on conflict (org_id, name) do update set name = excluded.name "
             "  returning id"
             ") "
-            "insert into public.engagements (client_id, token, org_id) "
-            "select c.id, :t, cast(:o as uuid) from c"
+            "insert into public.engagements (client_id, org_id) "
+            "select c.id, cast(:o as uuid) from c"
         ),
-        {"n": "Stuck Client", "t": secrets.token_hex(8), "o": target},
+        {"n": "Stuck Client", "o": target},
     )
     await db.flush()
 

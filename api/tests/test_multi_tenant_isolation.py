@@ -76,7 +76,8 @@ async def _seed_one_set(
     """
     ids: dict[str, str] = {}
 
-    # engagement
+    # engagement + recipient (post-0015 the magic-link token lives on
+    # recipients, not engagements)
     engagement_token = secrets.token_hex(8)
     ids["engagements"] = (
         await db.execute(
@@ -87,11 +88,21 @@ async def _seed_one_set(
                 "  on conflict (org_id, name) do update set name = excluded.name "
                 "  returning id"
                 ") "
-                "insert into public.engagements (client_id, token, org_id) "
-                "select c.id, :t, cast(:o as uuid) from c "
+                "insert into public.engagements (client_id, org_id) "
+                "select c.id, cast(:o as uuid) from c "
                 "returning id::text"
             ),
-            {"n": f"{label}-engagement", "t": engagement_token, "o": org_id},
+            {"n": f"{label}-engagement", "o": org_id},
+        )
+    ).mappings().one()["id"]
+    ids["recipients"] = (
+        await db.execute(
+            text(
+                "insert into public.recipients (engagement_id, org_id, token) "
+                "values (cast(:e as uuid), cast(:o as uuid), :t) "
+                "returning id::text"
+            ),
+            {"e": ids["engagements"], "o": org_id, "t": engagement_token},
         )
     ).mappings().one()["id"]
 
@@ -115,12 +126,17 @@ async def _seed_one_set(
         await db.execute(
             text(
                 "insert into public.responses "
-                "(card_id, engagement_id, state, org_id) "
+                "(card_id, engagement_id, recipient_id, state, org_id) "
                 "values (cast(:card as uuid), cast(:cid as uuid), "
-                "        'answered', cast(:o as uuid)) "
+                "        cast(:rid as uuid), 'answered', cast(:o as uuid)) "
                 "returning id::text"
             ),
-            {"card": ids["cards"], "cid": ids["engagements"], "o": org_id},
+            {
+                "card": ids["cards"],
+                "cid": ids["engagements"],
+                "rid": ids["recipients"],
+                "o": org_id,
+            },
         )
     ).mappings().one()["id"]
 
@@ -129,15 +145,16 @@ async def _seed_one_set(
         await db.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, engagement_id, file_name, file_size_bytes, "
-                " storage_path, org_id) "
-                "values (cast(:card as uuid), cast(:cid as uuid), :fn, "
-                "        100, :sp, cast(:o as uuid)) "
+                "(card_id, engagement_id, recipient_id, file_name, "
+                " file_size_bytes, storage_path, org_id) "
+                "values (cast(:card as uuid), cast(:cid as uuid), "
+                "        cast(:rid as uuid), :fn, 100, :sp, cast(:o as uuid)) "
                 "returning id::text"
             ),
             {
                 "card": ids["cards"],
                 "cid": ids["engagements"],
+                "rid": ids["recipients"],
                 "fn": f"{label}.pdf",
                 "sp": f"{label}/x/y",
                 "o": org_id,
@@ -432,6 +449,7 @@ async def test_member_default_org_id_on_insert(
     seeded = await _seed_two_orgs(db, axiolo_org["id"])
     org_a_id = seeded["a"]["org_id"]
     engagement_id = seeded["a"]["engagements"]
+    recipient_id = seeded["a"]["recipients"]
     extra_card_id = (
         await db.execute(
             text(
@@ -455,11 +473,13 @@ async def test_member_default_org_id_on_insert(
     new_response_id = (
         await db_conn.execute(
             text(
-                "insert into public.responses (card_id, engagement_id, state) "
-                "values (cast(:card as uuid), cast(:cid as uuid), 'viewed') "
+                "insert into public.responses "
+                "(card_id, engagement_id, recipient_id, state) "
+                "values (cast(:card as uuid), cast(:cid as uuid), "
+                "        cast(:rid as uuid), 'viewed') "
                 "returning id::text"
             ),
-            {"card": card_id, "cid": engagement_id},
+            {"card": card_id, "cid": engagement_id, "rid": recipient_id},
         )
     ).scalar()
     assert new_response_id is not None
@@ -483,12 +503,13 @@ async def test_member_default_org_id_on_insert(
         await db_conn.execute(
             text(
                 "insert into public.uploads "
-                "(card_id, engagement_id, file_name, file_size_bytes, storage_path) "
+                "(card_id, engagement_id, recipient_id, file_name, "
+                " file_size_bytes, storage_path) "
                 "values (cast(:card as uuid), cast(:cid as uuid), "
-                "        'default.pdf', 1, 'a/b/c') "
+                "        cast(:rid as uuid), 'default.pdf', 1, 'a/b/c') "
                 "returning id::text"
             ),
-            {"card": card_id, "cid": engagement_id},
+            {"card": card_id, "cid": engagement_id, "rid": recipient_id},
         )
     ).scalar()
     assert new_upload_id is not None

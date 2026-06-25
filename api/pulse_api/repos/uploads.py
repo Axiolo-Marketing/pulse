@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 UPLOAD_COLS = (
-    "id::text, card_id::text, engagement_id::text, file_name, "
+    "id::text, card_id::text, engagement_id::text, recipient_id::text, file_name, "
     "file_size_bytes, storage_path, mime_type, kind, uploaded_at"
 )
 
@@ -57,9 +57,10 @@ async def create_upload(
     mime_type: str | None,
     kind: str = "file",
 ) -> dict | None:
-    """Insert an uploads row. engagement_id is derived server-side from
+    """Insert an uploads row. recipient_id + engagement_id are derived
+    server-side from `pulse_request_recipient_id()` /
     `pulse_request_engagement_id()` so the wire body can't address another
-    engagement's uploads. ``kind`` discriminates answer files (``'file'``)
+    recipient's uploads. ``kind`` discriminates answer files (``'file'``)
     from recorded voice answers (``'voice'``). Returns None if card_id is
     invalid (cast fails) or RLS rejects the insert because the card
     doesn't belong to caller."""
@@ -68,10 +69,11 @@ async def create_upload(
             text(
                 f"""
                 insert into public.uploads
-                  (card_id, engagement_id, file_name, file_size_bytes, storage_path,
-                   mime_type, kind)
+                  (card_id, engagement_id, recipient_id, file_name, file_size_bytes,
+                   storage_path, mime_type, kind)
                 values
                   (cast(:cid as uuid), public.pulse_request_engagement_id(),
+                   public.pulse_request_recipient_id(),
                    :fn, :sz, :sp, :mt, :kind)
                 returning {UPLOAD_COLS}
                 """
@@ -144,6 +146,14 @@ async def get_current_engagement_id(session: AsyncSession) -> str | None:
     Returns None if no token is bound. Used by client-facing upload routes
     that need to construct the on-disk path."""
     result = await session.execute(text("select public.pulse_request_engagement_id()::text"))
+    return result.scalar()
+
+
+async def get_current_recipient_id(session: AsyncSession) -> str | None:
+    """Resolve the current request's recipient_id via the helper SQL function.
+    Returns None if no token is bound. Used alongside the engagement_id to
+    build the per-recipient on-disk upload path."""
+    result = await session.execute(text("select public.pulse_request_recipient_id()::text"))
     return result.scalar()
 
 

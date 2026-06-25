@@ -45,18 +45,28 @@ async def _seed_org_with_client(
         )
     ).mappings().one()["id"]
     token = secrets.token_hex(8)
+    eng_id = (
+        await db.execute(
+            text(
+                "with c as ("
+                "  insert into public.clients (org_id, name) "
+                "  values (cast(:o as uuid), :n) "
+                "  on conflict (org_id, name) do update set name = excluded.name "
+                "  returning id"
+                ") "
+                "insert into public.engagements (client_id, org_id) "
+                "select c.id, cast(:o as uuid) from c "
+                "returning id::text"
+            ),
+            {"n": f"{label} Client", "o": org_id},
+        )
+    ).mappings().one()["id"]
     await db.execute(
         text(
-            "with c as ("
-            "  insert into public.clients (org_id, name) "
-            "  values (cast(:o as uuid), :n) "
-            "  on conflict (org_id, name) do update set name = excluded.name "
-            "  returning id"
-            ") "
-            "insert into public.engagements (client_id, token, org_id) "
-            "select c.id, :t, cast(:o as uuid) from c"
+            "insert into public.recipients (engagement_id, org_id, token) "
+            "values (cast(:e as uuid), cast(:o as uuid), :t)"
         ),
-        {"n": f"{label} Client", "t": token, "o": org_id},
+        {"e": eng_id, "o": org_id, "t": token},
     )
     return {"org_id": org_id, "token": token, "name": f"{label} Inc"}
 

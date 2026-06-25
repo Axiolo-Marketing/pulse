@@ -25,13 +25,15 @@ class Engagement(SQLModel, table=True):
             row. ``on delete set null`` keeps the engagement if the user
             is removed.
         engagement_name: Optional human label for the engagement.
-        token: 16-hex magic-link token the client uses in `?t=`.
         brief: Free-text brief shown in admin.
         voice_enabled: When ``True``, the client deck shows the voice
             record control and the upload route accepts ``kind='voice'``
             writes. Defaults ``False`` — voice is opt-in per engagement.
+        reminders_enabled: Per-engagement pause switch for the scheduled
+            reminder job. Defaults ``True``; the magic-link token and
+            per-recipient activity now live on ``Recipient`` (migration
+            0015), so reminders fan out per recipient.
         created_at: Insert timestamp (naive UTC).
-        last_active_at: Updated by the client touch-endpoint.
     """
 
     __tablename__ = "engagements"
@@ -41,8 +43,7 @@ class Engagement(SQLModel, table=True):
     client_id: uuid.UUID = Field(foreign_key="clients.id")
     created_by: uuid.UUID | None = Field(default=None, foreign_key="users.id")
     engagement_name: str | None = None
-    token: str = Field(unique=True, index=True)
     brief: str | None = None
     voice_enabled: bool = False
+    reminders_enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow_naive)
-    last_active_at: datetime | None = None

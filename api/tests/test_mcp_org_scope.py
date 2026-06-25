@@ -202,10 +202,10 @@ async def _seed_client(db: AsyncSession, *, org_id: str, name: str) -> str:
     row = (
         await db.execute(
             text(
-                "insert into public.engagements (client_id, token, org_id) "
-                "values (cast(:c as uuid), :t, cast(:o as uuid)) returning id::text"
+                "insert into public.engagements (client_id, org_id) "
+                "values (cast(:c as uuid), cast(:o as uuid)) returning id::text"
             ),
-            {"c": client["id"], "t": secrets.token_hex(8), "o": org_id},
+            {"c": client["id"], "o": org_id},
         )
     ).mappings().one()
     return row["id"]

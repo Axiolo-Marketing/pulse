@@ -1,7 +1,9 @@
 """Repository helpers for `responses`. RLS restricts everything to the
-token's engagement, and inserts derive engagement_id server-side from
-`pulse_request_engagement_id()` so the wire body can't pretend to be
-another engagement."""
+token's recipient, and inserts derive recipient_id + engagement_id
+server-side (`pulse_request_recipient_id()` / `pulse_request_engagement_id()`)
+so the wire body can't pretend to be another recipient. The answer is
+unique on `(card_id, recipient_id)`, so two recipients on the same
+engagement answer the same card independently."""
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
     result = await session.execute(
         text(
-            "select id::text, card_id::text, engagement_id::text, state, response_value, "
-            "viewed_at, answered_at, created_at, updated_at "
+            "select id::text, card_id::text, engagement_id::text, recipient_id::text, "
+            "state, response_value, viewed_at, answered_at, created_at, updated_at "
             "from public.responses"
         )
     )
@@ -41,9 +43,11 @@ async def mark_viewed(session: AsyncSession, card_id: str) -> dict | None:
 
     result = await session.execute(
         text(
-            "insert into public.responses (card_id, engagement_id, state, viewed_at) "
-            "values (cast(:cid as uuid), public.pulse_request_engagement_id(), 'viewed', now()) "
-            "on conflict (card_id, engagement_id) do nothing "
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, viewed_at) "
+            "values (cast(:cid as uuid), public.pulse_request_engagement_id(), "
+            "public.pulse_request_recipient_id(), 'viewed', now()) "
+            "on conflict (card_id, recipient_id) do nothing "
             "returning id::text, card_id::text, state, viewed_at"
         ),
         {"cid": card_id},
@@ -81,19 +85,21 @@ async def upsert_answer(
         text(
             f"""
             insert into public.responses
-              (card_id, engagement_id, state, response_value, viewed_at, answered_at)
+              (card_id, engagement_id, recipient_id, state, response_value,
+               viewed_at, answered_at)
             values
-              (cast(:cid as uuid), public.pulse_request_engagement_id(), :state,
+              (cast(:cid as uuid), public.pulse_request_engagement_id(),
+               public.pulse_request_recipient_id(), :state,
                cast(:rv as jsonb),
                {"now()" if state == "viewed" else "null"},
                {"now()" if set_answered else "null"})
-            on conflict (card_id, engagement_id) do update set
+            on conflict (card_id, recipient_id) do update set
               state = excluded.state,
               response_value = excluded.response_value,
               answered_at = coalesce(excluded.answered_at, public.responses.answered_at),
               viewed_at = coalesce(public.responses.viewed_at, excluded.viewed_at)
-            returning id::text, card_id::text, engagement_id::text, state, response_value,
-                      viewed_at, answered_at, created_at, updated_at
+            returning id::text, card_id::text, engagement_id::text, recipient_id::text,
+                      state, response_value, viewed_at, answered_at, created_at, updated_at
             """
         ),
         {"cid": card_id, "state": state, "rv": _json_dump(response_value)},
@@ -114,8 +120,8 @@ async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list
     try:
         result = await session.execute(
             text(
-                "select id::text, card_id::text, engagement_id::text, state, response_value, "
-                "viewed_at, answered_at, created_at, updated_at "
+                "select id::text, card_id::text, engagement_id::text, recipient_id::text, "
+                "state, response_value, viewed_at, answered_at, created_at, updated_at "
                 "from public.responses where engagement_id = cast(:cid as uuid) "
                 "order by created_at"
             ),

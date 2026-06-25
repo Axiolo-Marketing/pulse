@@ -76,11 +76,11 @@ async def _seed_client(db: AsyncSession, *, org_id: str, name: str) -> str:
                 "  on conflict (org_id, name) do update set name = excluded.name "
                 "  returning id"
                 ") "
-                "insert into public.engagements (client_id, token, org_id) "
-                "select c.id, :t, cast(:o as uuid) from c "
+                "insert into public.engagements (client_id, org_id) "
+                "select c.id, cast(:o as uuid) from c "
                 "returning id::text"
             ),
-            {"n": name, "t": secrets.token_hex(8), "o": org_id},
+            {"n": name, "o": org_id},
         )
     ).mappings().one()
     return row["id"]

@@ -320,11 +320,15 @@ async def test_heartbeat_updates_last_active_at(
     seed_client: dict[str, str],
     db: AsyncSession,
 ) -> None:
-    # Capture initial value BEFORE the API call (which switches role to anon)
+    # Capture initial value BEFORE the API call (which switches role to anon).
+    # Post-0015 last_active_at lives on the token-bound recipient row.
     initial = (
         await db.execute(
-            text("select last_active_at from public.engagements where id = cast(:i as uuid)"),
-            {"i": seed_client["id"]},
+            text(
+                "select last_active_at from public.recipients "
+                "where id = cast(:i as uuid)"
+            ),
+            {"i": seed_client["recipient_id"]},
         )
     ).scalar()
     assert initial is None
@@ -334,11 +338,11 @@ async def test_heartbeat_updates_last_active_at(
     assert r.json() == {"status": "ok"}
 
     # After the API call we're now in pulse_anon mode; the token's
-    # column-scoped grant on clients lets us SELECT and see the updated
+    # column-scoped grant on recipients lets us SELECT and see the updated
     # row through the policy.
     new = (
         await db.execute(
-            text("select last_active_at from public.engagements limit 1")
+            text("select last_active_at from public.recipients limit 1")
         )
     ).scalar()
     assert new is not None

@@ -76,19 +76,29 @@ async def test_list_engagements_includes_aggregates(
     seed_cards: list[dict[str, str]],
     db: AsyncSession,
 ) -> None:
-    # Mark one card answered, one skipped, leave the rest untouched.
+    # Mark one card answered, one skipped for the seeded recipient, leave
+    # the rest untouched. Post-0015 progress is per-recipient, so the
+    # summary reports recipient rollups rather than answered/skipped counts.
     answered_id, skipped_id = seed_cards[0]["id"], seed_cards[1]["id"]
     await db.execute(
         text(
-            "insert into public.responses (card_id, engagement_id, state, answered_at) "
-            "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        'answered', now())"
         ),
         {"k": answered_id, "c": seed_client["id"]},
     )
     await db.execute(
         text(
-            "insert into public.responses (card_id, engagement_id, state, answered_at) "
-            "values (cast(:k as uuid), cast(:c as uuid), 'skipped', now())"
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        'skipped', now())"
         ),
         {"k": skipped_id, "c": seed_client["id"]},
     )
@@ -97,8 +107,9 @@ async def test_list_engagements_includes_aggregates(
     assert r.status_code == 200
     row = next(c for c in r.json() if c["id"] == seed_client["id"])
     assert row["total_cards"] == 8
-    assert row["answered_count"] == 1
-    assert row["skipped_count"] == 1
+    assert row["recipients_count"] == 1
+    # 2 of 8 cards done → the lone recipient is not yet complete.
+    assert row["completed_recipients"] == 0
 
 
 async def test_list_engagements_returns_all_clients(
@@ -144,7 +155,7 @@ async def test_get_engagement_malformed_id_returns_404(admin_authed: AsyncClient
 # ── POST /api/admin/engagements ───────────────────────────────────────────────
 
 
-async def test_create_engagement_generates_token(
+async def test_create_engagement_then_recipient_mints_token(
     admin_authed: AsyncClient, db: AsyncSession
 ) -> None:
     r = await admin_authed.post(
@@ -156,9 +167,17 @@ async def test_create_engagement_generates_token(
     assert body["name"] == "New Client"
     assert body["client_name"] == "New Client"
     assert body["engagement_name"] == "Q3 review"
-    # 16-hex-char token
-    assert len(body["token"]) == 16
-    assert all(ch in "0123456789abcdef" for ch in body["token"])
+    # The deck link is minted per recipient now — the engagement itself
+    # carries no token.
+    assert "token" not in body
+    rec = await admin_authed.post(
+        f"/api/admin/engagements/{body['id']}/recipients",
+        json={"email": "client@example.com"},
+    )
+    assert rec.status_code == 201
+    token = rec.json()["token"]
+    assert len(token) == 16  # 16-hex-char token
+    assert all(ch in "0123456789abcdef" for ch in token)
 
 
 @pytest.mark.parametrize(
@@ -176,12 +195,18 @@ async def test_create_engagement_validation(
     assert r.status_code == expected_status
 
 
-async def test_create_two_engagements_have_distinct_tokens(
+async def test_recipients_have_distinct_tokens(
     admin_authed: AsyncClient,
 ) -> None:
-    r1 = await admin_authed.post("/api/admin/engagements", json={"client_name": "A"})
-    r2 = await admin_authed.post("/api/admin/engagements", json={"client_name": "B"})
-    assert r1.json()["token"] != r2.json()["token"]
+    eng = await admin_authed.post("/api/admin/engagements", json={"client_name": "A"})
+    eid = eng.json()["id"]
+    a = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients", json={"email": "a@example.com"}
+    )
+    b = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients", json={"email": "b@example.com"}
+    )
+    assert a.json()["token"] != b.json()["token"]
 
 
 # ── PATCH /api/admin/engagements/{id} ─────────────────────────────────────────
@@ -213,19 +238,19 @@ async def test_patch_engagement_partial_only_writes_provided_fields(
     assert r.json()["brief"] == "v1"
 
 
-async def test_patch_engagement_does_not_accept_token_field(
+async def test_patch_engagement_ignores_unknown_fields(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
-    """Rotating the token must require the dedicated endpoint, not a
-    sneaky PATCH body field."""
-    original = seed_client["token"]
+    """A stray field in the PATCH body (e.g. a ``token``) is ignored —
+    only real columns update. Magic-link tokens live on recipients and
+    are never editable through the engagement update path."""
     r = await admin_authed.patch(
         f"/api/admin/engagements/{seed_client['id']}",
         json={"token": "ffffffffffffffff", "engagement_name": "still updates"},
     )
     assert r.status_code == 200
-    assert r.json()["token"] == original  # unchanged
     assert r.json()["engagement_name"] == "still updates"
+    assert "token" not in r.json()
 
 
 async def test_patch_engagement_unknown_id_returns_404(admin_authed: AsyncClient) -> None:
@@ -296,8 +321,12 @@ async def test_delete_engagement_removes_client_and_cascades(
     # Seed a response too so we can prove cascade.
     await db.execute(
         text(
-            "insert into public.responses (card_id, engagement_id, state, answered_at) "
-            "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        'answered', now())"
         ),
         {"k": seed_cards[0]["id"], "c": seed_client["id"]},
     )
@@ -352,8 +381,12 @@ async def test_delete_engagement_removes_upload_files_from_disk(
     await db.execute(
         text(
             "insert into public.uploads "
-            "(card_id, engagement_id, file_name, file_size_bytes, storage_path) "
-            "values (cast(:k as uuid), cast(:c as uuid), :fn, 5, :sp)"
+            "(card_id, engagement_id, recipient_id, file_name, "
+            " file_size_bytes, storage_path) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        :fn, 5, :sp)"
         ),
         {"k": card_id, "c": client_id, "fn": "some.txt", "sp": rel_path},
     )
@@ -378,8 +411,12 @@ async def test_reset_engagement_clears_answers_keeps_cards(
     # A response and an upload (row + file on disk).
     await db.execute(
         text(
-            "insert into public.responses (card_id, engagement_id, state, answered_at) "
-            "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        'answered', now())"
         ),
         {"k": card_id, "c": client_id},
     )
@@ -390,8 +427,12 @@ async def test_reset_engagement_clears_answers_keeps_cards(
     await db.execute(
         text(
             "insert into public.uploads "
-            "(card_id, engagement_id, file_name, file_size_bytes, storage_path) "
-            "values (cast(:k as uuid), cast(:c as uuid), :fn, 4, :sp)"
+            "(card_id, engagement_id, recipient_id, file_name, "
+            " file_size_bytes, storage_path) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        :fn, 4, :sp)"
         ),
         {"k": card_id, "c": client_id, "fn": "reset-me.txt", "sp": rel_path},
     )
@@ -741,8 +782,12 @@ async def test_delete_card_cascades_responses(
     # Attach a response to the card
     await db.execute(
         text(
-            "insert into public.responses (card_id, engagement_id, state, answered_at) "
-            "values (cast(:k as uuid), cast(:c as uuid), 'answered', now())"
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, answered_at) "
+            "values (cast(:k as uuid), cast(:c as uuid), "
+            "        (select id from public.recipients "
+            "           where engagement_id = cast(:c as uuid) limit 1), "
+            "        'answered', now())"
         ),
         {"k": card_id, "c": seed_client["id"]},
     )

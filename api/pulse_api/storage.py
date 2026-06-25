@@ -103,18 +103,25 @@ def resolve_attachment_filename(filename: str) -> Path:
     return resolve_within_upload_dir(f"{ATTACHMENTS_PREFIX}/{name}")
 
 
-def build_storage_path(*, engagement_id: str, card_id: str, filename: str) -> str:
+def build_storage_path(
+    *, engagement_id: str, recipient_id: str, card_id: str, filename: str
+) -> str:
     """Build the relative storage path for a new upload.
 
-    Both ids must be valid UUIDs — non-UUID inputs raise StoragePathError
-    so a caller can't sneak `..` or other path components into the prefix.
+    Layout is ``{engagement_id}/{recipient_id}/{card_id}/{uuid}-{filename}``
+    — the recipient_id segment keeps each respondent's files isolated on
+    disk. All three ids must be valid UUIDs — non-UUID inputs raise
+    StoragePathError so a caller can't sneak `..` or other path components
+    into the prefix.
     """
     if not _is_uuid(engagement_id):
         raise StoragePathError(f"invalid engagement_id: {engagement_id!r}")
+    if not _is_uuid(recipient_id):
+        raise StoragePathError(f"invalid recipient_id: {recipient_id!r}")
     if not _is_uuid(card_id):
         raise StoragePathError(f"invalid card_id: {card_id!r}")
     safe = sanitize_filename(filename)
-    return f"{engagement_id}/{card_id}/{uuid.uuid4()}-{safe}"
+    return f"{engagement_id}/{recipient_id}/{card_id}/{uuid.uuid4()}-{safe}"
 
 
 def resolve_within_upload_dir(relative_path: str) -> Path:

@@ -20,7 +20,10 @@ class Response(SQLModel, table=True):
     Attributes:
         id: UUID primary key.
         card_id: Card being answered.
-        engagement_id: Owning engagement.
+        engagement_id: Owning engagement (the shared cards).
+        recipient_id: Owning recipient — the answer is scoped per respondent
+            (unique on ``(card_id, recipient_id)``). A column DEFAULT reads
+            ``pulse_request_recipient_id()`` so client INSERTs populate it.
         org_id: Owning organization (nullable in PR 1, NOT NULL in PR 2).
         state: One of `not_started|viewed|answered|skipped|needs_edit`.
         response_value: JSONB blob whose shape depends on `response_type`.
@@ -32,6 +35,7 @@ class Response(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     card_id: uuid.UUID = Field(foreign_key="cards.id")
     engagement_id: uuid.UUID = Field(foreign_key="engagements.id")
+    recipient_id: uuid.UUID = Field(foreign_key="recipients.id")
     org_id: uuid.UUID | None = Field(
         default=None, foreign_key="organizations.id", index=True
     )
