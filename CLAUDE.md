@@ -37,11 +37,11 @@ There is no host-side `npm` or `python` install required for local development �
 
 Pulse used to be a static Astro site talking directly to Supabase. It now has a real backend. The shape:
 
-- **`src/pages/index.astro` + `src/scripts/app.ts`** — client-facing card deck. **Auth is unchanged from the user's perspective**: a 16-hex-char token in `?t=` becomes the `X-Pulse-Token` header on every API call. The frontend has zero notion of database connections.
+- **`src/pages/index.astro` + `src/scripts/app.ts`** — client-facing card deck. **Auth is unchanged from the user's perspective**: a 16-hex-char token in `?t=` becomes the `X-Pulse-Token` header on every API call. The frontend has zero notion of database connections. As of migration `0015` that token identifies a per-**recipient** row, not the engagement (see "Multi-respondent engagements" below) — the deck UI is otherwise unchanged.
 - **`src/pages/admin.astro` + `src/scripts/admin.ts`** — operator console. Email/password + Google OAuth + Microsoft 365 OAuth + signed-cookie sessions. The old SHA-256-password-hash-in-bundle is gone.
 - **`src/lib/api.ts`** — the only data-layer module. Exposes `clientApi` (token-authed) + `authApi` + `adminApi` (cookie-authed). Both scripts import from here; **no module imports from anywhere else for HTTP**.
 - **`api/`** — FastAPI app (Python 3.13, SQLModel ORM, asyncpg, Alembic). All endpoints under `/api/`.
-- **Postgres** — same 4 tables as before (`clients`, `cards`, `responses`, `uploads`) plus 2 new (`users`, `oauth_identities`). All 9 RLS policies preserved.
+- **Postgres** — the tenant model is `organizations` → `clients` (real customer companies) → `engagements` (the shared card deck) → `recipients` (per-respondent magic-link tokens). `cards` hang off the engagement; `responses` + `uploads` hang off the **recipient** (each respondent answers independently). Plus `users` / `organization_memberships` / `oauth_identities` etc. for the operator side. RLS scopes every tenant table.
 
 The frontend and backend communicate over HTTP, but **RLS is still the multi-tenant backstop**: the FastAPI client middleware does `SET LOCAL pulse.token = $1` on a `pulse_anon` DB connection before every client-facing query. A bug in a route handler can't leak across tenants because the database refuses.
 
@@ -63,7 +63,7 @@ Tests can't easily use four separate connections (they wouldn't see each other's
 
 ## Auth subsystems (two of them, share zero code)
 
-- **Client** (the consultant's customer): magic URL `?t=<16-hex>`. Frontend sends it as `X-Pulse-Token`. Backend middleware sets `pulse.token` and `pulse.org_id` (resolved from the client row) on a `pulse_anon` connection; RLS does the rest.
+- **Client** (the consultant's customer): magic URL `?t=<16-hex>`. Frontend sends it as `X-Pulse-Token`. Backend middleware sets `pulse.token` and `pulse.org_id` (resolved from the **recipient** row that owns the token) on a `pulse_anon` connection; RLS does the rest. `pulse_request_engagement_id()` resolves token→recipient→engagement, so the shared `cards` policies are unchanged while `responses`/`uploads` scope to the recipient.
 - **User** (operator — Tom, future teammates): email+password OR Google OAuth OR Microsoft 365 OAuth, signed-cookie session via `itsdangerous`. Session payload is `{user_id, active_org_id}`. Middleware (`get_current_org_member`) loads the `(user, membership)` pair, then `get_org_scoped_session` opens a `pulse_member` connection with `pulse.org_id` set. The `pulse_member` role has no BYPASSRLS, so a forgotten `where org_id = ...` in a handler can't leak cross-tenant. `users.is_admin` is gone — admin powers come from `organization_memberships.role = 'owner'`, and the cross-org superadmin tier comes from `users.is_superadmin`.
 
 `get_current_user` resolves cookie OR `Authorization: Bearer pulse_<key>`. Cookie wins if both are present, EXCEPT for org attribution: a Bearer call always uses the key's `org_id`, never the cookie's. The corresponding deps:
@@ -79,6 +79,15 @@ Active-org priority order: API key `org_id` → session `active_org_id` → `use
 Token primitives all use `itsdangerous.URLSafeTimedSerializer` with per-purpose salts (`pulse-session`, `pulse-email-verify`, `pulse-password-reset`, `pulse-oauth-state-google`, `pulse-oauth-state-microsoft`). A token signed for one purpose can never redeem as another even with the same `SESSION_SECRET` — explicit tests lock this in (`tests/unit/test_tokens.py`).
 
 OAuth state: cookie-based CSRF. The authorize endpoint generates a random state, signs it as a `oauth_state_{provider}` cookie, builds the provider URL with the same state. The callback verifies the cookie matches the URL state before doing any work. **Self-signup is disabled**: when an OAuth callback resolves to an unknown email, the route looks up a pending `organization_invites` row for that email and accepts it transactionally (creates user + membership, marks the invite accepted). With no pending invite, the callback redirects to `/admin/?error=invitation_required` and creates no user.
+
+### Multi-respondent engagements (recipients, invites, reminders)
+
+An engagement is a shared deck of `cards`; each **recipient** (`recipients` table, migration `0015`) is one respondent with its own 16-hex `token`, email, per-recipient `last_active_at`, and invite/reminder state. Multiple recipients share one engagement's cards but answer independently — `responses`/`uploads` carry a `recipient_id` (unique `(card_id, recipient_id)`), so the operator sees who answered what. Existing single-link engagements were backfilled to one legacy recipient carrying the old token, so old links + answers still work.
+
+- **Manage recipients** on the engagement detail page: add (mints a token), remove (FK-cascades their answers), per-recipient copy-link. Routes: `GET/POST /api/admin/engagements/{id}/recipients`, `DELETE …/recipients/{rid}`. MCP: `pulse_list_recipients` / `pulse_add_recipient`.
+- **Invites** (operator-triggered): `POST /api/admin/engagements/{id}/send-invites` emails the deck link to every recipient with an email + no `invited_at` yet, then stamps `invited_at` (idempotent; 400 on an empty deck). Replaces the manual link-share. `engagement_invite_email` in `auth/email_messages.py`.
+- **Reminders** (scheduled): the daily `pulse_api.jobs.send_reminders` job (cron `/etc/cron.d/pulse-reminders`, BYPASSRLS `admin_engine`) nudges invited-but-unfinished recipients. Gated by `settings.reminders_enabled` (env `REMINDERS_ENABLED`, **off by default**) + a per-engagement `engagements.reminders_enabled` pause; eligibility honors inactivity/cadence/max day thresholds (all env-configurable). `recipients_repo.list_due_reminders` is the WHERE-clause that decides who's due.
+- **Unsubscribe**: every invite/reminder email carries a signed per-recipient unsubscribe link (own salt `pulse-reminder-unsubscribe`, helpers in `pulse_api/reminders.py`). Public `POST /api/reminders/unsubscribe` (rate-limited, BYPASSRLS) + `src/pages/unsubscribe.astro` flip `unsubscribed_at`.
 
 ### Audit log + activity feed
 
