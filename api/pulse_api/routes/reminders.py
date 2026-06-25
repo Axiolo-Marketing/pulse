@@ -7,13 +7,15 @@ the route flips that recipient's ``unsubscribed_at`` on a BYPASSRLS admin
 session (the same cross-org token-redemption path invite-accept uses;
 there is no operator or recipient session here).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import reminders
+from pulse_api.config import settings
 from pulse_api.db import get_admin_session
+from pulse_api.observability import limiter
 
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
@@ -23,7 +25,9 @@ class UnsubscribeRequest(BaseModel):
 
 
 @router.post("/unsubscribe")
+@limiter.limit(settings.rate_limit_token_validation)
 async def unsubscribe(
+    request: Request,
     req: UnsubscribeRequest,
     session: AsyncSession = Depends(get_admin_session),
 ) -> dict[str, bool]:
