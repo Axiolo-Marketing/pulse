@@ -863,7 +863,7 @@ function engagementRowHtml(s: EngagementSummary): string {
   // Status is conveyed by the count pill's colour; the label rides along as a
   // `title` (hover + assistive tech) so it isn't a colour-only signal.
   const statusMod = status.replace("_", "-"); // in_progress → in-progress
-  const pillTitle = `${STATUS_LABELS[status]} · ${completedRecipients} of ${recipientsCount} recipient${recipientsCount === 1 ? "" : "s"} complete`;
+  const pillTitle = `${STATUS_LABELS[status]} · ${completedRecipients} of ${recipientsCount} respondent${recipientsCount === 1 ? "" : "s"} complete`;
   return `
     <div class="engagement-row" data-engagement-id="${escape(s.id)}">
       <div class="er-name">
@@ -1217,7 +1217,7 @@ function renderList(
         const body = [
           `Delete ${label}?`,
           totalCards > 0
-            ? `This will permanently remove ${totalCards} card${totalCards === 1 ? "" : "s"} and every recipient's answers (${recipientsCount} recipient${recipientsCount === 1 ? "" : "s"}), plus any uploaded files.`
+            ? `This will permanently remove ${totalCards} card${totalCards === 1 ? "" : "s"} and every respondent's answers (${recipientsCount} respondent${recipientsCount === 1 ? "" : "s"}), plus any uploaded files.`
             : "No cards have been added to this engagement yet.",
           "This cannot be undone.",
         ].join("\n");
@@ -1490,7 +1490,7 @@ function openEditEngagementModal(
           <input type="checkbox" id="ee-reminders" ${client.reminders_enabled ? "checked" : ""} />
           <span class="edit-label">Send reminders</span>
         </label>
-        <p class="edit-hint">Email recipients periodic reminders to finish their answers.</p>
+        <p class="edit-hint">Email respondents periodic reminders to finish their answers.</p>
         <div class="edit-actions">
           <button class="btn-primary-sm" type="submit">Save changes</button>
           <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
@@ -1614,7 +1614,7 @@ function bucketDetail(payload: EngagementDetail): DetailViewData {
  * generic "recipient". Used for tabs, the markdown export heading, and the
  * recipients panel. */
 function recipientLabel(r: Recipient): string {
-  return r.email?.trim() || r.name?.trim() || "recipient";
+  return r.email?.trim() || r.name?.trim() || "respondent";
 }
 
 /** The Recipients panel: per-recipient rows (label, optional name, progress,
@@ -1632,7 +1632,7 @@ function recipientsPanelHtml(recipients: Recipient[], cardCount: number): string
       ? "Add a card before sending invites"
       : pending === 0
         ? "Everyone with an email has been invited"
-        : `Email the deck link to ${pending} recipient${pending === 1 ? "" : "s"}`;
+        : `Email the deck link to ${pending} respondent${pending === 1 ? "" : "s"}`;
   const rows = recipients.length
     ? recipients
         .map((r) => {
@@ -1658,18 +1658,18 @@ function recipientsPanelHtml(recipients: Recipient[], cardCount: number): string
               </div>
               <span class="recipient-row-progress">${r.completed_count} / ${r.total_cards}</span>
               <div class="recipient-row-actions">
-                <button class="btn-ghost-sm" type="button" data-recipient-action="copy-link" data-recipient-id="${escape(r.id)}">Copy link</button>
-                <button class="btn-ghost-sm danger" type="button" data-recipient-action="remove" data-recipient-id="${escape(r.id)}">Remove</button>
+                <button class="action-icon" type="button" data-recipient-action="copy-link" data-recipient-id="${escape(r.id)}" aria-label="Copy link" title="Copy link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                <button class="action-icon danger" type="button" data-recipient-action="remove" data-recipient-id="${escape(r.id)}" aria-label="Remove respondent" title="Remove respondent"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
               </div>
             </div>`;
         })
         .join("")
-    : `<div class="recipient-empty">No recipients yet. Add one below to send a link.</div>`;
+    : `<div class="recipient-empty">No respondents yet. Add one below to send a link.</div>`;
 
   return `
     <div class="recipients-card">
       <div class="recipients-head">
-        <span class="recipients-label">Recipients <span class="recipients-count">${recipients.length}</span></span>
+        <span class="recipients-label">Respondents <span class="recipients-count">${recipients.length}</span></span>
         <button class="btn-secondary-sm" type="button" id="send-invites-btn" ${sendDisabled ? "disabled" : ""} title="${escape(sendTitle)}">${escape(sendLabel)}</button>
       </div>
       <div class="recipients-list">${rows}</div>
@@ -1683,7 +1683,7 @@ function recipientsPanelHtml(recipients: Recipient[], cardCount: number): string
           <input class="input" id="rc-name" type="text" autocomplete="off" placeholder="Full name" />
         </label>
         <div class="add-recipient-actions">
-          <button class="btn-primary-sm" type="submit">Add recipient</button>
+          <button class="btn-primary-sm" type="submit">Add respondent</button>
         </div>
       </form>
     </div>`;
@@ -1754,7 +1754,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       fresh = await adminApi.listRecipients(client.id);
     } catch (err) {
       console.error("refresh recipients:", err);
-      toast("Could not refresh recipients");
+      toast("Could not refresh respondents");
       return;
     }
     recipients.length = 0;
@@ -1804,11 +1804,11 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
           btn.disabled = true;
           try {
             await adminApi.removeRecipient(client.id, recipient.id);
-            toast("Recipient removed");
+            toast("Respondent removed");
             await refreshRecipients();
           } catch (err) {
             console.error("remove recipient:", err);
-            toast("Could not remove recipient");
+            toast("Could not remove respondent");
             btn.disabled = false;
           }
         });
@@ -1834,18 +1834,18 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       }
       try {
         await adminApi.addRecipient(client.id, { email, ...(name ? { name } : {}) });
-        toast("Recipient added");
+        toast("Respondent added");
         await refreshRecipients();
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          toast("Already a recipient");
+          toast("Already a respondent");
         } else {
           console.error("add recipient:", err);
-          toast("Could not add recipient");
+          toast("Could not add respondent");
         }
         if (submitBtn) {
           submitBtn.disabled = false;
-          submitBtn.textContent = "Add recipient";
+          submitBtn.textContent = "Add respondent";
         }
       }
     });
@@ -2633,7 +2633,7 @@ function renderResponseCard(
             </div>`;
         })
         .join("")
-    : `<div class="recipient-answers-empty">Add a recipient above to start collecting answers.</div>`;
+    : `<div class="recipient-answers-empty">Add a respondent above to start collecting answers.</div>`;
 
   return `
     <article class="response-card" data-card-id="${escape(card.id)}">
