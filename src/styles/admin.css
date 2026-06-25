@@ -981,51 +981,6 @@
 
 /* ── Recipient tabs (whose answers am I viewing) ─────────────────────── */
 
-.recipient-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
-}
-
-.recipient-tab {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
-  background: var(--white);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-pill, 999px);
-  padding: 6px 14px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.recipient-tab:hover {
-  border-color: var(--primary);
-  color: var(--ink);
-}
-
-.recipient-tab.is-active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--white);
-}
-
-.recipient-tab-count {
-  font-size: 11px;
-  font-weight: 600;
-  opacity: 0.85;
-}
-
-.recipient-tabs-empty {
-  font-size: 13.5px;
-  color: var(--muted);
-  margin: 0 0 12px;
-}
-
 .response-card-head {
   display: flex;
   align-items: flex-start;
@@ -1055,6 +1010,66 @@
 .response-card-head .card-cat {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* The shared question, shown once per card above the stacked answers — this
+   is a by-question comparison view, so the operator sees what's being asked. */
+.card-question {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+  margin: 0 0 14px;
+}
+
+/* Stacked per-recipient answers under each card. Each block is divided from
+   the next so distinct responses are easy to scan and compare. */
+.recipient-answers {
+  display: flex;
+  flex-direction: column;
+}
+
+.recipient-answer {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.recipient-answer:first-child {
+  padding-top: 4px;
+  border-top: none;
+}
+
+.recipient-answer:last-child {
+  padding-bottom: 0;
+}
+
+.recipient-answer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.recipient-answer-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.recipient-answer-time {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* Keep Copy hard-right when there's no timestamp pushing it there. */
+.recipient-answer-head .btn-ghost-sm {
+  margin-left: 4px;
+}
+
+.recipient-answers-empty {
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 4px 0;
 }
 
 .response-state {
@@ -1168,37 +1183,6 @@
   color: var(--primary-dark);
   word-break: break-all;
 }
-
-.response-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 12px;
-}
-
-.response-meta-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.status-select {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 500;
-  background: var(--white);
-  color: var(--ink);
-  border: 1.5px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-}
-.status-select:focus { outline: none; border-color: var(--primary); }
 
 .toast {
   position: fixed;

@@ -33,7 +33,6 @@ import {
 } from "./settings";
 import { renderSuperadmin } from "./superadmin";
 import {
-  STATUS_VALUES,
   suggestStatus,
   type Status,
 } from "../lib/status-suggest";
@@ -1694,22 +1693,22 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   const data = bucketDetail(payload);
   const { client, cards, responses, uploads, recipients } = data;
 
+  // Status export plumbing only — the inline status picker is gone, so this
+  // map stays empty and the export builders fall back to `suggestStatus`.
   const statusOverrides = new Map<string, Status>();
 
   // Multi-respondent: responses/uploads are keyed by (recipient, card). The
-  // operator picks one recipient at a time; the cards then show THAT
-  // recipient's answers to the shared deck. Default to the first recipient.
-  let selectedRecipientId: string | null = recipients[0]?.id ?? null;
-
-  // Per-recipient accessors over the composite-keyed maps. A null selection
-  // (no recipients yet) yields "no answer" for every card.
-  const respOf = (cardId: string): ClientResponse | undefined =>
-    selectedRecipientId ? responses.get(rcKey(selectedRecipientId, cardId)) : undefined;
-  const upsOf = (cardId: string): UploadRow[] =>
-    selectedRecipientId ? uploads.get(rcKey(selectedRecipientId, cardId)) ?? [] : [];
+  // detail is a by-question comparison view — every card shows ALL recipients'
+  // answers stacked, so there's no "selected recipient" anymore.
+  const respOf = (recipientId: string, cardId: string): ClientResponse | undefined =>
+    responses.get(rcKey(recipientId, cardId));
+  const upsOf = (recipientId: string, cardId: string): UploadRow[] =>
+    uploads.get(rcKey(recipientId, cardId)) ?? [];
+  const recipientById = (recipientId: string): Recipient | undefined =>
+    recipients.find((r) => r.id === recipientId);
 
   const cardsHtml = cards
-    .map((card) => renderResponseCard(card, respOf(card.id), upsOf(card.id), statusOverrides))
+    .map((card) => renderResponseCard(card, recipients, respOf, upsOf))
     .join("");
 
   container.innerHTML = `
@@ -1717,7 +1716,6 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     <section class="detail-header" id="detail-header">${renderDetailHeader(client)}</section>
     <section id="brief-slot">${renderBriefView(client)}</section>
     <section id="recipients-slot"></section>
-    <div id="recipient-tabs-slot"></div>
     <div id="cards-list">${cardsHtml}</div>
     <div id="add-card-slot">
       <div class="add-card-bar">
@@ -1735,48 +1733,21 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
 
   const cardsListEl = container.querySelector<HTMLElement>("#cards-list")!;
   const recipientsSlot = container.querySelector<HTMLElement>("#recipients-slot")!;
-  const recipientTabsSlot = container.querySelector<HTMLElement>("#recipient-tabs-slot")!;
 
-  // Repaint the response cards for the currently-selected recipient. Used on
-  // recipient switch and after recipient mutations. Re-binds every card's
-  // handlers since the markup is regenerated.
+  // Repaint every response card with the CURRENT recipients list (so adding or
+  // removing a recipient adds/removes their answer row on every card). Re-binds
+  // each card's handlers since the markup is regenerated.
   const repaintCards = (): void => {
     cardsListEl.innerHTML = cards
-      .map((card) => renderResponseCard(card, respOf(card.id), upsOf(card.id), statusOverrides))
+      .map((card) => renderResponseCard(card, recipients, respOf, upsOf))
       .join("");
     for (const articleEl of cardsListEl.querySelectorAll<HTMLElement>(".response-card[data-card-id]")) {
       attachCardHandlers(articleEl);
     }
   };
 
-  // Render the recipient tab strip (one tab per recipient + an empty state).
-  const renderRecipientTabs = (): void => {
-    if (recipients.length === 0) {
-      recipientTabsSlot.innerHTML = `<div class="recipient-tabs-empty">Add a recipient above to start collecting answers.</div>`;
-      return;
-    }
-    const tabs = recipients
-      .map((r) => {
-        const label = recipientLabel(r);
-        const active = r.id === selectedRecipientId ? " is-active" : "";
-        return `<button type="button" class="recipient-tab${active}" role="tab" aria-selected="${r.id === selectedRecipientId}" data-recipient-tab="${escape(r.id)}">${escape(label)} <span class="recipient-tab-count">${r.completed_count}/${r.total_cards}</span></button>`;
-      })
-      .join("");
-    recipientTabsSlot.innerHTML = `<div class="recipient-tabs" role="tablist" aria-label="Recipients">${tabs}</div>`;
-    for (const tab of recipientTabsSlot.querySelectorAll<HTMLButtonElement>("[data-recipient-tab]")) {
-      tab.addEventListener("click", () => {
-        const id = tab.dataset.recipientTab!;
-        if (id === selectedRecipientId) return;
-        selectedRecipientId = id;
-        renderRecipientTabs();
-        repaintCards();
-      });
-    }
-  };
-
-  // Refetch recipients after a mutation (add/remove) and re-render the panel,
-  // tab strip, and cards. Keeps the selection if it still exists, else falls
-  // back to the first recipient (or null when none remain).
+  // Refetch recipients after a mutation (add/remove) and re-render the panel
+  // and cards so every card's stacked answers reflect the new recipient set.
   const refreshRecipients = async (): Promise<void> => {
     let fresh: Recipient[];
     try {
@@ -1788,11 +1759,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     }
     recipients.length = 0;
     recipients.push(...fresh);
-    if (!recipients.some((r) => r.id === selectedRecipientId)) {
-      selectedRecipientId = recipients[0]?.id ?? null;
-    }
     renderRecipientsPanel();
-    renderRecipientTabs();
     repaintCards();
   };
 
@@ -1885,17 +1852,27 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   };
 
   renderRecipientsPanel();
-  renderRecipientTabs();
 
   const headerEl = container.querySelector<HTMLElement>("#detail-header")!;
+
+  // Export every recipient's answers — one engagement-markdown block per
+  // recipient (each block prefixes a "Response from {client} — {recipient}"
+  // heading per card). With no recipients, fall back to the no-recipient form.
+  const buildAllMarkdown = (): string => {
+    if (recipients.length === 0) {
+      return buildEngagementMarkdown(data, statusOverrides, undefined);
+    }
+    return recipients
+      .map((r) => buildEngagementMarkdown(data, statusOverrides, r))
+      .join("\n\n");
+  };
 
   const bindHeaderActions = (): void => {
     headerEl.querySelector<HTMLButtonElement>("#copy-all")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget as HTMLButtonElement;
       btn.disabled = true;
       try {
-        const recipient = recipients.find((r) => r.id === selectedRecipientId);
-        const md = buildEngagementMarkdown(data, statusOverrides, recipient);
+        const md = buildAllMarkdown();
         await navigator.clipboard.writeText(md);
         flashCopied(btn, "Copied!");
         toast("All cards copied as Markdown");
@@ -1910,8 +1887,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     headerEl.querySelector<HTMLButtonElement>("#download-md")?.addEventListener("click", (e) => {
       const btn = e.currentTarget as HTMLButtonElement;
       try {
-        const recipient = recipients.find((r) => r.id === selectedRecipientId);
-        const md = buildEngagementMarkdown(data, statusOverrides, recipient);
+        const md = buildAllMarkdown();
         triggerDownload(md, downloadFilename(client));
         flashCopied(btn, "Downloaded");
         toast(`Saved ${downloadFilename(client)}`);
@@ -2053,33 +2029,35 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     const card = cards.find((c) => c.id === cardId);
     if (!card) return;
 
-    const select = articleEl.querySelector<HTMLSelectElement>(".status-select");
-    select?.addEventListener("change", () => {
-      statusOverrides.set(cardId, select.value as Status);
-    });
-
-    articleEl.querySelector<HTMLButtonElement>("[data-action='copy-card']")?.addEventListener("click", async (e) => {
-      const btn = e.currentTarget as HTMLButtonElement;
-      btn.disabled = true;
-      try {
-        const recipient = recipients.find((r) => r.id === selectedRecipientId);
-        const md = buildSingleCardMarkdown(
-          client,
-          card,
-          respOf(card.id),
-          upsOf(card.id),
-          statusOverrides.get(card.id),
-          recipient,
-        );
-        await navigator.clipboard.writeText(md);
-        flashCopied(btn, "Copied!");
-      } catch (err) {
-        console.error("copy card:", err);
-        toast("Could not copy");
-      } finally {
-        btn.disabled = false;
-      }
-    });
+    // Copy is per-recipient now: each lives inside a .recipient-answer block,
+    // so resolve the recipient from its ancestor's data-recipient-id and copy
+    // that recipient's answer for this card.
+    for (const btn of articleEl.querySelectorAll<HTMLButtonElement>("[data-action='copy-card']")) {
+      btn.addEventListener("click", async (e) => {
+        const target = e.currentTarget as HTMLButtonElement;
+        const block = target.closest<HTMLElement>(".recipient-answer[data-recipient-id]");
+        const rid = block?.dataset.recipientId;
+        if (!rid) return;
+        target.disabled = true;
+        try {
+          const md = buildSingleCardMarkdown(
+            client,
+            card,
+            respOf(rid, card.id),
+            upsOf(rid, card.id),
+            undefined,
+            recipientById(rid),
+          );
+          await navigator.clipboard.writeText(md);
+          flashCopied(target, "Copied!");
+        } catch (err) {
+          console.error("copy card:", err);
+          toast("Could not copy");
+        } finally {
+          target.disabled = false;
+        }
+      });
+    }
 
     articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-start']")?.addEventListener("click", () => {
       swapCardHtml(articleEl, renderEditCardForm(card));
@@ -2090,7 +2068,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-cancel']")?.addEventListener("click", () => {
       swapCardHtml(
         articleEl,
-        renderResponseCard(card, respOf(card.id), upsOf(card.id), statusOverrides)
+        renderResponseCard(card, recipients, respOf, upsOf)
       );
     });
 
@@ -2107,7 +2085,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         if (idx >= 0) cards[idx] = updated;
         swapCardHtml(
           articleEl,
-          renderResponseCard(updated, respOf(card.id), upsOf(card.id), statusOverrides)
+          renderResponseCard(updated, recipients, respOf, upsOf)
         );
         toast("Card saved");
       } catch (err) {
@@ -2120,12 +2098,17 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     });
 
     articleEl.querySelector<HTMLButtonElement>("[data-action='delete-card']")?.addEventListener("click", () => {
-      const resp = respOf(card.id);
-      const responseCount = resp && resp.state !== "viewed" ? "an existing response" : null;
-      const uploadList = upsOf(card.id);
+      // Count answers/uploads for this card across ALL recipients.
+      let responseCount = 0;
+      let uploadCount = 0;
+      for (const r of recipients) {
+        const resp = respOf(r.id, card.id);
+        if (resp && resp.state !== "viewed" && resp.state !== "not_started") responseCount += 1;
+        uploadCount += upsOf(r.id, card.id).length;
+      }
       const warningParts: string[] = [];
-      if (responseCount) warningParts.push("the response on file");
-      if (uploadList.length) warningParts.push(`${uploadList.length} uploaded file${uploadList.length === 1 ? "" : "s"}`);
+      if (responseCount) warningParts.push(`${responseCount} response${responseCount === 1 ? "" : "s"}`);
+      if (uploadCount) warningParts.push(`${uploadCount} uploaded file${uploadCount === 1 ? "" : "s"}`);
       const warning = warningParts.length
         ? `This will also remove ${warningParts.join(" and ")} across every recipient. This cannot be undone.`
         : "This cannot be undone.";
@@ -2239,7 +2222,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         for (const card of created) {
           cards.push(card);
           const tmp = document.createElement("div");
-          tmp.innerHTML = renderResponseCard(card, undefined, [], statusOverrides).trim();
+          tmp.innerHTML = renderResponseCard(card, recipients, respOf, upsOf).trim();
           const next = tmp.firstElementChild as HTMLElement | null;
           if (next) {
             cardsList.appendChild(next);
@@ -2284,7 +2267,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         const created = await adminApi.createCard(client.id, newCard);
         cards.push(created);
         const tmp = document.createElement("div");
-        tmp.innerHTML = renderResponseCard(created, undefined, [], statusOverrides).trim();
+        tmp.innerHTML = renderResponseCard(created, recipients, respOf, upsOf).trim();
         const next = tmp.firstElementChild as HTMLElement | null;
         if (next) {
           cardsList.appendChild(next);
@@ -2617,21 +2600,40 @@ function renderBriefEdit(client: Engagement): string {
 
 // ── Card rendering helpers ──────────────────────────────────────────────
 
+// Render one card (question) with EVERY recipient's answer stacked beneath
+// it — a by-question comparison view. The card head + question text appear
+// once; each recipient gets a labelled block showing their state, timestamp,
+// answer body, and a per-recipient Copy button. Non-responders still render
+// (name + muted "Not yet viewed." body) so gaps are visible at a glance.
 function renderResponseCard(
   card: Card,
-  response: ClientResponse | undefined,
-  uploads: UploadRow[],
-  statusOverrides: Map<string, Status>
+  recipients: Recipient[],
+  respOf: (recipientId: string, cardId: string) => ClientResponse | undefined,
+  upsOf: (recipientId: string, cardId: string) => UploadRow[],
 ): string {
-  const suggested = suggestStatus(card, response);
-  statusOverrides.set(card.id, suggested);
-
-  const stateLabel = labelFor(response);
-  const stateClass = stateClassFor(response);
-
-  const optionsHtml = STATUS_VALUES.map(
-    (s) => `<option value="${escape(s)}"${s === suggested ? " selected" : ""}>${escape(s)}</option>`
-  ).join("");
+  const answersHtml = recipients.length
+    ? recipients
+        .map((r) => {
+          const resp = respOf(r.id, card.id);
+          const ups = upsOf(r.id, card.id);
+          const timestamp = resp?.answered_at
+            ? `Answered ${escape(formatTimestamp(resp.answered_at))}`
+            : resp?.viewed_at
+              ? `Viewed ${escape(formatTimestamp(resp.viewed_at))}`
+              : "";
+          return `
+            <div class="recipient-answer" data-recipient-id="${escape(r.id)}">
+              <div class="recipient-answer-head">
+                <span class="recipient-answer-name">${escape(recipientLabel(r))}</span>
+                <span class="response-state ${stateClassFor(resp)}">${escape(labelFor(resp))}</span>
+                <span class="recipient-answer-time">${timestamp}</span>
+                <button class="btn-ghost-sm" type="button" data-action="copy-card" title="Copy this answer">Copy</button>
+              </div>
+              <div class="response-body${responseBodyMutedClass(resp)}">${renderResponseBodyHtml(card, resp, ups)}</div>
+            </div>`;
+        })
+        .join("")
+    : `<div class="recipient-answers-empty">Add a recipient above to start collecting answers.</div>`;
 
   return `
     <article class="response-card" data-card-id="${escape(card.id)}">
@@ -2641,22 +2643,12 @@ function renderResponseCard(
           <h3 class="card-h">${escape(card.title)}</h3>
         </div>
         <div class="response-card-head-right">
-          <span class="response-state ${stateClass}">${escape(stateLabel)}</span>
           <button class="btn-ghost-sm" type="button" data-action="edit-card-start" title="Edit card text">Edit</button>
           <button class="btn-ghost-sm danger" type="button" data-action="delete-card" title="Delete this card">Delete</button>
         </div>
       </div>
-      <div class="response-body${responseBodyMutedClass(response)}">${renderResponseBodyHtml(card, response, uploads)}</div>
-      <div class="response-meta">
-        <div class="response-meta-left">
-          <span>Suggested status:</span>
-          <select class="status-select">${optionsHtml}</select>
-        </div>
-        <div class="response-meta-right">
-          ${response?.answered_at ? `<span>Answered ${escape(formatTimestamp(response.answered_at))}</span>` : response?.viewed_at ? `<span>Viewed ${escape(formatTimestamp(response.viewed_at))}</span>` : ""}
-          <button class="btn-primary-sm" type="button" data-action="copy-card" style="margin-left:12px">Copy</button>
-        </div>
-      </div>
+      <p class="card-question">${escape(card.question)}</p>
+      <div class="recipient-answers">${answersHtml}</div>
     </article>
   `;
 }
