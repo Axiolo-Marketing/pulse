@@ -132,7 +132,7 @@ async def list_pending_invites(
 ) -> list[dict]:
     """Recipients on this engagement who can be invited but haven't been —
     a non-null email and ``invited_at is null``. Returns ``{id, email,
-    name, token}`` for each, for the send-invites route to email + stamp."""
+    name, token}`` for each, for the auto-invite helper to email + stamp."""
     result = await session.execute(
         text(
             "select id::text, email, name, token from public.recipients "

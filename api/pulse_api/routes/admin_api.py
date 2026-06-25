@@ -381,11 +381,13 @@ async def add_recipient(
         get_current_org_member
     ),
 ) -> dict[str, Any]:
-    """Add a respondent and mint their private deck token. The operator
-    sends the invite separately. 404 if the engagement isn't in the active
-    org; 409 if the email is already a recipient of this engagement."""
+    """Add a respondent, mint their private deck token, and email them the
+    invite right away (when the deck has at least one card). 404 if the
+    engagement isn't in the active org; 409 if the email is already a
+    recipient of this engagement."""
     user, membership = org_member
-    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
         raise HTTPException(status_code=404, detail="engagement not found")
     email = req.email.strip()
     if await recipients_repo.email_exists(
@@ -409,6 +411,12 @@ async def add_recipient(
         target_type="recipient",
         target_id=row["id"],
         metadata={"engagement_id": engagement_id, "email": email},
+    )
+    # Send the invite immediately (no-op when the deck has no cards yet — the
+    # first card picks them up). The frontend re-fetches the list after add,
+    # so the returned row's pre-invite invited_at is fine here.
+    await _send_pending_invites(
+        session, engagement=engagement, membership=membership, user=user
     )
     await session.commit()
     return row
@@ -451,33 +459,32 @@ async def remove_recipient(
         storage.delete_upload(path)
 
 
-@router.post("/engagements/{engagement_id}/send-invites")
-async def send_invites(
-    engagement_id: str,
-    session: AsyncSession = Depends(get_org_scoped_session),
-    org_member: tuple[User, OrganizationMembership] = Depends(
-        get_current_org_member
-    ),
-) -> dict[str, int]:
-    """Email the deck link to every recipient who has an email but hasn't
-    been invited yet (``invited_at is null``), then stamp ``invited_at`` —
-    this replaces the operator's manual link-share. Refuses if the deck has
-    no cards (nothing to answer yet). Sends are best-effort (``send_email``
-    never raises); a recipient is marked invited once the attempt is made.
-    Returns the number actually emailed (re-running only mails newcomers)."""
-    user, membership = org_member
-    engagement = await engagements_repo.get_by_id(session, engagement_id)
-    if engagement is None:
-        raise HTTPException(status_code=404, detail="engagement not found")
+async def _send_pending_invites(
+    session: AsyncSession,
+    *,
+    engagement: dict[str, Any],
+    membership: OrganizationMembership,
+    user: User,
+) -> int:
+    """Email the deck link to every recipient of this engagement who has an
+    email but hasn't been invited yet, then stamp ``invited_at``. Returns the
+    count emailed; a no-op (0) when the deck has no cards yet or nobody is
+    pending. Sends are best-effort (``send_email`` never raises) — a recipient
+    is marked invited once the attempt is made. Does NOT commit; the caller
+    owns the transaction.
+
+    Invites are sent automatically: adding a respondent invites them right
+    away (this fires from ``add_recipient``), and adding the first card
+    invites anyone who was added before the deck had questions (it fires from
+    the card-creation routes). There is no manual "send" step.
+    """
+    engagement_id = str(engagement["id"])
     cards = await cards_repo.list_for_engagement(session, engagement_id)
     if not cards:
-        raise HTTPException(
-            status_code=400,
-            detail="add at least one card before sending invites",
-        )
+        return 0
     pending = await recipients_repo.list_pending_invites(session, engagement_id)
     if not pending:
-        return {"sent": 0}
+        return 0
 
     org_name = (
         await session.execute(
@@ -506,8 +513,7 @@ async def send_invites(
         target_id=engagement_id,
         metadata={"count": len(pending)},
     )
-    await session.commit()
-    return {"sent": len(pending)}
+    return len(pending)
 
 
 # ── Clients (real clients/companies) ───────────────────────────────────────
@@ -542,7 +548,8 @@ async def add_card(
 ) -> dict[str, Any]:
     # Verify the engagement exists; cleaner 404 than a FK violation.
     # RLS hides out-of-org engagements, so this also covers cross-org.
-    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
     user, membership = org_member
@@ -575,6 +582,11 @@ async def add_card(
             "response_type": req.response_type,
         },
     )
+    # A deck that just gained its first card invites any respondents added
+    # before there were questions to answer (no-op once everyone's invited).
+    await _send_pending_invites(
+        session, engagement=engagement, membership=membership, user=user
+    )
     await session.commit()
     return row
 
@@ -595,7 +607,8 @@ async def import_cards_markdown(
     insert sees prior uncommitted rows in the same session, so ordering
     is stable.
     """
-    if (await engagements_repo.get_by_id(session, engagement_id)) is None:
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
     try:
@@ -635,6 +648,10 @@ async def import_cards_markdown(
         # is the operator's single user action. ``count`` lets the UI
         # render "Tom imported 14 cards" without joining card rows.
         metadata={"count": len(created)},
+    )
+    # First cards on the deck invite any respondents added beforehand.
+    await _send_pending_invites(
+        session, engagement=engagement, membership=membership, user=user
     )
     await session.commit()
     return {"created": created}

@@ -1617,22 +1617,11 @@ function recipientLabel(r: Recipient): string {
   return r.email?.trim() || r.name?.trim() || "respondent";
 }
 
-/** The Recipients panel: per-recipient rows (label, optional name, progress,
- * activity hints, copy-link + remove), a "Send invites" action, and an
- * add-recipient form. `cardCount` gates the invite button — you can't invite
- * to an empty deck. */
-function recipientsPanelHtml(recipients: Recipient[], cardCount: number): string {
-  // Pending = has an email and hasn't been invited yet. Send is disabled
-  // with a hint when the deck is empty or nobody is waiting on an invite.
-  const pending = recipients.filter((r) => r.email?.trim() && !r.invited_at).length;
-  const sendDisabled = cardCount === 0 || pending === 0;
-  const sendLabel = pending > 0 ? `Send ${pending} invite${pending === 1 ? "" : "s"}` : "Invites sent";
-  const sendTitle =
-    cardCount === 0
-      ? "Add a card before sending invites"
-      : pending === 0
-        ? "Everyone with an email has been invited"
-        : `Email the deck link to ${pending} respondent${pending === 1 ? "" : "s"}`;
+/** The Respondents panel: per-respondent rows (label, optional name, progress,
+ * activity hints, copy-link + remove) and an add-respondent form. Adding a
+ * respondent emails their invite immediately (the backend sends it on add, or
+ * when the deck gets its first card) — there's no manual send step. */
+function recipientsPanelHtml(recipients: Recipient[]): string {
   const rows = recipients.length
     ? recipients
         .map((r) => {
@@ -1670,7 +1659,6 @@ function recipientsPanelHtml(recipients: Recipient[], cardCount: number): string
     <div class="recipients-card">
       <div class="recipients-head">
         <span class="recipients-label">Respondents <span class="recipients-count">${recipients.length}</span></span>
-        <button class="btn-secondary-sm" type="button" id="send-invites-btn" ${sendDisabled ? "disabled" : ""} title="${escape(sendTitle)}">${escape(sendLabel)}</button>
       </div>
       <div class="recipients-list">${rows}</div>
       <form class="add-recipient-form" id="add-recipient-form">
@@ -1764,29 +1752,11 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   };
 
   const renderRecipientsPanel = (): void => {
-    recipientsSlot.innerHTML = recipientsPanelHtml(recipients, cards.length);
+    recipientsSlot.innerHTML = recipientsPanelHtml(recipients);
     bindRecipientsPanel();
   };
 
   const bindRecipientsPanel = (): void => {
-    // Send invites — emails the deck link to recipients not yet invited.
-    const sendBtn = recipientsSlot.querySelector<HTMLButtonElement>("#send-invites-btn");
-    sendBtn?.addEventListener("click", async () => {
-      if (sendBtn.disabled) return;
-      sendBtn.disabled = true;
-      sendBtn.textContent = "Sending...";
-      try {
-        const { sent } = await adminApi.sendInvites(client.id);
-        toast(sent > 0 ? `Sent ${sent} invite${sent === 1 ? "" : "s"}` : "No new invites to send");
-        await refreshRecipients(); // re-renders the panel (button label/state refresh)
-      } catch (err) {
-        console.error("send invites:", err);
-        toast("Could not send invites");
-        sendBtn.disabled = false;
-        sendBtn.textContent = "Send invites";
-      }
-    });
-
     // Per-recipient copy-link + remove.
     for (const btn of recipientsSlot.querySelectorAll<HTMLButtonElement>("[data-recipient-action]")) {
       const action = btn.dataset.recipientAction;
@@ -1834,7 +1804,13 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
       }
       try {
         await adminApi.addRecipient(client.id, { email, ...(name ? { name } : {}) });
-        toast("Respondent added");
+        // The backend emails the invite on add when the deck has cards;
+        // otherwise the first card sends it.
+        toast(
+          cards.length > 0
+            ? "Respondent added — invite sent"
+            : "Respondent added — they'll be invited once you add a card",
+        );
         await refreshRecipients();
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
