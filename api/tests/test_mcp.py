@@ -241,7 +241,7 @@ def _structured(result: dict[str, Any]) -> Any:
 
 
 # 1. tools/list returns the 11 expected tools (RS mode requires a token).
-async def test_tools_list_returns_eleven_tools(
+async def test_tools_list_returns_all_tools(
     mcp_client: AsyncClient,
     db: AsyncSession,
     seed_admin_user: dict[str, str],
@@ -259,6 +259,8 @@ async def test_tools_list_returns_eleven_tools(
             "pulse_create_engagement",
             "pulse_update_engagement",
             "pulse_delete_engagement",
+            "pulse_list_recipients",
+            "pulse_add_recipient",
             "pulse_import_deck",
             "pulse_add_card",
             "pulse_update_card",
@@ -323,6 +325,62 @@ async def test_create_then_delete_engagement_roundtrip(
         )
     ).scalar_one_or_none()
     assert gone is None
+
+
+async def test_add_and_list_recipients_roundtrip(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    created = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Recip Co"}),
+            api_key=raw,
+        )
+    )
+    eid = created["id"]
+    # create_engagement returns no token now — the deck link is per recipient.
+    assert "token" not in created
+
+    add_resp = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_recipient",
+            {"engagement_id": eid, "email": "r@example.com", "name": "Ren"},
+        ),
+        api_key=raw,
+    )
+    assert add_resp["result"].get("isError") is not True, add_resp
+    recipient = _structured(add_resp)
+    assert len(recipient["token"]) == 16  # the deck link is minted here
+    assert recipient["email"] == "r@example.com"
+
+    listed = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_list_recipients", {"engagement_id": eid}),
+            api_key=raw,
+        )
+    )
+    assert [r["email"] for r in listed] == ["r@example.com"]
+
+    # A duplicate email on the same engagement is a tool error.
+    dup = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_recipient", {"engagement_id": eid, "email": "r@example.com"}
+        ),
+        api_key=raw,
+    )
+    assert dup["result"].get("isError") is True
 
 
 # 3. Missing Authorization header → HTTP 401 (RequireAuthMiddleware).

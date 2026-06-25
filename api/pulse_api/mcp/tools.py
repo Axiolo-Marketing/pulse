@@ -13,6 +13,8 @@ Mappings to the REST routes (see ``routes/admin_api.py`` and
     pulse_create_engagement     ←  POST   /api/admin/engagements
     pulse_update_engagement     ←  PATCH  /api/admin/engagements/{id}
     pulse_delete_engagement     ←  DELETE /api/admin/engagements/{id}
+    pulse_list_recipients       ←  GET    /api/admin/engagements/{id}/recipients
+    pulse_add_recipient         ←  POST   /api/admin/engagements/{id}/recipients
     pulse_import_deck           ←  POST   /api/admin/engagements/{id}/cards/import-markdown
     pulse_add_card              ←  POST   /api/admin/engagements/{id}/cards
     pulse_update_card           ←  PATCH  /api/admin/cards/{id}
@@ -47,6 +49,7 @@ from pulse_api.mcp.server import (
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
+from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 
@@ -57,10 +60,10 @@ from pulse_api.repos import uploads as uploads_repo
 @mcp.tool(
     name="pulse_list_engagements",
     description=(
-        "List every engagement with progress counts (answered, skipped, "
-        "total cards) plus its owning client (`client_id` + `client_name`) "
-        "and owner (`owner_name` / `owner_email`, null when unattributed). "
-        "No arguments."
+        "List every engagement with a per-recipient progress rollup "
+        "(`recipients_count`, `completed_recipients`, `total_cards`) plus "
+        "its owning client (`client_id` + `client_name`) and owner "
+        "(`owner_name` / `owner_email`, null when unattributed). No arguments."
     ),
 )
 async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
@@ -77,7 +80,9 @@ async def pulse_list_engagements(ctx: Context) -> list[dict[str, Any]]:
 @mcp.tool(
     name="pulse_get_engagement",
     description=(
-        "Fetch one engagement with its cards, responses, and uploads. "
+        "Fetch one engagement with its recipients, cards, responses, and "
+        "uploads. Each response/upload carries a `recipient_id`; match it "
+        "against `recipients[].id` to attribute answers to a respondent. "
         "Returns 'not found' if no engagement matches the id."
     ),
 )
@@ -91,6 +96,9 @@ async def pulse_get_engagement(
             raise ValueError("engagement not found")
         return {
             "engagement": engagement,
+            "recipients": await recipients_repo.list_for_engagement(
+                session, engagement_id
+            ),
             "cards": await cards_repo.list_for_engagement(session, engagement_id),
             "responses": await responses_repo.list_for_engagement(session, engagement_id),
             "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
@@ -102,8 +110,9 @@ async def pulse_get_engagement(
     description=(
         "Create a new engagement under a client. Pass `client_name` (the "
         "company name); an existing client is reused, otherwise one is "
-        "created. Returns the new row including the freshly minted access "
-        "token and the resolved `client_id` + `name`."
+        "created. Returns the new engagement row (id, `client_id`, `name`, "
+        "etc.) — NOT a deck link. The magic-link `?t=` URL lives on a "
+        "recipient: call `pulse_add_recipient` next to mint one."
     ),
 )
 async def pulse_create_engagement(
@@ -131,8 +140,10 @@ async def pulse_create_engagement(
     name="pulse_update_engagement",
     description=(
         "Patch an engagement. Only the provided fields change; unspecified "
-        "fields stay as-is. `token` cannot be changed here, and the "
-        "customer-facing name lives on the client (not editable here)."
+        "fields stay as-is. The customer-facing name lives on the client "
+        "(not editable here); deck links live on recipients. Set "
+        "`reminders_enabled` to pause/resume scheduled reminders for this "
+        "engagement."
     ),
 )
 async def pulse_update_engagement(
@@ -140,6 +151,7 @@ async def pulse_update_engagement(
     engagement_id: str,
     engagement_name: str | None = None,
     brief: str | None = None,
+    reminders_enabled: bool | None = None,
 ) -> dict[str, Any]:
     _, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
@@ -147,11 +159,71 @@ async def pulse_update_engagement(
         fields["engagement_name"] = engagement_name
     if brief is not None:
         fields["brief"] = brief
+    if reminders_enabled is not None:
+        fields["reminders_enabled"] = reminders_enabled
 
     async with _open_member_session(org_id) as session:
         row = await engagements_repo.update_engagement(session, engagement_id, fields)
         if row is None:
             raise ValueError("engagement not found")
+        await session.commit()
+        return row
+
+
+# ── Recipients ───────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="pulse_list_recipients",
+    description=(
+        "List an engagement's recipients (respondents). Each carries its own "
+        "`token` (the `?t=` deck link), `email`, and per-recipient progress "
+        "(`completed_count` / `total_cards`)."
+    ),
+)
+async def pulse_list_recipients(
+    ctx: Context, engagement_id: str
+) -> list[dict[str, Any]]:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
+        if await engagements_repo.get_by_id(session, engagement_id) is None:
+            raise ValueError("engagement not found")
+        return await recipients_repo.list_for_engagement(session, engagement_id)
+
+
+@mcp.tool(
+    name="pulse_add_recipient",
+    description=(
+        "Add a respondent to an engagement and mint their private deck link. "
+        "Pass `email` (required) and optional `name`. Returns the recipient "
+        "row including `token`; the deck URL is `{frontend_base_url}/?t={token}`. "
+        "Errors if the email is already a recipient of this engagement."
+    ),
+)
+async def pulse_add_recipient(
+    ctx: Context,
+    engagement_id: str,
+    email: str,
+    name: str | None = None,
+) -> dict[str, Any]:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
+        if await engagements_repo.get_by_id(session, engagement_id) is None:
+            raise ValueError("engagement not found")
+        clean = email.strip()
+        if await recipients_repo.email_exists(
+            session, engagement_id=engagement_id, email=clean
+        ):
+            raise ValueError("recipient already added")
+        row = await recipients_repo.add(
+            session,
+            engagement_id=engagement_id,
+            org_id=org_id,
+            email=clean,
+            name=(name.strip() or None) if name else None,
+        )
+        if row is None:
+            raise ValueError("could not add recipient")
         await session.commit()
         return row
 
