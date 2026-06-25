@@ -834,6 +834,198 @@
   border-color: var(--primary);
 }
 
+/* ── Recipients panel (multi-respondent) ─────────────────────────────── */
+
+.recipients-card {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+  margin: 0 0 16px;
+}
+
+.recipients-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.recipients-label {
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.recipients-count {
+  display: inline-flex;
+  min-width: 18px;
+  justify-content: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.recipients-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.recipient-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+}
+
+.recipient-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.recipient-row-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipient-row-name,
+.recipient-row-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.recipient-row-progress {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.recipient-row-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.recipient-empty {
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 12px 14px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+}
+
+.add-recipient-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.add-recipient-form .edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 180px;
+}
+
+.add-recipient-form .edit-label {
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.add-recipient-form .input {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--ink);
+}
+
+.add-recipient-form .input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.add-recipient-actions {
+  flex: 0 0 auto;
+}
+
+/* ── Recipient tabs (whose answers am I viewing) ─────────────────────── */
+
+.recipient-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.recipient-tab {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  padding: 6px 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recipient-tab:hover {
+  border-color: var(--primary);
+  color: var(--ink);
+}
+
+.recipient-tab.is-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--white);
+}
+
+.recipient-tab-count {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.recipient-tabs-empty {
+  font-size: 13.5px;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
 .response-card-head {
   display: flex;
   align-items: flex-start;

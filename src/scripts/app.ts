@@ -285,7 +285,10 @@ function runApp(ctx: RunCtx): void {
 
   const draw = (): void => {
     if (index >= cards.length) {
-      renderComplete(mount, client.name);
+      // Greet the recipient by their own name when we have it (multi-
+      // respondent: each recipient is named), falling back to the client
+      // (company) name so the message still reads naturally.
+      renderComplete(mount, client.recipient_name?.trim() || client.name);
       return;
     }
     const card = cards[index];

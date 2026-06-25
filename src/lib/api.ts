@@ -112,16 +112,28 @@ export interface Engagement {
   /** The owning client id (admin views; absent on `/api/me`). */
   client_id?: string;
   engagement_name: string | null;
-  token?: string;       // present in admin views, omitted from /api/me
   brief: string | null;
   created_at: string;
-  last_active_at: string | null;
+  /** Last activity timestamp. Post multi-respondent migration the magic
+   * link lives on the recipient, not the engagement — `/api/me` returns
+   * the active recipient's `last_active_at`; the admin detail engagement
+   * object no longer carries it (recipients do). Optional/nullable here so
+   * both shapes type-check. */
+  last_active_at?: string | null;
   /** Whether voice recording is enabled for this engagement. Defaults
    * `false` — voice is opt-in per engagement. The client deck shows the
    * record control only when this is `true`; on `/api/me` the field is
    * always present. Admin views also carry it (operators toggle it from
    * the engagement edit form). */
   voice_enabled: boolean;
+  /** Whether reminder emails are enabled for this engagement's recipients
+   * (default `false`). Present on admin views; operators toggle it from the
+   * engagement edit form. */
+  reminders_enabled?: boolean;
+  /** The greeting name for the active recipient on `/api/me` (the deck
+   * bootstrap), or `null` when the recipient has no name. Admin views
+   * don't carry it — recipients are listed separately there. */
+  recipient_name?: string | null;
   /** Optional brand logo path for the operator's organization. When
    * `/api/me` returns this, the client-facing deck renders it in the
    * top-bar instead of the default Axiolo wordmark. Backend wires this
@@ -154,6 +166,10 @@ export interface ClientResponse {
   id: string;
   card_id: string;
   engagement_id: string;
+  /** The recipient this answer belongs to. Post multi-respondent migration
+   * each recipient answers the shared cards independently, so responses are
+   * keyed by `(recipient_id, card_id)`. */
+  recipient_id: string;
   state: ResponseState;
   response_value: unknown;
   viewed_at: string | null;
@@ -166,6 +182,9 @@ export interface UploadRow {
   id: string;
   card_id: string;
   engagement_id: string;
+  /** The recipient this upload belongs to (multi-respondent migration —
+   * uploads are keyed by `(recipient_id, card_id)` in the admin viewer). */
+  recipient_id: string;
   file_name: string;
   file_size_bytes: number;
   storage_path: string;
@@ -437,15 +456,44 @@ export interface EngagementSummary {
   /** Engagement owner's email, or `null`. */
   owner_email: string | null;
   engagement_name: string | null;
-  token: string;
   brief: string | null;
   created_at: string;
   last_active_at: string | null;
   /** Whether voice recording is enabled for this engagement (default
    * `false`). Operators flip it from the engagement edit form. */
   voice_enabled: boolean;
-  answered_count: number;
-  skipped_count: number;
+  /** Whether reminder emails are enabled for this engagement's recipients
+   * (default `false`). Operators flip it from the engagement edit form. */
+  reminders_enabled: boolean;
+  total_cards: number;
+  /** Number of recipients (own magic links) on this engagement. The list
+   * progress pill reads `completed_recipients / recipients_count`. */
+  recipients_count: number;
+  /** How many recipients have completed every card. Drives the derived
+   * status: complete when it equals `recipients_count` (and that's > 0). */
+  completed_recipients: number;
+}
+
+/** One recipient of an engagement — its own magic link (`token`), answers
+ * the shared cards independently, and is attributable. Returned by the
+ * recipients list, the detail payload's `recipients`, and add-recipient. */
+export interface Recipient {
+  id: string;
+  engagement_id: string;
+  email: string | null;
+  name: string | null;
+  /** The recipient's 16-hex magic-link token. Copy-link builds the
+   * `?t=<token>` URL from this — there's no engagement-level token. */
+  token: string;
+  last_active_at: string | null;
+  invited_at: string | null;
+  last_reminded_at: string | null;
+  reminder_count: number;
+  unsubscribed_at: string | null;
+  created_at: string;
+  /** How many of the shared cards this recipient has answered/skipped. */
+  completed_count: number;
+  /** Total shared cards on the engagement (same for every recipient). */
   total_cards: number;
 }
 
@@ -460,7 +508,8 @@ export interface ClientSummary {
 export type Client = ClientSummary;
 
 export interface EngagementDetail {
-  engagement: Engagement & { token: string };
+  engagement: Engagement;
+  recipients: Recipient[];
   cards: Card[];
   responses: ClientResponse[];
   uploads: UploadRow[];
@@ -483,6 +532,9 @@ export interface UpdateEngagementArgs {
    * unchanged — the backend keys off `model_dump(exclude_unset=True)`,
    * so an absent key never writes the column. */
   voice_enabled?: boolean;
+  /** Toggle reminder emails for this engagement's recipients. Omit to
+   * leave it unchanged (same `exclude_unset` semantics as `voice_enabled`). */
+  reminders_enabled?: boolean;
 }
 
 export interface CreateCardArgs {
@@ -597,6 +649,27 @@ export const adminApi = {
    * link are preserved. Returns counts of what was cleared. */
   resetEngagement: (id: string): Promise<{ responses_cleared: number; uploads_cleared: number }> =>
     request(`/api/admin/engagements/${id}/reset`, { method: "POST" }),
+
+  // ── Recipients (per-respondent magic links) ──────────────────────────
+  listRecipients: (engagementId: string): Promise<Recipient[]> =>
+    request(`/api/admin/engagements/${engagementId}/recipients`),
+
+  /** Add a recipient to an engagement. Throws `ApiError` with status 409 if
+   * the email is already a recipient (caller toasts "already a recipient");
+   * 404 if the engagement isn't found. */
+  addRecipient: (
+    engagementId: string,
+    args: { email: string; name?: string },
+  ): Promise<Recipient> =>
+    request(`/api/admin/engagements/${engagementId}/recipients`, {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  removeRecipient: (engagementId: string, recipientId: string): Promise<void> =>
+    request(`/api/admin/engagements/${engagementId}/recipients/${recipientId}`, {
+      method: "DELETE",
+    }),
 
   createCard: (engagementId: string, args: CreateCardArgs): Promise<Card> =>
     request(`/api/admin/engagements/${engagementId}/cards`, {

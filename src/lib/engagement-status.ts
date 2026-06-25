@@ -1,37 +1,44 @@
 // Derived engagement status — single source of truth for the admin list.
 //
-// There is NO status column. Status is computed purely from response
-// progress counts the API already returns (`answered_count`,
-// `skipped_count`, `total_cards`). Keep this module pure + dependency-free
-// so it stays unit-testable and reusable across the status pill, the
-// per-client rollup, and the status filter/sort.
+// There is NO status column. Status is computed purely from the recipient
+// rollup counts the API already returns (`recipients_count`,
+// `completed_recipients`). Post multi-respondent migration, progress is
+// measured across recipients (each has its own magic link and answers the
+// shared cards independently), not across cards. Keep this module pure +
+// dependency-free so it stays unit-testable and reusable across the status
+// pill, the per-client rollup, and the status filter/sort.
 
 export type EngagementStatus = "waiting" | "in_progress" | "complete";
 
 /** Minimal shape needed to derive status — a structural subset of
- * `EngagementSummary` so any object carrying the three counts works. */
+ * `EngagementSummary` so any object carrying the two recipient counts
+ * works. */
 export interface StatusCounts {
-  answered_count: number;
-  skipped_count: number;
-  total_cards: number;
+  recipients_count: number;
+  completed_recipients: number;
 }
 
 /**
- * Derive an engagement's status from its progress counts:
- *  - `complete`     — has cards AND every card is answered or skipped
- *                     (`total_cards > 0 && answered + skipped >= total_cards`)
- *  - `waiting`      — nothing answered or skipped yet (`answered + skipped === 0`)
- *  - `in_progress`  — anything in between (partial progress)
+ * Derive an engagement's status from its recipient rollup:
+ *  - `complete`     — has recipients AND every recipient has completed every
+ *                     card (`recipients_count > 0 && completed_recipients
+ *                     === recipients_count`)
+ *  - `in_progress`  — at least one recipient is done but not all
+ *                     (`0 < completed_recipients < recipients_count`)
+ *  - `waiting`      — nothing completed yet, OR no recipients yet
  *
  * The `complete` check is evaluated first so a fully-progressed engagement
- * never reads as `waiting`. An engagement with zero cards is `waiting`
- * (there's nothing to complete).
+ * never reads as `waiting`. An engagement with zero recipients is `waiting`
+ * (there's no one to complete it).
  */
 export function engagementStatus(s: StatusCounts): EngagementStatus {
-  const done = s.answered_count + s.skipped_count;
-  if (s.total_cards > 0 && done >= s.total_cards) return "complete";
-  if (done === 0) return "waiting";
-  return "in_progress";
+  if (s.recipients_count > 0 && s.completed_recipients === s.recipients_count) {
+    return "complete";
+  }
+  if (s.completed_recipients > 0 && s.completed_recipients < s.recipients_count) {
+    return "in_progress";
+  }
+  return "waiting";
 }
 
 /** Human-readable label per status. */

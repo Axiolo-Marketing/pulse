@@ -13,6 +13,10 @@ export interface ExportArgs {
   response: ClientResponse | undefined;
   status: Status;
   uploads: UploadInfo[]; // attachment summaries (no URLs — files live in admin)
+  /** Which recipient these answers belong to. Multi-respondent migration:
+   * the export heading reads `Response from {client.name} — {recipientLabel}`.
+   * Omit (or pass empty) to fall back to just the client name. */
+  recipientLabel?: string;
 }
 
 function formatBytes(bytes: number): string {
@@ -37,16 +41,19 @@ interface ResponseValueShape {
 // Render one card's response as a ClickUp-ready markdown block per spec
 // §14.3. Caller separates blocks with `---` rules.
 export function renderCardMarkdown(args: ExportArgs): string {
-  const { card, client, response, status, uploads } = args;
+  const { card, client, response, status, uploads, recipientLabel } = args;
 
   const responseBody = renderResponseBody(card, response, uploads);
+  const heading = recipientLabel
+    ? `## Response from ${client.name} — ${recipientLabel}`
+    : `## Response from ${client.name}`;
 
   return [
     `# ${card.title}`,
     "",
     `**Status:** ${status}`,
     "",
-    `## Response from ${client.name}`,
+    heading,
     responseBody,
     "",
     "## Original Context",
