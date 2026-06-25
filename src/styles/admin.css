@@ -1061,11 +1061,6 @@
   margin-left: auto;
 }
 
-/* Keep Copy hard-right when there's no timestamp pushing it there. */
-.recipient-answer-head .btn-ghost-sm {
-  margin-left: 4px;
-}
-
 .recipient-answers-empty {
   font-size: 13.5px;
   color: var(--muted);

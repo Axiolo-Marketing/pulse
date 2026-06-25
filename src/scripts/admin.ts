@@ -2627,7 +2627,7 @@ function renderResponseCard(
                 <span class="recipient-answer-name">${escape(recipientLabel(r))}</span>
                 <span class="response-state ${stateClassFor(resp)}">${escape(labelFor(resp))}</span>
                 <span class="recipient-answer-time">${timestamp}</span>
-                <button class="btn-ghost-sm" type="button" data-action="copy-card" title="Copy this answer">Copy</button>
+                <button class="action-icon" type="button" data-action="copy-card" aria-label="Copy this answer" title="Copy this answer"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
               </div>
               <div class="response-body${responseBodyMutedClass(resp)}">${renderResponseBodyHtml(card, resp, ups)}</div>
             </div>`;
@@ -2643,8 +2643,8 @@ function renderResponseCard(
           <h3 class="card-h">${escape(card.title)}</h3>
         </div>
         <div class="response-card-head-right">
-          <button class="btn-ghost-sm" type="button" data-action="edit-card-start" title="Edit card text">Edit</button>
-          <button class="btn-ghost-sm danger" type="button" data-action="delete-card" title="Delete this card">Delete</button>
+          <button class="action-icon" type="button" data-action="edit-card-start" aria-label="Edit card text" title="Edit card text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
+          <button class="action-icon danger" type="button" data-action="delete-card" aria-label="Delete card" title="Delete card"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
         </div>
       </div>
       <p class="card-question">${escape(card.question)}</p>
