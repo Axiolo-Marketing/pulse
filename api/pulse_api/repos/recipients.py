@@ -127,6 +127,38 @@ async def remove(
     return dict(row) if row else None
 
 
+async def list_pending_invites(
+    session: AsyncSession, engagement_id: str
+) -> list[dict]:
+    """Recipients on this engagement who can be invited but haven't been —
+    a non-null email and ``invited_at is null``. Returns ``{id, email,
+    name, token}`` for each, for the send-invites route to email + stamp."""
+    result = await session.execute(
+        text(
+            "select id::text, email, name, token from public.recipients "
+            "where engagement_id = cast(:eid as uuid) "
+            "  and email is not null and invited_at is null "
+            "order by created_at"
+        ),
+        {"eid": engagement_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def mark_invited(session: AsyncSession, recipient_ids: list[str]) -> None:
+    """Stamp ``invited_at = now()`` on the given recipients (idempotent —
+    only sets it where still null, so a re-run never moves the timestamp)."""
+    if not recipient_ids:
+        return
+    await session.execute(
+        text(
+            "update public.recipients set invited_at = now() "
+            "where id = any(cast(:ids as uuid[])) and invited_at is null"
+        ),
+        {"ids": recipient_ids},
+    )
+
+
 async def list_upload_paths_for_recipient(
     session: AsyncSession, recipient_id: str
 ) -> list[str]:

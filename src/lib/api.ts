@@ -671,6 +671,14 @@ export const adminApi = {
       method: "DELETE",
     }),
 
+  /** Email the deck link to every recipient with an email who hasn't been
+   * invited yet, then stamp them invited. Returns the count actually sent.
+   * Throws `ApiError` 400 if the deck has no cards. */
+  sendInvites: (engagementId: string): Promise<{ sent: number }> =>
+    request(`/api/admin/engagements/${engagementId}/send-invites`, {
+      method: "POST",
+    }),
+
   createCard: (engagementId: string, args: CreateCardArgs): Promise<Card> =>
     request(`/api/admin/engagements/${engagementId}/cards`, {
       method: "POST",

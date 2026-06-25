@@ -1619,8 +1619,21 @@ function recipientLabel(r: Recipient): string {
 }
 
 /** The Recipients panel: per-recipient rows (label, optional name, progress,
- * activity hints, copy-link + remove) plus an add-recipient form. */
-function recipientsPanelHtml(recipients: Recipient[]): string {
+ * activity hints, copy-link + remove), a "Send invites" action, and an
+ * add-recipient form. `cardCount` gates the invite button — you can't invite
+ * to an empty deck. */
+function recipientsPanelHtml(recipients: Recipient[], cardCount: number): string {
+  // Pending = has an email and hasn't been invited yet. Send is disabled
+  // with a hint when the deck is empty or nobody is waiting on an invite.
+  const pending = recipients.filter((r) => r.email?.trim() && !r.invited_at).length;
+  const sendDisabled = cardCount === 0 || pending === 0;
+  const sendLabel = pending > 0 ? `Send ${pending} invite${pending === 1 ? "" : "s"}` : "Invites sent";
+  const sendTitle =
+    cardCount === 0
+      ? "Add a card before sending invites"
+      : pending === 0
+        ? "Everyone with an email has been invited"
+        : `Email the deck link to ${pending} recipient${pending === 1 ? "" : "s"}`;
   const rows = recipients.length
     ? recipients
         .map((r) => {
@@ -1658,6 +1671,7 @@ function recipientsPanelHtml(recipients: Recipient[]): string {
     <div class="recipients-card">
       <div class="recipients-head">
         <span class="recipients-label">Recipients <span class="recipients-count">${recipients.length}</span></span>
+        <button class="btn-secondary-sm" type="button" id="send-invites-btn" ${sendDisabled ? "disabled" : ""} title="${escape(sendTitle)}">${escape(sendLabel)}</button>
       </div>
       <div class="recipients-list">${rows}</div>
       <form class="add-recipient-form" id="add-recipient-form">
@@ -1783,11 +1797,29 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   };
 
   const renderRecipientsPanel = (): void => {
-    recipientsSlot.innerHTML = recipientsPanelHtml(recipients);
+    recipientsSlot.innerHTML = recipientsPanelHtml(recipients, cards.length);
     bindRecipientsPanel();
   };
 
   const bindRecipientsPanel = (): void => {
+    // Send invites — emails the deck link to recipients not yet invited.
+    const sendBtn = recipientsSlot.querySelector<HTMLButtonElement>("#send-invites-btn");
+    sendBtn?.addEventListener("click", async () => {
+      if (sendBtn.disabled) return;
+      sendBtn.disabled = true;
+      sendBtn.textContent = "Sending...";
+      try {
+        const { sent } = await adminApi.sendInvites(client.id);
+        toast(sent > 0 ? `Sent ${sent} invite${sent === 1 ? "" : "s"}` : "No new invites to send");
+        await refreshRecipients(); // re-renders the panel (button label/state refresh)
+      } catch (err) {
+        console.error("send invites:", err);
+        toast("Could not send invites");
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send invites";
+      }
+    });
+
     // Per-recipient copy-link + remove.
     for (const btn of recipientsSlot.querySelectorAll<HTMLButtonElement>("[data-recipient-action]")) {
       const action = btn.dataset.recipientAction;

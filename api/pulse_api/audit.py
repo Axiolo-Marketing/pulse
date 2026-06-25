@@ -64,6 +64,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         # Recipients
         "recipient.add",
         "recipient.remove",
+        "engagement.invites_sent",
         # Card lifecycle
         "card.create",
         "card.update",

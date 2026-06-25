@@ -209,6 +209,53 @@ async def test_recipients_have_distinct_tokens(
     assert a.json()["token"] != b.json()["token"]
 
 
+# ── POST /api/admin/engagements/{id}/send-invites ─────────────────────────────
+
+
+async def test_send_invites_emails_uninvited_recipients(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    captured_emails: list,
+) -> None:
+    eid = seed_client["id"]
+    # The seed recipient has no email (legacy-style) → skipped. Add one with
+    # an email; it's the only pending invitee.
+    await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients",
+        json={"email": "ask@example.com", "name": "Ask"},
+    )
+    r = await admin_authed.post(f"/api/admin/engagements/{eid}/send-invites")
+    assert r.status_code == 200
+    assert r.json() == {"sent": 1}
+    assert len(captured_emails) == 1
+    assert captured_emails[0].to == "ask@example.com"
+    assert "?t=" in captured_emails[0].body  # the deck link
+
+    # Re-running mails nobody new (already invited).
+    captured_emails.clear()
+    again = await admin_authed.post(f"/api/admin/engagements/{eid}/send-invites")
+    assert again.json() == {"sent": 0}
+    assert captured_emails == []
+
+
+async def test_send_invites_refuses_empty_deck(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    captured_emails: list,
+) -> None:
+    # seed_client has no cards yet.
+    await admin_authed.post(
+        f"/api/admin/engagements/{seed_client['id']}/recipients",
+        json={"email": "x@example.com"},
+    )
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{seed_client['id']}/send-invites"
+    )
+    assert r.status_code == 400
+    assert captured_emails == []
+
+
 # ── PATCH /api/admin/engagements/{id} ─────────────────────────────────────────
 
 

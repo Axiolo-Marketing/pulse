@@ -65,3 +65,38 @@ def org_invite_email(
         f"The link expires in 7 days. If you weren't expecting this invitation, you can ignore this email."
     )
     return subject, body
+
+
+def engagement_invite_email(
+    *,
+    deck_url: str,
+    org_name: str,
+    recipient_name: str | None = None,
+    engagement_name: str | None = None,
+) -> tuple[str, str]:
+    """Returns ``(subject, body)`` for the initial deck invite sent to a
+    recipient — the operator-triggered email that replaces the manual
+    link-share.
+
+    Args:
+        deck_url: The recipient's private ``?t=`` deck link (already built
+            from their token by the caller).
+        org_name: The consulting org's name, shown in the copy.
+        recipient_name: Optional name to greet by.
+        engagement_name: Optional engagement label, woven into the ask.
+
+    Returns:
+        ``(subject, body)`` ready for ``email.send_email``.
+    """
+    greeting = f"Hi {recipient_name}," if recipient_name else "Hi,"
+    about = f" about {engagement_name}" if engagement_name else ""
+    subject = f"{org_name} would like your input"
+    body = (
+        f"{greeting}\n\n"
+        f"{org_name} has a short set of questions for you{about}. "
+        f"It only takes a few minutes, and your answers save as you go.\n\n"
+        f"Open your questions here:\n\n"
+        f"{deck_url}\n\n"
+        f"The link is personal to you — please don't forward it."
+    )
+    return subject, body

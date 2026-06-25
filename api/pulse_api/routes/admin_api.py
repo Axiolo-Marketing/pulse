@@ -15,13 +15,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pulse_api import email as email_module
 from pulse_api import storage
 from pulse_api.audit import record_audit
+from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (
     get_current_org_member,
     get_org_scoped_session,
 )
 from pulse_api.card_import import CardImportError, parse_markdown
+from pulse_api.config import settings
 from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
@@ -446,6 +449,65 @@ async def remove_recipient(
     await session.commit()
     for path in upload_paths:
         storage.delete_upload(path)
+
+
+@router.post("/engagements/{engagement_id}/send-invites")
+async def send_invites(
+    engagement_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, int]:
+    """Email the deck link to every recipient who has an email but hasn't
+    been invited yet (``invited_at is null``), then stamp ``invited_at`` —
+    this replaces the operator's manual link-share. Refuses if the deck has
+    no cards (nothing to answer yet). Sends are best-effort (``send_email``
+    never raises); a recipient is marked invited once the attempt is made.
+    Returns the number actually emailed (re-running only mails newcomers)."""
+    user, membership = org_member
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    cards = await cards_repo.list_for_engagement(session, engagement_id)
+    if not cards:
+        raise HTTPException(
+            status_code=400,
+            detail="add at least one card before sending invites",
+        )
+    pending = await recipients_repo.list_pending_invites(session, engagement_id)
+    if not pending:
+        return {"sent": 0}
+
+    org_name = (
+        await session.execute(
+            text("select name from public.organizations where id = cast(:o as uuid)"),
+            {"o": str(membership.org_id)},
+        )
+    ).scalar_one_or_none() or "Your consultant"
+
+    base = settings.frontend_base_url.rstrip("/")
+    for r in pending:
+        subject, body = engagement_invite_email(
+            deck_url=f"{base}/?t={r['token']}",
+            org_name=str(org_name),
+            recipient_name=r.get("name"),
+            engagement_name=engagement.get("engagement_name"),
+        )
+        await email_module.send_email(r["email"], subject, body)
+
+    await recipients_repo.mark_invited(session, [r["id"] for r in pending])
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="engagement.invites_sent",
+        target_type="engagement",
+        target_id=engagement_id,
+        metadata={"count": len(pending)},
+    )
+    await session.commit()
+    return {"sent": len(pending)}
 
 
 # ── Clients (real clients/companies) ───────────────────────────────────────
