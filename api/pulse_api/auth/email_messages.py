@@ -67,12 +67,23 @@ def org_invite_email(
     return subject, body
 
 
+def _unsubscribe_footer(unsubscribe_url: str | None) -> str:
+    """Trailing unsubscribe line for recipient emails, or empty when no
+    link is supplied."""
+    if not unsubscribe_url:
+        return ""
+    return (
+        f"\n\nDon't want reminders about this? Unsubscribe:\n{unsubscribe_url}"
+    )
+
+
 def engagement_invite_email(
     *,
     deck_url: str,
     org_name: str,
     recipient_name: str | None = None,
     engagement_name: str | None = None,
+    unsubscribe_url: str | None = None,
 ) -> tuple[str, str]:
     """Returns ``(subject, body)`` for the initial deck invite sent to a
     recipient — the operator-triggered email that replaces the manual
@@ -84,6 +95,8 @@ def engagement_invite_email(
         org_name: The consulting org's name, shown in the copy.
         recipient_name: Optional name to greet by.
         engagement_name: Optional engagement label, woven into the ask.
+        unsubscribe_url: Optional per-recipient unsubscribe link; appended
+            as a footer so the recipient can opt out of follow-up reminders.
 
     Returns:
         ``(subject, body)`` ready for ``email.send_email``.
@@ -98,5 +111,33 @@ def engagement_invite_email(
         f"Open your questions here:\n\n"
         f"{deck_url}\n\n"
         f"The link is personal to you — please don't forward it."
+        f"{_unsubscribe_footer(unsubscribe_url)}"
+    )
+    return subject, body
+
+
+def engagement_reminder_email(
+    *,
+    deck_url: str,
+    org_name: str,
+    recipient_name: str | None = None,
+    engagement_name: str | None = None,
+    unsubscribe_url: str | None = None,
+) -> tuple[str, str]:
+    """Returns ``(subject, body)`` for a scheduled reminder to a recipient
+    who was invited but hasn't finished. Same shape as the invite, gentler
+    nudge wording, and always carries the unsubscribe footer.
+    """
+    greeting = f"Hi {recipient_name}," if recipient_name else "Hi,"
+    about = f" for {engagement_name}" if engagement_name else ""
+    subject = f"Reminder: {org_name} is waiting on your answers"
+    body = (
+        f"{greeting}\n\n"
+        f"Just a reminder that {org_name} is still waiting on your answers"
+        f"{about}. Your progress is saved, so you can pick up right where "
+        f"you left off:\n\n"
+        f"{deck_url}\n\n"
+        f"The link is personal to you — please don't forward it."
+        f"{_unsubscribe_footer(unsubscribe_url)}"
     )
     return subject, body

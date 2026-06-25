@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api import reminders
 from pulse_api import storage
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
@@ -24,7 +25,6 @@ from pulse_api.auth.middleware import (
     get_org_scoped_session,
 )
 from pulse_api.card_import import CardImportError, parse_markdown
-from pulse_api.config import settings
 from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
@@ -486,13 +486,13 @@ async def send_invites(
         )
     ).scalar_one_or_none() or "Your consultant"
 
-    base = settings.frontend_base_url.rstrip("/")
     for r in pending:
         subject, body = engagement_invite_email(
-            deck_url=f"{base}/?t={r['token']}",
+            deck_url=reminders.deck_url(r["token"]),
             org_name=str(org_name),
             recipient_name=r.get("name"),
             engagement_name=engagement.get("engagement_name"),
+            unsubscribe_url=reminders.unsubscribe_url(r["id"]),
         )
         await email_module.send_email(r["email"], subject, body)
 

@@ -183,3 +183,11 @@
     owner: root
     group: root
     mode: "0644"
+
+- name: Drop /etc/cron.d/pulse-reminders
+  ansible.builtin.template:
+    src: pulse-reminders.cron.j2
+    dest: /etc/cron.d/pulse-reminders
+    owner: root
+    group: root
+    mode: "0644"

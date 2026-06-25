@@ -1,0 +1,10 @@
+# /etc/cron.d/pulse-reminders — daily recipient reminder emails.
+# Self-contained — separate from other apps' cron entries.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# 09:00 daily — nudge invited recipients who haven't finished. The job is a
+# no-op unless REMINDERS_ENABLED=true in pulse.env, so this line is safe to
+# install even before reminders are switched on. Sources pulse.env for the
+# DB URL + reminder settings, then runs the module from the backend venv.
+0 9 * * * {{ pulse_user }} cd {{ pulse_api_dir }} && set -a && . {{ pulse_env_file }} && set +a && {{ pulse_venv_dir }}/bin/python -m pulse_api.jobs.send_reminders

@@ -159,6 +159,71 @@ async def mark_invited(session: AsyncSession, recipient_ids: list[str]) -> None:
     )
 
 
+async def list_due_reminders(
+    session: AsyncSession,
+    *,
+    inactivity_days: int,
+    cadence_days: int,
+    max_reminders: int,
+) -> list[dict]:
+    """Recipients across ALL tenants who are due a reminder right now.
+
+    Runs on a BYPASSRLS (``pulse_admin``) session from the cron job — it
+    deliberately crosses orgs. A recipient is due when: they were invited
+    (``invited_at`` set) but not unsubscribed and still have an email; their
+    engagement has reminders enabled and at least one card; they haven't
+    finished (answered+skipped < total cards); the engagement has been
+    inactive for ``inactivity_days`` (no recipient activity since the
+    invite); they're under the ``max_reminders`` cap; and the last reminder
+    (if any) was at least ``cadence_days`` ago. Returns the fields the email
+    needs: ``id, email, name, token, engagement_name, org_name``.
+    """
+    result = await session.execute(
+        text(
+            """
+            select
+              r.id::text as id, r.email, r.name, r.token,
+              e.engagement_name, o.name as org_name
+            from public.recipients r
+            join public.engagements e on e.id = r.engagement_id
+            join public.organizations o on o.id = r.org_id
+            where r.invited_at is not null
+              and r.unsubscribed_at is null
+              and r.email is not null
+              and e.reminders_enabled = true
+              and r.reminder_count < :maxr
+              and coalesce(r.last_active_at, r.invited_at)
+                    < now() - make_interval(days => :inactive)
+              and (r.last_reminded_at is null
+                   or r.last_reminded_at < now() - make_interval(days => :cadence))
+              and (select count(*) from public.cards c
+                     where c.engagement_id = e.id) > 0
+              and (select count(*) from public.responses rr
+                     where rr.recipient_id = r.id
+                       and rr.state in ('answered', 'skipped'))
+                  < (select count(*) from public.cards c2
+                       where c2.engagement_id = e.id)
+            order by r.invited_at
+            """
+        ),
+        {"maxr": max_reminders, "inactive": inactivity_days, "cadence": cadence_days},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def mark_reminded(session: AsyncSession, recipient_id: str) -> None:
+    """Record that a reminder just went out: bump ``reminder_count`` and set
+    ``last_reminded_at = now()`` (drives the cadence + cap on the next run)."""
+    await session.execute(
+        text(
+            "update public.recipients "
+            "set reminder_count = reminder_count + 1, last_reminded_at = now() "
+            "where id = cast(:rid as uuid)"
+        ),
+        {"rid": recipient_id},
+    )
+
+
 async def list_upload_paths_for_recipient(
     session: AsyncSession, recipient_id: str
 ) -> list[str]:

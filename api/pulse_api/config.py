@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     email_from: str = ""
 
+    # ── Scheduled reminders ──────────────────────────────────────────────
+    # The daily reminder job (``python -m pulse_api.jobs.send_reminders``,
+    # driven by cron) nudges recipients who were invited but haven't finished.
+    # ``reminders_enabled`` is the deployment-wide master switch — OFF by
+    # default so no reminders go out until an operator turns it on; the
+    # per-engagement ``reminders_enabled`` column is a secondary pause. A
+    # recipient becomes eligible once their engagement has been inactive for
+    # ``reminder_inactivity_days``, then at most every ``reminder_cadence_days``,
+    # capped at ``reminder_max`` total.
+    reminders_enabled: bool = False
+    reminder_inactivity_days: int = 7
+    reminder_cadence_days: int = 7
+    reminder_max: int = 3
+
     cors_allowed_origin: str = "http://localhost:4321"
     upload_dir: Path = Path("/var/lib/pulse/uploads")
     max_upload_bytes: int = 26_214_400

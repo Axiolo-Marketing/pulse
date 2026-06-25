@@ -72,6 +72,15 @@ pulse_microsoft_tenant_id: common
 # app stays in log-only mode.
 pulse_email_from: "Pulse <pulse@notifications.axiolo.com>"
 
+# ── Scheduled reminders ─────────────────────────────────────────────────────
+# The daily `pulse-reminders` cron nudges invited recipients who haven't
+# finished. OFF by default — flip `pulse_reminders_enabled` to true to start
+# sending. Thresholds are in days; `pulse_reminder_max` caps total nudges.
+pulse_reminders_enabled: false
+pulse_reminder_inactivity_days: 7
+pulse_reminder_cadence_days: 7
+pulse_reminder_max: 3
+
 # ── App config ────────────────────────────────────────────────────────────
 # Superadmins. Each email here is stamped is_superadmin=true by migration
 # 0004's data migration (the env var is read at execution time). In v3 this
