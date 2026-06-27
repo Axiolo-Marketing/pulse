@@ -1,4 +1,4 @@
-.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev reset-test-db
+.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev reset-test-db front-lint front-typecheck front-test front-check install-hooks
 
 # ── Local dev ──────────────────────────────────────────────────────────────
 
@@ -40,6 +40,31 @@ reset-test-db:
 
 build:
 	docker compose exec frontend npm run build
+
+# ── Frontend checks — the LOCAL "CI" (we don't run CI; see deploy/README) ──
+# Run in the frontend container. `front-check` is the full gate (lint → unit
+# tests → build) and is what .githooks/pre-push enforces on every push. `build`
+# is `astro check && astro build`, so the typecheck happens inside it — no
+# separate typecheck step needed in the gate. Individual targets are here for
+# convenience.
+
+front-lint:
+	docker compose exec -T frontend npm run lint
+
+front-typecheck:
+	docker compose exec -T frontend npm run typecheck
+
+front-test:
+	docker compose exec -T frontend npm test
+
+front-check:
+	docker compose exec -T frontend sh -c "npm run lint && npm test && npm run build"
+
+# One-time per clone: point git at the tracked hooks dir so .githooks/pre-push
+# runs `front-check` before every push. Bypass once with `git push --no-verify`.
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "Installed: .githooks/pre-push will run 'make front-check' on push."
 
 # ── Production deploy via Ansible ─────────────────────────────────────────
 # The Astro + Python build runs on the VPS (git pull → uv sync → npm build),

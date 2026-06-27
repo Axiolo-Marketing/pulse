@@ -1,7 +1,6 @@
 ---
-import "../styles/admin.css";
-import "../styles/legal.css";
-import UiGate from "../components/UiGate.astro";
+import "../../styles/theme.css";
+import UnsubscribeApp from "../../components/unsubscribe/UnsubscribeApp.tsx";
 const base = import.meta.env.BASE_URL ?? "/";
 const baseSlash = base.endsWith("/") ? base : `${base}/`;
 ---
@@ -10,7 +9,6 @@ const baseSlash = base.endsWith("/") ? base : `${base}/`;
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <UiGate v2Path="/v2/unsubscribe" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#2960F6" />
     <meta name="robots" content="noindex,nofollow" />
@@ -24,17 +22,16 @@ const baseSlash = base.endsWith("/") ? base : `${base}/`;
     />
   </head>
   <body>
-    <div id="unsubscribe-mount">
-      <div class="loading">Loading...</div>
-    </div>
-    <footer class="app-legal-footer">
-      <a href={`${baseSlash}privacy`}>Privacy Policy</a>
-      <span class="sep" aria-hidden="true">·</span>
-      <a href={`${baseSlash}terms`}>Terms of Use</a>
+    <UnsubscribeApp client:only="react" />
+    <footer
+      class="mx-auto flex max-w-md justify-center gap-2 px-5 pb-8 text-xs text-muted-foreground"
+    >
+      <a class="hover:text-foreground" href={`${baseSlash}privacy`}
+        >Privacy Policy</a
+      >
+      <span aria-hidden="true">·</span>
+      <a class="hover:text-foreground" href={`${baseSlash}terms`}>Terms of Use</a
+      >
     </footer>
-
-    <script>
-      import "../scripts/unsubscribe.ts";
-    </script>
   </body>
 </html>

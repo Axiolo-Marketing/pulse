@@ -1,0 +1,45 @@
+---
+// v1 → v2 opt-in gate. Drop into the <head> of a v1 page shell:
+//
+//   <UiGate v2Path="/v2/unsubscribe" />
+//
+// Runs as a blocking inline script (before paint, no flash) so it can't import
+// a module — the logic is self-contained and mirrors src/lib/ui-version.ts.
+//   ?ui=v2  → set sticky cookie + redirect to the v2 page (carrying ?query#hash)
+//   ?ui=v1  → clear the cookie, stay on v1
+//   cookie pulse_ui=v2 (and no ?ui) → redirect to the v2 page
+//   otherwise → stay on v1 (the default)
+interface Props {
+  /** Absolute path of the v2 equivalent of this page, e.g. "/v2/unsubscribe". */
+  v2Path: string;
+}
+const { v2Path } = Astro.props;
+---
+
+<script is:inline define:vars={{ v2Path }}>
+  (function () {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var ui = params.get("ui");
+      var oneYear = 60 * 60 * 24 * 365;
+      if (ui === "v1") {
+        document.cookie = "pulse_ui=; path=/; max-age=0; samesite=lax";
+        return;
+      }
+      if (ui === "v2") {
+        document.cookie =
+          "pulse_ui=v2; path=/; max-age=" + oneYear + "; samesite=lax";
+      }
+      var hasV2Cookie = document.cookie
+        .split("; ")
+        .indexOf("pulse_ui=v2") !== -1;
+      if (ui === "v2" || hasV2Cookie) {
+        window.location.replace(
+          v2Path + window.location.search + window.location.hash,
+        );
+      }
+    } catch (e) {
+      /* never block the page on the gate */
+    }
+  })();
+</script>

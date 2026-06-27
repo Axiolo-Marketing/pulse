@@ -1,0 +1,124 @@
+/*
+ * Pulse v2 design system — Tailwind v4 + shadcn/ui, Axiolo brand.
+ *
+ * This is a FRESH design token scale (not a copy of v1's pulse.css). It keeps
+ * two things deliberately:
+ *   1. The Axiolo brand as the default theme (brand blue, Plus Jakarta Sans, navy ink).
+ *   2. The runtime CSS-variable seam: the customizable brand tokens below
+ *      (--primary, --primary-dark, --primary-soft, --surface-muted, --ink,
+ *      --font-sans) are exactly the properties `src/lib/branding.ts:applyBranding()`
+ *      writes on :root at runtime. shadcn's semantic tokens reference them, so
+ *      per-org branding still re-themes the whole component tree live.
+ *
+ * Imported once by every v2 page shell (src/pages/v2/*.astro).
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  /* ── Customizable brand tokens (branding.ts overrides these at runtime) ──
+     Defaults MUST match BRANDING_DEFAULTS in src/lib/branding.ts so an org with
+     no custom branding renders the Axiolo defaults. */
+  --primary: #2960f6;
+  --primary-dark: #020f82;
+  --primary-soft: #e8eefe;
+  --surface-muted: #f4f4f6;
+  --ink: #0a0f2e;
+  --font-sans:
+    "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+
+  /* ── Fresh neutral + radius scale (v2 redesign — not org-customizable) ── */
+  --radius: 0.75rem;
+  --neutral-50: #f8f9fb;
+  --neutral-100: #f1f2f5;
+  --neutral-200: #e6e8ee;
+  --neutral-400: #9aa1b1;
+  --neutral-500: #6b7280;
+  --neutral-900: #0a0f2e;
+
+  /* ── shadcn semantic tokens → mapped onto the brand + neutral scale ──
+     Names that overlap a brand token (e.g. --primary) intentionally reuse the
+     SAME custom property so live branding flows through with no extra alias. */
+  --background: var(--surface-muted);
+  --foreground: var(--ink);
+
+  --card: #ffffff;
+  --card-foreground: var(--ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--ink);
+
+  --primary-foreground: #ffffff;
+
+  --secondary: var(--primary-soft);
+  --secondary-foreground: var(--primary-dark);
+  --accent: var(--primary-soft);
+  --accent-foreground: var(--primary-dark);
+
+  /* v1's --muted was a TEXT colour; shadcn --muted is a SURFACE. Keep them
+     distinct: --muted is a neutral surface, --muted-foreground is body-gray. */
+  --muted: var(--neutral-100);
+  --muted-foreground: var(--neutral-500);
+
+  --border: var(--neutral-200);
+  --input: var(--neutral-200);
+  --ring: var(--primary);
+
+  /* No red existed in v1 (only amber --warning). Add a destructive for shadcn. */
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  /* Domain status colours (consumed by the bespoke StatusBadge, not shadcn). */
+  --warning: #f59e0b;
+  --warning-soft: #fef3c7;
+  --success: #047857;
+  --success-soft: #d1fae5;
+}
+
+/* Expose the tokens as Tailwind utilities (bg-primary, text-muted-foreground,
+   rounded-lg, font-sans, …). `inline` resolves the var() refs at build time. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+
+  --font-sans: var(--font-sans);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

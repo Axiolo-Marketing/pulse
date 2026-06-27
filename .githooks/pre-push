@@ -1,0 +1,28 @@
+#!/bin/sh
+# Local pre-push gate — the substitute for CI (we don't run CI; see
+# deploy/README.md and ~/.claude/plans/yes-i-want-to-kind-pearl.md).
+#
+# Runs lint, typecheck, unit tests, and the production build in the frontend
+# container before every push. Installed via `make install-hooks` (sets
+# core.hooksPath to .githooks). Bypass once with `git push --no-verify`, or set
+# SKIP_PREPUSH=1 to skip without disabling git's other verifications.
+set -e
+
+if [ "$SKIP_PREPUSH" = "1" ]; then
+  echo "pre-push: skipped (SKIP_PREPUSH=1)"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if ! docker compose ps frontend --format '{{.State}}' 2>/dev/null | grep -q running; then
+  echo "pre-push: the 'frontend' container isn't running, so checks can't run."
+  echo "  Start the dev stack:  make dev   (or: docker compose up -d frontend)"
+  echo "  Or bypass once:       git push --no-verify"
+  exit 1
+fi
+
+echo "pre-push: running local checks (lint → typecheck → test → build)…"
+make front-check
+echo "pre-push: all checks passed ✓"
