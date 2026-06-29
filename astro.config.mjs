@@ -9,4 +9,11 @@ import { defineConfig } from "astro/config";
 export default defineConfig({
   output: "static",
   trailingSlash: "ignore",
+  // Astro 7 changed the `compressHTML` default from `true` to `'jsx'`, which
+  // strips whitespace (incl. newlines) between text and an adjacent inline
+  // element. Our legal pages (terms/privacy) are authored as plain HTML with
+  // inline `<a>` links wrapped onto their own lines, so the new default would
+  // run words into links (e.g. "promptly at<a>info@axiolo.com"). `true`
+  // restores the pre-7 single-space collapse that this prose relies on.
+  compressHTML: true,
 });

@@ -22,7 +22,8 @@
 # install the `npm` package's chain of node-* deps alongside any nodejs that
 # isn't its exact Debian build — which breaks any host that already has
 # nodejs from a prior install. Trust whatever provides node/npm; the version
-# verification tasks below enforce our actual constraint (node >= 18).
+# verification tasks below enforce our actual constraint (node >= 22.12,
+# required by Astro 7 / Vite 8).
 - name: Check whether node and npm are already on PATH
   ansible.builtin.command: "{{ item }} --version"
   register: node_npm_precheck
@@ -143,13 +144,13 @@
   changed_when: false
   failed_when: git_check.rc != 0
 
-- name: Verify Node.js (>=18) is installed
+- name: Verify Node.js (>=22.12, required by Astro 7) is installed
   ansible.builtin.command: node --version
   register: node_check
   changed_when: false
   failed_when: >
     node_check.rc != 0
-    or (node_check.stdout | regex_search('[0-9]+') | int) < 18
+    or (node_check.stdout | regex_replace('^v', '') | trim) is version('22.12.0', '<')
 
 - name: Verify npm is installed
   ansible.builtin.command: npm --version
