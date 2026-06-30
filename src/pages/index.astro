@@ -1,6 +1,7 @@
 ---
 import "../styles/pulse.css";
 import "../styles/legal.css";
+import UiGate from "../components/UiGate.astro";
 const base = import.meta.env.BASE_URL ?? "/";
 const baseSlash = base.endsWith("/") ? base : `${base}/`;
 ---
@@ -9,6 +10,7 @@ const baseSlash = base.endsWith("/") ? base : `${base}/`;
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <UiGate v2Path="/v2/" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#2960F6" />
     <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />

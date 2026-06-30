@@ -1,4 +1,4 @@
-.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev reset-test-db front-lint front-typecheck front-test front-check install-hooks
+.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev seed-deck reset-test-db front-lint front-typecheck front-test front-check install-hooks
 
 # ── Local dev ──────────────────────────────────────────────────────────────
 
@@ -29,6 +29,14 @@ makemigration:
 # manual UI work in /admin/ instead of hand-running SQL.
 seed-dev:
 	docker compose exec backend uv run python -m scripts.dev_seed
+
+# Idempotently seed a full client-facing demo deck (a client → engagement →
+# recipient → cards covering every response type) under the dev Axiolo org.
+# Prints a stable recipient token + deck URL you can open in a browser. Run
+# `make seed-dev` first (creates the org). Safe to re-run — reuses the same
+# engagement/recipient via the fixed token (override with DEV_DECK_TOKEN=...).
+seed-deck:
+	docker compose exec -T backend uv run python -m scripts.dev_seed_deck
 
 # Drop + recreate the pulse_test database. Useful when switching branches has
 # left it at a migration revision that doesn't exist on the current branch.
