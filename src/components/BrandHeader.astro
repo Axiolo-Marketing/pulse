@@ -1,0 +1,22 @@
+---
+// Static Axiolo · Pulse brand chrome for the public v2 shells (invite, etc.).
+// No JS — rendered at build time into the page.
+const base = import.meta.env.BASE_URL ?? "/";
+const baseSlash = base.endsWith("/") ? base : `${base}/`;
+---
+
+<header
+  class="flex items-center justify-center border-b border-border bg-card px-5 py-4"
+  role="banner"
+>
+  <span class="flex items-center gap-2 text-base font-semibold text-foreground">
+    <img
+      src={`${baseSlash}axiolo-logo.svg`}
+      alt="Axiolo"
+      width="84"
+      height="23"
+    />
+    <span aria-hidden="true" class="text-muted-foreground">·</span>
+    Pulse
+  </span>
+</header>
