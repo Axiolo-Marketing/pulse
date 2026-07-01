@@ -194,6 +194,14 @@ export function EngagementList(): React.ReactElement {
                 {rows.map((s) => {
                   const st = engagementStatus(s);
                   const expected = s.total_cards * s.recipients_count;
+                  // `expected` is 0 when there are no cards or no respondents;
+                  // "0/0" would be meaningless, so label the reason instead.
+                  const badge =
+                    s.total_cards === 0
+                      ? "No cards"
+                      : s.recipients_count === 0
+                        ? "No respondents"
+                        : `${s.answered_responses}/${expected}`;
                   return (
                     <button
                       key={s.id}
@@ -215,9 +223,15 @@ export function EngagementList(): React.ReactElement {
                           "whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold",
                           STATUS_BADGE[st],
                         )}
-                        title={`${s.answered_responses} of ${expected} answers in — ${s.total_cards} question${s.total_cards === 1 ? "" : "s"} × ${s.recipients_count} respondent${s.recipients_count === 1 ? "" : "s"} · ${STATUS_LABELS[st]} (${s.completed_recipients}/${s.recipients_count} finished)`}
+                        title={
+                          s.total_cards === 0
+                            ? "No cards in this deck yet"
+                            : s.recipients_count === 0
+                              ? `${s.total_cards} question${s.total_cards === 1 ? "" : "s"}, no respondents yet`
+                              : `${s.answered_responses} of ${expected} answers in — ${s.total_cards} question${s.total_cards === 1 ? "" : "s"} × ${s.recipients_count} respondent${s.recipients_count === 1 ? "" : "s"} · ${STATUS_LABELS[st]} (${s.completed_recipients}/${s.recipients_count} finished)`
+                        }
                       >
-                        {s.answered_responses}/{expected}
+                        {badge}
                       </span>
                       <ChevronRight
                         className="size-4 shrink-0 text-muted-foreground"
