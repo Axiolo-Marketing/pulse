@@ -268,9 +268,9 @@ export function EngagementList(): React.ReactElement {
                           {s.recipients.map((r) => (
                             <li
                               key={r.id}
-                              className="flex items-center justify-between gap-2 text-sm"
+                              className="flex items-center gap-2 text-sm"
                             >
-                              <span className="truncate text-foreground">
+                              <span className="min-w-0 truncate text-foreground">
                                 {r.email || r.name || "Respondent"}
                               </span>
                               <span
