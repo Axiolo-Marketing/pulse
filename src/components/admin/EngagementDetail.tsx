@@ -49,10 +49,7 @@ function buildMarkdown(detail: EngagementDetailData): string {
         (x) => x.recipient_id === r.id && x.card_id === card.id,
       );
       const ups = detail.uploads.filter(
-        (x) =>
-          x.recipient_id === r.id &&
-          x.card_id === card.id &&
-          x.kind === "file",
+        (x) => x.recipient_id === r.id && x.card_id === card.id,
       );
       blocks.push(
         renderCardMarkdown({
@@ -64,6 +61,8 @@ function buildMarkdown(detail: EngagementDetailData): string {
             id: u.id,
             name: u.file_name,
             sizeBytes: u.file_size_bytes,
+            url: adminApi.uploadDownloadUrl(u.id),
+            kind: u.kind,
           })),
           recipientLabel: recipientLabel(r),
         }),

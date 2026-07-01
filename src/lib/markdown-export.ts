@@ -5,6 +5,14 @@ export interface UploadInfo {
   id: string;
   name: string;
   sizeBytes: number;
+  /** Direct download URL (admin-authed) so the export links straight to the
+   * file / voice recording. Optional: when omitted the export falls back to
+   * naming the file (the legacy behaviour). */
+  url?: string;
+  /** `"file"` attachments render as a file list; `"voice"` recordings render
+   * as a separate "Voice answer" link. Omitted (legacy) uploads are treated
+   * as files. */
+  kind?: "file" | "voice";
 }
 
 export interface ExportArgs {
@@ -12,7 +20,9 @@ export interface ExportArgs {
   client: Engagement;
   response: ClientResponse | undefined;
   status: Status;
-  uploads: UploadInfo[]; // attachment summaries (no URLs — files live in admin)
+  /** Every upload for this card+recipient (both files and voice notes), each
+   * with a download `url`. */
+  uploads: UploadInfo[];
   /** Which recipient these answers belong to. Multi-respondent migration:
    * the export heading reads `Response from {client.name} — {recipientLabel}`.
    * Omit (or pass empty) to fall back to just the client name. */
@@ -80,6 +90,16 @@ function renderResponseBody(
   }
   const v = (response.response_value ?? {}) as ResponseValueShape;
   const noteSuffix = v.note ? `\n\n**Note:** ${v.note}` : "";
+  // Legacy callers don't set `kind`; treat those as files.
+  const files = uploads.filter((u) => u.kind !== "voice");
+  const voices = uploads.filter((u) => u.kind === "voice");
+  // Voice recordings can accompany any card type, so append them after the
+  // response body (like the note) rather than switching on response_type.
+  const voiceSuffix = voices.length
+    ? `\n\n**Voice answer:** ${voices
+        .map((u) => (u.url ? `[${u.name}](${u.url})` : u.name))
+        .join(", ")}`
+    : "";
 
   if (response.state === "skipped") {
     return v.note ? `_Skipped._${noteSuffix}` : "_Skipped._";
@@ -120,21 +140,28 @@ function renderResponseBody(
         .join("\n");
       break;
     case "file-upload":
-      if (uploads.length === 0) {
+      if (files.length === 0) {
         body = "_No files uploaded._";
       } else {
-        const list = uploads
-          .map((u) => `- \`${u.name}\` (${formatBytes(u.sizeBytes)})`)
+        const list = files
+          .map((u) =>
+            u.url
+              ? `- [${u.name}](${u.url}) (${formatBytes(u.sizeBytes)})`
+              : `- \`${u.name}\` (${formatBytes(u.sizeBytes)})`,
+          )
           .join("\n");
-        body =
-          `**Files attached (${uploads.length}):**\n${list}\n\n` +
-          `_Files live in the Pulse admin. Search for the file names above to locate them in your local archive._`;
+        // With links the reader can open the file directly; without them
+        // (legacy) point back to the admin.
+        const hint = files.some((u) => u.url)
+          ? ""
+          : `\n\n_Files live in the Pulse admin. Search for the file names above to locate them in your local archive._`;
+        body = `**Files attached (${files.length}):**\n${list}${hint}`;
       }
       break;
     default:
       body = "";
   }
-  return body + noteSuffix;
+  return body + voiceSuffix + noteSuffix;
 }
 
 // Combine multiple card blocks into one paste-ready markdown string.
