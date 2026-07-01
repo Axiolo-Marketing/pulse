@@ -15,6 +15,13 @@ import {
 } from "@/lib/engagement-status";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { AdminError, AdminLoading } from "./states";
 import { NewEngagementDialog } from "./NewEngagementDialog";
@@ -36,28 +43,33 @@ function fmtDate(iso: string | null): string {
   });
 }
 
-function Select({
+function FilterSelect({
   label,
   value,
   onChange,
-  children,
+  options,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
-  children: React.ReactNode;
+  options: { value: string; label: string }[];
 }): React.ReactElement {
   return (
-    <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-      {label}
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-9 rounded-md border border-input bg-card px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {children}
-      </select>
-    </label>
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="w-44" aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -142,34 +154,48 @@ export function EngagementList(): React.ReactElement {
       <NewEngagementDialog open={newOpen} onOpenChange={setNewOpen} />
 
       <div className="mb-6 flex flex-wrap gap-3">
-        <Select label="Status" value={status} onChange={(v) => setStatus(v as never)}>
-          <option value="all">All statuses</option>
-          <option value="complete">Complete</option>
-          <option value="in_progress">In progress</option>
-          <option value="waiting">Waiting</option>
-        </Select>
-        <Select label="Client" value={client} onChange={setClient}>
-          <option value="all">All clients</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </Select>
-        <Select label="Owner" value={owner} onChange={setOwner}>
-          <option value="all">All owners</option>
-          {owners.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-          {hasUnassigned ? <option value={UNASSIGNED}>Unassigned</option> : null}
-        </Select>
-        <Select label="Sort" value={sort} onChange={(v) => setSort(v as never)}>
-          <option value="name">Name (A–Z)</option>
-          <option value="last_active">Last active</option>
-          <option value="status">Status</option>
-        </Select>
+        <FilterSelect
+          label="Status"
+          value={status}
+          onChange={(v) => setStatus(v as never)}
+          options={[
+            { value: "all", label: "All statuses" },
+            { value: "complete", label: "Complete" },
+            { value: "in_progress", label: "In progress" },
+            { value: "waiting", label: "Waiting" },
+          ]}
+        />
+        <FilterSelect
+          label="Client"
+          value={client}
+          onChange={setClient}
+          options={[
+            { value: "all", label: "All clients" },
+            ...clients.map((c) => ({ value: c.id, label: c.name })),
+          ]}
+        />
+        <FilterSelect
+          label="Owner"
+          value={owner}
+          onChange={setOwner}
+          options={[
+            { value: "all", label: "All owners" },
+            ...owners.map((o) => ({ value: o, label: o })),
+            ...(hasUnassigned
+              ? [{ value: UNASSIGNED, label: "Unassigned" }]
+              : []),
+          ]}
+        />
+        <FilterSelect
+          label="Sort"
+          value={sort}
+          onChange={(v) => setSort(v as never)}
+          options={[
+            { value: "name", label: "Name (A–Z)" },
+            { value: "last_active", label: "Last active" },
+            { value: "status", label: "Status" },
+          ]}
+        />
       </div>
 
       {sections.length === 0 ? (
