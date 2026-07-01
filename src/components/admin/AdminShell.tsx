@@ -8,6 +8,8 @@ import { applyBranding } from "@/lib/branding";
 import { EngagementDetail } from "./EngagementDetail";
 import { EngagementList } from "./EngagementList";
 import { OrgSwitcher } from "./OrgSwitcher";
+import { SettingsPage } from "./settings/SettingsPage";
+import { SuperadminPage } from "./superadmin/SuperadminPage";
 import { UserMenu } from "./UserMenu";
 
 export function AdminShell({ user }: { user: AuthUser }): React.ReactElement {
@@ -68,6 +70,21 @@ export function AdminShell({ user }: { user: AuthUser }): React.ReactElement {
         <Routes>
           <Route path="/" element={<EngagementList />} />
           <Route path="/client/:id" element={<EngagementDetail />} />
+          <Route
+            path="/settings"
+            element={<Navigate to="/settings/personal" replace />}
+          />
+          <Route path="/settings/:tab" element={<SettingsPage />} />
+          <Route
+            path="/superadmin"
+            element={
+              user.is_superadmin ? (
+                <SuperadminPage />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

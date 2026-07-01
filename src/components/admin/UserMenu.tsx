@@ -1,4 +1,5 @@
-import { LogOut } from "lucide-react";
+import { LogOut, Settings, ShieldUser } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import type { AuthUser } from "@/lib/api";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -19,6 +20,7 @@ export function UserMenu({
   user: AuthUser;
   onSignOut: () => void;
 }): React.ReactElement {
+  const navigate = useNavigate();
   const display = user.name?.trim() || user.email;
   const initial = (display[0] ?? "?").toUpperCase();
 
@@ -45,6 +47,17 @@ export function UserMenu({
             {user.email}
           </div>
         </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => navigate("/settings/personal")}>
+          <Settings />
+          Settings
+        </DropdownMenuItem>
+        {user.is_superadmin ? (
+          <DropdownMenuItem onSelect={() => navigate("/superadmin")}>
+            <ShieldUser />
+            Superadmin
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onSignOut}>
           <LogOut />
