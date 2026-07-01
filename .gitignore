@@ -39,5 +39,7 @@ deploy/vault_secret
 # Sanity check before committing all.yml:
 #   ansible-vault view <(git show :deploy/group_vars/all.yml) --vault-password-file deploy/vault_secret >/dev/null
 
-# playwright session snapshots
+# playwright session snapshots + E2E run artifacts
 .playwright-mcp/
+test-results/
+playwright-report/

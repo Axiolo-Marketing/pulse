@@ -1,4 +1,4 @@
-.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev seed-deck reset-test-db front-lint front-typecheck front-test front-check install-hooks
+.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev seed-deck reset-test-db front-lint front-typecheck front-test front-check test-e2e install-hooks
 
 # ── Local dev ──────────────────────────────────────────────────────────────
 
@@ -67,6 +67,13 @@ front-test:
 
 front-check:
 	docker compose exec -T frontend sh -c "npm run lint && npm test && npm run build"
+
+# Playwright E2E — runs on the HOST, not in a container: Playwright's browsers
+# need glibc, which the alpine dev container lacks. Installs host deps + chromium
+# on first run. Requires the dev stack up (`make dev`) + seeded deck
+# (`make seed-deck`). global-setup resets the demo recipient each run.
+test-e2e:
+	npm ci --no-audit --no-fund && npx playwright install chromium && npx playwright test
 
 # One-time per clone: point git at the tracked hooks dir so .githooks/pre-push
 # runs `front-check` before every push. Bypass once with `git push --no-verify`.
