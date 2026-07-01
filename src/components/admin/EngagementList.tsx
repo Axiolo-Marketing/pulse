@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Check, ChevronsUpDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import {
   adminApi,
   clientsApi,
+  type ClientSummary,
   type EngagementSummary,
 } from "@/lib/api";
 import {
@@ -14,6 +16,19 @@ import {
 } from "@/lib/engagement-status";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -76,6 +91,81 @@ function FilterSelect({
           ))}
         </SelectContent>
       </Select>
+    </div>
+  );
+}
+
+/** Searchable client filter — a Popover + Command combobox so a long client
+ * list stays easy to scan and pick from. "all" clears the filter. */
+function ClientFilter({
+  value,
+  onChange,
+  clients,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  clients: ClientSummary[];
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const selected = clients.find((c) => c.id === value);
+  const label = value === "all" ? "All clients" : (selected?.name ?? "All clients");
+
+  function pick(v: string): void {
+    onChange(v);
+    setOpen(false);
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">Client</span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            aria-label="Client"
+            className="h-9 w-44 justify-between font-normal"
+          >
+            <span className="truncate">{label}</span>
+            <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-56 p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search clients…" />
+            <CommandList>
+              <CommandEmpty>No clients found.</CommandEmpty>
+              <CommandGroup>
+                <CommandItem value="All clients" onSelect={() => pick("all")}>
+                  All clients
+                  <Check
+                    className={cn(
+                      "ml-auto size-4",
+                      value === "all" ? "opacity-100" : "opacity-0",
+                    )}
+                  />
+                </CommandItem>
+                {clients.map((c) => (
+                  <CommandItem
+                    key={c.id}
+                    value={c.name}
+                    onSelect={() => pick(c.id)}
+                  >
+                    <span className="truncate">{c.name}</span>
+                    <Check
+                      className={cn(
+                        "ml-auto size-4",
+                        value === c.id ? "opacity-100" : "opacity-0",
+                      )}
+                    />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -172,15 +262,7 @@ export function EngagementList(): React.ReactElement {
             { value: "waiting", label: "Waiting" },
           ]}
         />
-        <FilterSelect
-          label="Client"
-          value={client}
-          onChange={setClient}
-          options={[
-            { value: "all", label: "All clients" },
-            ...clients.map((c) => ({ value: c.id, label: c.name })),
-          ]}
-        />
+        <ClientFilter value={client} onChange={setClient} clients={clients} />
         <FilterSelect
           label="Owner"
           value={owner}
