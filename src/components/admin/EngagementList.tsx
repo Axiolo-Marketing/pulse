@@ -80,7 +80,7 @@ function FilterSelect({
     <div className="flex flex-col gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="w-44" aria-label={label}>
+        <SelectTrigger className="w-full" aria-label={label}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -125,13 +125,16 @@ function ClientFilter({
             role="combobox"
             aria-expanded={open}
             aria-label="Client"
-            className="h-9 w-44 justify-between font-normal"
+            className="h-9 w-full justify-between font-normal"
           >
             <span className="truncate">{label}</span>
             <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-56 p-0" align="start">
+        <PopoverContent
+          className="w-[var(--radix-popover-trigger-width)] min-w-52 p-0"
+          align="start"
+        >
           <Command>
             <CommandInput placeholder="Search clients…" />
             <CommandList>
@@ -250,7 +253,7 @@ export function EngagementList(): React.ReactElement {
       </div>
       <NewEngagementDialog open={newOpen} onOpenChange={setNewOpen} />
 
-      <div className="mb-6 flex flex-wrap gap-3">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <FilterSelect
           label="Status"
           value={status}
