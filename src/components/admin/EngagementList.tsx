@@ -193,6 +193,7 @@ export function EngagementList(): React.ReactElement {
               <div className="overflow-hidden rounded-lg border border-border bg-card">
                 {rows.map((s) => {
                   const st = engagementStatus(s);
+                  const expected = s.total_cards * s.recipients_count;
                   return (
                     <button
                       key={s.id}
@@ -214,9 +215,9 @@ export function EngagementList(): React.ReactElement {
                           "whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold",
                           STATUS_BADGE[st],
                         )}
-                        title={`${STATUS_LABELS[st]} · ${s.completed_recipients} of ${s.recipients_count} respondents complete`}
+                        title={`${s.answered_responses} of ${expected} answers in — ${s.total_cards} question${s.total_cards === 1 ? "" : "s"} × ${s.recipients_count} respondent${s.recipients_count === 1 ? "" : "s"} · ${STATUS_LABELS[st]} (${s.completed_recipients}/${s.recipients_count} finished)`}
                       >
-                        {s.completed_recipients}/{s.recipients_count}
+                        {s.answered_responses}/{expected}
                       </span>
                       <ChevronRight
                         className="size-4 shrink-0 text-muted-foreground"

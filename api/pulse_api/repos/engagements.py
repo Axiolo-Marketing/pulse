@@ -116,6 +116,11 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
     reach ``total_cards`` (and the deck has cards). ``last_active_at`` is the
     most-recent activity across the engagement's recipients.
 
+    ``answered_responses`` is the raw answered+skipped response count across
+    *all* recipients — the numerator the admin list divides by the expected
+    total (``total_cards * recipients_count``) to show deck-wide answer
+    progress alongside the per-recipient rollup.
+
     JOINs ``clients`` for the owning client and carries the raw
     ``created_by`` id; the owner's display name/email is enriched in a
     SECOND pass at the route layer (``users`` isn't granted to
@@ -146,7 +151,10 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
                            and rr.state in ('answered', 'skipped'))
                       >= (select count(*) from public.cards cd3
                             where cd3.engagement_id = c.id)
-              )::int                                             as completed_recipients
+              )::int                                             as completed_recipients,
+              (select count(*) from public.responses rr
+                 where rr.engagement_id = c.id
+                   and rr.state in ('answered', 'skipped'))::int as answered_responses
             from public.engagements c
             join public.clients cl on cl.id = c.client_id
             order by c.created_at desc

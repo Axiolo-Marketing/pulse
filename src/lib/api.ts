@@ -472,6 +472,10 @@ export interface EngagementSummary {
   /** How many recipients have completed every card. Drives the derived
    * status: complete when it equals `recipients_count` (and that's > 0). */
   completed_recipients: number;
+  /** Total answered+skipped responses across *all* recipients. The list
+   * badge shows this over the expected total (`total_cards *
+   * recipients_count`) as deck-wide answer progress. */
+  answered_responses: number;
 }
 
 /** One recipient of an engagement — its own magic link (`token`), answers

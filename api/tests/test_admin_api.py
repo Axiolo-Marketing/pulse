@@ -110,6 +110,9 @@ async def test_list_engagements_includes_aggregates(
     assert row["recipients_count"] == 1
     # 2 of 8 cards done → the lone recipient is not yet complete.
     assert row["completed_recipients"] == 0
+    # One answered + one skipped = 2 responses in, across all recipients.
+    # The admin list shows this over the expected total (cards * recipients).
+    assert row["answered_responses"] == 2
 
 
 async def test_list_engagements_returns_all_clients(
