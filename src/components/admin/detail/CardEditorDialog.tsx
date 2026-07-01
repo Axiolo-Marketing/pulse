@@ -299,14 +299,14 @@ export function CardEditorDialog({
               </Button>
             </div>
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="card-skip-allowed">Allow skipping</Label>
+          <div className="flex items-center gap-2">
             <Switch
               id="card-skip-allowed"
               checked={skipAllowed}
               onCheckedChange={setSkipAllowed}
               disabled={submitting}
             />
+            <Label htmlFor="card-skip-allowed">Allow skipping</Label>
           </div>
           {error ? (
             <p className="text-sm font-medium text-destructive" role="alert">

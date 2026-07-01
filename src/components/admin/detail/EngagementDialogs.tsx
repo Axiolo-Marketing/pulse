@@ -85,16 +85,22 @@ export function EditEngagementDialog({
               placeholder="Optional"
             />
           </div>
-          <label className="flex items-center justify-between gap-4">
-            <span className="text-sm text-foreground">
-              Enable voice answers
-            </span>
-            <Switch checked={voice} onCheckedChange={setVoice} />
-          </label>
-          <label className="flex items-center justify-between gap-4">
-            <span className="text-sm text-foreground">Send reminder emails</span>
-            <Switch checked={reminders} onCheckedChange={setReminders} />
-          </label>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="ee-voice"
+              checked={voice}
+              onCheckedChange={setVoice}
+            />
+            <Label htmlFor="ee-voice">Enable voice answers</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="ee-reminders"
+              checked={reminders}
+              onCheckedChange={setReminders}
+            />
+            <Label htmlFor="ee-reminders">Send reminder emails</Label>
+          </div>
           {error ? (
             <p className="text-sm text-destructive" role="alert">
               {error}
