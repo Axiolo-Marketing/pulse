@@ -1,17 +1,33 @@
-import type { Card as CardModel, ClientResponse } from "@/lib/api";
+import { FileText } from "lucide-react";
+
+import type { Card as CardModel, ClientResponse, UploadRow } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 
 import { ResumeBanner, SaveBanner, TopBar } from "./chrome";
+import { FileUploadInput } from "./FileUpload";
+import type { DeckHandlers } from "./handlers";
 import {
   ConfirmEditView,
   ContactShareInput,
   DocumentLinkInput,
   EditBody,
-  FileUploadPlaceholder,
   MultiSelectInput,
   SingleSelectInput,
   TextInput,
 } from "./inputs";
-import type { DeckHandlers } from "./handlers";
+import { VoiceRecorder } from "./VoiceRecorder";
+
+/** File/voice data + callbacks for the current card. */
+interface CardMedia {
+  token: string;
+  voiceEnabled: boolean;
+  cardFiles: UploadRow[];
+  voiceUpload?: UploadRow;
+  onFileUploaded: (row: UploadRow) => void;
+  onFileRemoved: (uploadId: string) => void;
+  onVoiceSaved: (row: UploadRow) => void;
+  onVoiceDeleted: () => void;
+}
 
 function PriorHint({
   card,
@@ -46,12 +62,14 @@ function InputForType({
   saving,
   existing,
   handlers,
+  media,
 }: {
   card: CardModel;
   mode: "view" | "edit" | "saving";
   saving: boolean;
   existing?: ClientResponse;
   handlers: DeckHandlers;
+  media: CardMedia;
 }): React.ReactElement | null {
   if (card.response_type === "confirm-edit") {
     if (mode === "edit") {
@@ -131,9 +149,15 @@ function InputForType({
       );
     case "file-upload":
       return (
-        <FileUploadPlaceholder
+        <FileUploadInput
           card={card}
           saving={saving}
+          token={media.token}
+          existingFiles={media.cardFiles}
+          hasVoice={!!media.voiceUpload}
+          onUploaded={media.onFileUploaded}
+          onRemoved={media.onFileRemoved}
+          onContinue={handlers.onFilesContinue}
           onSkip={handlers.onSkip}
         />
       );
@@ -153,6 +177,7 @@ export function CardView({
   orgLogoSrc,
   orgName,
   handlers,
+  media,
 }: {
   card: CardModel;
   position: number;
@@ -164,8 +189,10 @@ export function CardView({
   orgLogoSrc?: string | null;
   orgName?: string | null;
   handlers: DeckHandlers;
+  media: CardMedia;
 }): React.ReactElement {
   const saving = mode === "saving";
+  const showVoice = media.voiceEnabled && mode !== "edit";
   return (
     <div className="flex min-h-dvh flex-col">
       <TopBar
@@ -198,6 +225,18 @@ export function CardView({
           <p className="text-[0.95rem] leading-relaxed text-muted-foreground">
             {card.context}
           </p>
+          {card.attachment_path ? (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={handlers.onAttachmentOpen}
+              className="mt-4"
+            >
+              <FileText />
+              View Active Reference
+            </Button>
+          ) : null}
           <p className="mt-4 text-[1.05rem] font-semibold text-foreground">
             {card.question}
           </p>
@@ -209,8 +248,22 @@ export function CardView({
               saving={saving}
               existing={existing}
               handlers={handlers}
+              media={media}
             />
           </div>
+          {showVoice ? (
+            <div className="mt-6 border-t border-border pt-5">
+              <VoiceRecorder
+                key={card.id}
+                token={media.token}
+                cardId={card.id}
+                existingUpload={media.voiceUpload}
+                disabled={saving}
+                onSaved={media.onVoiceSaved}
+                onDeleted={media.onVoiceDeleted}
+              />
+            </div>
+          ) : null}
         </article>
       </main>
     </div>

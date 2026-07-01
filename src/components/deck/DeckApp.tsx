@@ -5,9 +5,11 @@ import {
   type Card as CardModel,
   type ClientResponse,
   type Engagement,
+  type UploadRow,
 } from "@/lib/api";
 import { applyBranding } from "@/lib/branding";
 
+import { AttachmentModal } from "./AttachmentModal";
 import { CardPicker } from "./CardPicker";
 import { CardView } from "./CardView";
 import { deckReducer, initialDeckState } from "./deck-reducer";
@@ -19,6 +21,7 @@ interface ReadyBoot {
   engagement: Engagement;
   cards: CardModel[];
   responses: ClientResponse[];
+  uploads: UploadRow[];
   bootIndex: number;
   orgLogoSrc: string | null;
 }
@@ -59,9 +62,10 @@ export default function DeckApp(): React.ReactElement {
     (async () => {
       try {
         const engagement = await clientApi.me(token);
-        const [cards, responses] = await Promise.all([
+        const [cards, responses, uploads] = await Promise.all([
           clientApi.cards(token),
           clientApi.responses(token),
+          clientApi.uploads(token),
         ]);
         if (cancelled) return;
         applyBranding(engagement.org_branding);
@@ -74,6 +78,7 @@ export default function DeckApp(): React.ReactElement {
             engagement,
             cards,
             responses,
+            uploads,
             bootIndex: computeBootIndex(cards, responses),
             orgLogoSrc: logoUrl,
           },
@@ -114,8 +119,30 @@ function DeckRunner({
   const [ui, dispatch] = useReducer(deckReducer, undefined, () =>
     initialDeckState(boot.bootIndex, total),
   );
+  const voiceEnabled = engagement.voice_enabled;
   const [responses, setResponses] = useState<Map<string, ClientResponse>>(
     () => new Map(boot.responses.map((r) => [r.card_id, r])),
+  );
+  const [fileUploads, setFileUploads] = useState<Map<string, UploadRow[]>>(
+    () => {
+      const m = new Map<string, UploadRow[]>();
+      for (const u of boot.uploads) {
+        if (u.kind !== "file") continue;
+        m.set(u.card_id, [...(m.get(u.card_id) ?? []), u]);
+      }
+      return m;
+    },
+  );
+  const [voiceUploads, setVoiceUploads] = useState<Map<string, UploadRow>>(
+    () => {
+      const m = new Map<string, UploadRow>();
+      if (voiceEnabled) {
+        for (const u of boot.uploads) {
+          if (u.kind === "voice") m.set(u.card_id, u); // one per card
+        }
+      }
+      return m;
+    },
   );
 
   const pendingRef = useRef<PendingAction | null>(null);
@@ -167,7 +194,9 @@ function DeckRunner({
     pendingRef.current = action;
     dispatch({ type: "saveStart" });
 
-    const { state, response_value } = encodeResponse(action);
+    const fileIds = (fileUploads.get(current.id) ?? []).map((u) => u.id);
+    const hasVoice = voiceUploads.has(current.id);
+    const { state, response_value } = encodeResponse(action, fileIds, hasVoice);
 
     let saved: ClientResponse;
     try {
@@ -210,6 +239,8 @@ function DeckRunner({
     onLinkSubmit: (url, note) => void performSave({ kind: "link", url, note }),
     onContactSubmit: (contact, note) =>
       void performSave({ kind: "contact", ...contact, note }),
+    onFilesContinue: (note) =>
+      void performSave({ kind: "files-continue", note }),
     onSkip: (note) => void performSave({ kind: "skip", note }),
     onRetry: () => {
       const p = pendingRef.current;
@@ -222,9 +253,41 @@ function DeckRunner({
     onNavJumpTo: (index) => dispatch({ type: "navigate", index }),
     onPickerOpen: () => dispatch({ type: "openPicker" }),
     onPickerClose: () => dispatch({ type: "closePicker" }),
+    onAttachmentOpen: () => dispatch({ type: "openModal" }),
+    onAttachmentClose: () => dispatch({ type: "closeModal" }),
   };
 
   if (!card) return <CompleteCard name={engagement.recipient_name} />;
+
+  const media = {
+    token,
+    voiceEnabled,
+    cardFiles: fileUploads.get(card.id) ?? [],
+    voiceUpload: voiceUploads.get(card.id),
+    onFileUploaded: (row: UploadRow) =>
+      setFileUploads((m) => {
+        const n = new Map(m);
+        n.set(row.card_id, [...(n.get(row.card_id) ?? []), row]);
+        return n;
+      }),
+    onFileRemoved: (uploadId: string) =>
+      setFileUploads((m) => {
+        const n = new Map(m);
+        n.set(
+          card.id,
+          (n.get(card.id) ?? []).filter((u) => u.id !== uploadId),
+        );
+        return n;
+      }),
+    onVoiceSaved: (row: UploadRow) =>
+      setVoiceUploads((m) => new Map(m).set(card.id, row)),
+    onVoiceDeleted: () =>
+      setVoiceUploads((m) => {
+        const n = new Map(m);
+        n.delete(card.id);
+        return n;
+      }),
+  };
 
   return (
     <>
@@ -239,6 +302,7 @@ function DeckRunner({
         orgLogoSrc={boot.orgLogoSrc}
         orgName={engagement.name}
         handlers={handlers}
+        media={media}
       />
       {ui.pickerOpen ? (
         <CardPicker
@@ -247,6 +311,13 @@ function DeckRunner({
           currentIndex={ui.index}
           onJump={handlers.onNavJumpTo}
           onClose={handlers.onPickerClose}
+        />
+      ) : null}
+      {ui.modalOpen && card.attachment_path ? (
+        <AttachmentModal
+          title={card.title}
+          path={card.attachment_path}
+          onClose={handlers.onAttachmentClose}
         />
       ) : null}
     </>

@@ -14,6 +14,7 @@ export interface DeckHandlers {
     contact: { name: string; email: string; role: string },
     note?: string,
   ) => void;
+  onFilesContinue: (note?: string) => void;
   onSkip: (note?: string) => void;
   onRetry: () => void;
   onNavBack: () => void;
@@ -21,4 +22,6 @@ export interface DeckHandlers {
   onNavJumpTo: (index: number) => void;
   onPickerOpen: () => void;
   onPickerClose: () => void;
+  onAttachmentOpen: () => void;
+  onAttachmentClose: () => void;
 }

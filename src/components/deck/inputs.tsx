@@ -174,7 +174,11 @@ export function SingleSelectInput({
   const options = card.options ?? [];
   return (
     <>
-      <div className="flex flex-col gap-2" role="radiogroup">
+      <div
+        className="flex flex-col gap-2"
+        role="radiogroup"
+        aria-label={card.question}
+      >
         {options.map((option) => {
           const isSel = option === selected;
           return (
@@ -244,7 +248,11 @@ export function MultiSelectInput({
 
   return (
     <>
-      <div className="flex flex-col gap-2" role="group">
+      <div
+        className="flex flex-col gap-2"
+        role="group"
+        aria-label={card.question}
+      >
         {options.map((option) => {
           const isSel = selected.has(option);
           return (
@@ -497,25 +505,3 @@ export function ContactShareInput({
   );
 }
 
-// ── file-upload (placeholder — full upload UI lands next) ────────────────────
-
-export function FileUploadPlaceholder({
-  card,
-  saving,
-  onSkip,
-}: {
-  card: CardModel;
-  saving: boolean;
-  onSkip: (note?: string) => void;
-}): React.ReactElement {
-  return (
-    <>
-      <p className="rounded-lg border border-dashed border-border bg-muted px-4 py-6 text-center text-sm text-muted-foreground">
-        File upload is coming to the new experience shortly.
-      </p>
-      <Actions>
-        <SkipButton card={card} saving={saving} onSkip={() => onSkip()} />
-      </Actions>
-    </>
-  );
-}

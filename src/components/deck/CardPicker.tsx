@@ -1,8 +1,10 @@
-import { useEffect } from "react";
+import { useRef } from "react";
 import { X } from "lucide-react";
 
 import type { Card as CardModel, ClientResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+import { useModalA11y } from "./use-modal-a11y";
 
 function badgeFor(resp?: ClientResponse): { label: string; cls: string } {
   switch (resp?.state) {
@@ -30,13 +32,8 @@ export function CardPicker({
   onJump: (index: number) => void;
   onClose: () => void;
 }): React.ReactElement {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, onClose);
 
   return (
     <div
@@ -52,7 +49,11 @@ export function CardPicker({
         className="absolute inset-0 cursor-default bg-black/45"
         onClick={onClose}
       />
-      <div className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl bg-card shadow-lg">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl bg-card shadow-lg outline-none"
+      >
         <header className="flex items-center justify-between bg-foreground px-4 py-3 text-[color:var(--card)]">
           <span className="font-semibold">Jump to card</span>
           <button
