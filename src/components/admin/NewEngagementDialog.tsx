@@ -176,14 +176,14 @@ export function NewEngagementDialog({
               disabled={submitting}
             />
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="new-eng-voice">Enable voice answers</Label>
+          <div className="flex items-center gap-2">
             <Switch
               id="new-eng-voice"
               checked={voiceEnabled}
               onCheckedChange={setVoiceEnabled}
               disabled={submitting}
             />
+            <Label htmlFor="new-eng-voice">Enable voice answers</Label>
           </div>
           {error ? (
             <p className="text-sm font-medium text-destructive" role="alert">
