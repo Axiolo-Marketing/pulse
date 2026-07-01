@@ -113,6 +113,11 @@ async def test_list_engagements_includes_aggregates(
     # One answered + one skipped = 2 responses in, across all recipients.
     # The admin list shows this over the expected total (cards * recipients).
     assert row["answered_responses"] == 2
+    # The per-recipient breakdown carries each respondent + their own
+    # answered-of-total_cards count (the list renders a badge per recipient).
+    assert len(row["recipients"]) == 1
+    assert row["recipients"][0]["answered"] == 2
+    assert "email" in row["recipients"][0]
 
 
 async def test_list_engagements_returns_all_clients(

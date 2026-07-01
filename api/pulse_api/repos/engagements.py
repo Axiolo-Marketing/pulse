@@ -4,6 +4,8 @@ the request's recipient token; `pulse_admin` (BYPASSRLS) sees all rows.
 The magic-link token lives on `recipients` now (migration 0015), so an
 engagement is just the shared card set + per-recipient progress rollup.
 """
+import json
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,6 +123,10 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
     total (``total_cards * recipients_count``) to show deck-wide answer
     progress alongside the per-recipient rollup.
 
+    ``recipients`` is a per-engagement JSON array (``id``/``email``/``name``/
+    ``answered``) so the list can show each respondent with their own
+    answered-of-``total_cards`` badge, ordered by when they were added.
+
     JOINs ``clients`` for the owning client and carries the raw
     ``created_by`` id; the owner's display name/email is enriched in a
     SECOND pass at the route layer (``users`` isn't granted to
@@ -154,14 +160,40 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               )::int                                             as completed_recipients,
               (select count(*) from public.responses rr
                  where rr.engagement_id = c.id
-                   and rr.state in ('answered', 'skipped'))::int as answered_responses
+                   and rr.state in ('answered', 'skipped'))::int as answered_responses,
+              (
+                select coalesce(
+                  json_agg(
+                    json_build_object(
+                      'id', rc.id::text,
+                      'email', rc.email,
+                      'name', rc.name,
+                      'answered', (
+                        select count(*) from public.responses rr
+                        where rr.recipient_id = rc.id
+                          and rr.state in ('answered', 'skipped')
+                      )
+                    )
+                    order by rc.created_at
+                  ),
+                  '[]'::json
+                )::text
+                from public.recipients rc
+                where rc.engagement_id = c.id
+              )                                                  as recipients_json
             from public.engagements c
             join public.clients cl on cl.id = c.client_id
             order by c.created_at desc
             """
         )
     )
-    return [dict(r) for r in result.mappings().all()]
+    rows = [dict(r) for r in result.mappings().all()]
+    # recipients_json arrives as a JSON string (asyncpg); expose it as the
+    # parsed `recipients` list so each summary carries its respondents +
+    # per-recipient answered counts.
+    for row in rows:
+        row["recipients"] = json.loads(row.pop("recipients_json"))
+    return rows
 
 
 async def enrich_owner_display(

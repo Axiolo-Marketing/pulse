@@ -476,6 +476,18 @@ export interface EngagementSummary {
    * badge shows this over the expected total (`total_cards *
    * recipients_count`) as deck-wide answer progress. */
   answered_responses: number;
+  /** Per-respondent breakdown (ordered by when they were added). Each carries
+   * its own `answered` count, shown against `total_cards` as a badge. */
+  recipients: EngagementSummaryRecipient[];
+}
+
+/** A respondent as it appears in the engagement-list rollup — enough to show
+ * an email + an answered-of-`total_cards` badge, no token. */
+export interface EngagementSummaryRecipient {
+  id: string;
+  email: string | null;
+  name: string | null;
+  answered: number;
 }
 
 /** One recipient of an engagement — its own magic link (`token`), answers
