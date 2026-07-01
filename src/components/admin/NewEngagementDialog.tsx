@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { adminApi, ApiError, clientsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -88,6 +96,11 @@ export function NewEngagementDialog({
 
   const submitting = mutation.isPending;
 
+  const query = clientName.trim();
+  const lower = query.toLowerCase();
+  const matches = clients.filter((c) => c.name.toLowerCase().includes(lower));
+  const exact = clients.find((c) => c.name.toLowerCase() === lower);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -107,20 +120,52 @@ export function NewEngagementDialog({
           noValidate
         >
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-eng-client">Client name</Label>
-            <Input
-              id="new-eng-client"
-              list="new-eng-client-options"
-              required
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              disabled={submitting}
-            />
-            <datalist id="new-eng-client-options">
-              {clients.map((c) => (
-                <option key={c.id} value={c.name} />
-              ))}
-            </datalist>
+            <Label htmlFor="new-eng-client">Client</Label>
+            <Command
+              shouldFilter={false}
+              className="rounded-md border border-input"
+            >
+              <CommandInput
+                id="new-eng-client"
+                placeholder="Search clients or type a new name…"
+                value={clientName}
+                onValueChange={setClientName}
+                disabled={submitting}
+              />
+              <CommandList className="max-h-44">
+                {matches.length === 0 && exact === undefined ? (
+                  <CommandEmpty>
+                    {query
+                      ? "No matching clients — create one below."
+                      : "Type to search or add a client."}
+                  </CommandEmpty>
+                ) : null}
+                {matches.length > 0 ? (
+                  <CommandGroup heading="Existing clients">
+                    {matches.map((c) => (
+                      <CommandItem
+                        key={c.id}
+                        value={c.id}
+                        onSelect={() => setClientName(c.name)}
+                      >
+                        {c.name}
+                        {exact?.id === c.id ? (
+                          <Check className="ml-auto size-4 text-primary" />
+                        ) : null}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ) : null}
+                {query && exact === undefined ? (
+                  <CommandGroup heading={matches.length ? "New client" : undefined}>
+                    <CommandItem value="__create__" onSelect={() => undefined}>
+                      <Plus className="size-4" />
+                      Create&nbsp;<span className="font-medium">{query}</span>
+                    </CommandItem>
+                  </CommandGroup>
+                ) : null}
+              </CommandList>
+            </Command>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="new-eng-name">Engagement name</Label>
