@@ -14,8 +14,10 @@ import {
   type EngagementStatus,
 } from "@/lib/engagement-status";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 import { AdminError, AdminLoading } from "./states";
+import { NewEngagementDialog } from "./NewEngagementDialog";
 
 const UNASSIGNED = "__unassigned__";
 
@@ -74,6 +76,7 @@ export function EngagementList(): React.ReactElement {
   const [client, setClient] = useState("all");
   const [owner, setOwner] = useState("all");
   const [sort, setSort] = useState<"name" | "last_active" | "status">("name");
+  const [newOpen, setNewOpen] = useState(false);
 
   if (engQ.isPending || clientsQ.isPending) return <AdminLoading />;
   if (engQ.isError) {
@@ -130,7 +133,13 @@ export function EngagementList(): React.ReactElement {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-6">
-      <h1 className="mb-4 text-xl font-bold text-foreground">Engagements</h1>
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-xl font-bold text-foreground">Engagements</h1>
+        <Button type="button" onClick={() => setNewOpen(true)}>
+          New engagement
+        </Button>
+      </div>
+      <NewEngagementDialog open={newOpen} onOpenChange={setNewOpen} />
 
       <div className="mb-6 flex flex-wrap gap-3">
         <Select label="Status" value={status} onChange={(v) => setStatus(v as never)}>
