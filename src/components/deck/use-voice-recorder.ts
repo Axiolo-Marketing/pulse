@@ -25,6 +25,37 @@ export interface VoiceRecorderApi {
 }
 
 /**
+ * Decode a recording and report whether it's effectively silent (no sample
+ * crosses a small amplitude floor). Catches the common failure where the mic
+ * is OS-blocked or muted: `getUserMedia` still yields a stream, so MediaRecorder
+ * produces a well-formed but silent clip. Returns `false` if it can't decode —
+ * we don't want an analysis hiccup to block a genuine recording.
+ */
+async function recordingIsSilent(blob: Blob): Promise<boolean> {
+  const Ctor =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!Ctor) return false;
+  const ctx = new Ctor();
+  try {
+    const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+    for (let ch = 0; ch < audio.numberOfChannels; ch++) {
+      const data = audio.getChannelData(ch);
+      for (let i = 0; i < data.length; i++) {
+        // 0.002 ≈ -54 dBFS: below any real speech, above a blocked/muted input.
+        if (Math.abs(data[i]) >= 0.002) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    void ctx.close();
+  }
+}
+
+/**
  * Wraps the framework-free Recorder in a React lifecycle. Mount one per card
  * (key by card id) so unmount cancels any in-progress take and revokes blob
  * URLs. Mirrors the voice state machine in src/scripts/app.ts.
@@ -168,6 +199,13 @@ export function useVoiceRecorder({
     }
     if (result.blob.size === 0) {
       setError("Nothing was recorded. Please try again.");
+      setPhase("idle");
+      return;
+    }
+    if (await recordingIsSilent(result.blob)) {
+      setError(
+        "We didn't pick up any sound. Check that your microphone is unmuted and allowed for this browser, then record again.",
+      );
       setPhase("idle");
       return;
     }
