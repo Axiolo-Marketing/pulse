@@ -5,11 +5,59 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { VOICE_PLACEHOLDER } from "./constants";
 
+/** Sticky top: brand + a progress line that fills as the recipient advances. */
 export function TopBar({
   position,
   total,
   orgLogoSrc,
   orgName,
+}: {
+  position: number;
+  total: number;
+  orgLogoSrc?: string | null;
+  orgName?: string | null;
+}): React.ReactElement {
+  const pct = total > 0 ? Math.min(100, Math.round((position / total) * 100)) : 0;
+  return (
+    <header className="sticky top-0 z-10 bg-card/95 backdrop-blur">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <span className="flex items-center gap-2 text-base font-semibold text-foreground">
+          Pulse
+          {orgLogoSrc ? (
+            <>
+              <span aria-hidden="true" className="text-muted-foreground">
+                ·
+              </span>
+              <img
+                src={orgLogoSrc}
+                alt={orgName ?? ""}
+                className="h-6 w-auto max-w-[120px] object-contain"
+              />
+            </>
+          ) : null}
+        </span>
+      </div>
+      <div
+        role="progressbar"
+        aria-valuenow={position}
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-label={`Card ${position} of ${total}`}
+        className="h-1 w-full bg-secondary"
+      >
+        <div
+          className="h-full bg-primary transition-[width] duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </header>
+  );
+}
+
+/** Prev / picker / next controls — rendered at the bottom of the card. */
+export function DeckNav({
+  position,
+  total,
   onBack,
   onForward,
   onPicker,
@@ -18,8 +66,6 @@ export function TopBar({
 }: {
   position: number;
   total: number;
-  orgLogoSrc?: string | null;
-  orgName?: string | null;
   onBack: () => void;
   onForward: () => void;
   onPicker: () => void;
@@ -27,53 +73,39 @@ export function TopBar({
   forwardDisabled: boolean;
 }): React.ReactElement {
   return (
-    <header className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card/95 px-3 py-2.5 backdrop-blur">
-      <span className="flex items-center gap-2 text-base font-semibold text-foreground">
-        Pulse
-        {orgLogoSrc ? (
-          <>
-            <span aria-hidden="true" className="text-muted-foreground">
-              ·
-            </span>
-            <img
-              src={orgLogoSrc}
-              alt={orgName ?? ""}
-              className="h-6 w-auto max-w-[120px] object-contain"
-            />
-          </>
-        ) : null}
-      </span>
-      <nav aria-label="Card navigation" className="flex items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onBack}
-          disabled={backDisabled}
-          aria-label="Previous card"
-        >
-          <ChevronLeft />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onPicker}
-          className="gap-1 font-semibold tabular-nums"
-          data-testid="deck-progress"
-        >
-          {position} of {total}
-          <ChevronDown className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onForward}
-          disabled={forwardDisabled}
-          aria-label="Next card"
-        >
-          <ChevronRight />
-        </Button>
-      </nav>
-    </header>
+    <nav
+      aria-label="Card navigation"
+      className="flex items-center justify-center gap-0.5"
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onBack}
+        disabled={backDisabled}
+        aria-label="Previous card"
+      >
+        <ChevronLeft />
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onPicker}
+        className="gap-1 font-semibold tabular-nums"
+        data-testid="deck-progress"
+      >
+        {position} of {total}
+        <ChevronDown className="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onForward}
+        disabled={forwardDisabled}
+        aria-label="Next card"
+      >
+        <ChevronRight />
+      </Button>
+    </nav>
   );
 }
 

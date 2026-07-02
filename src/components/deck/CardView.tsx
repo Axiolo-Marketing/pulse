@@ -3,7 +3,7 @@ import { FileText } from "lucide-react";
 import type { Card as CardModel, ClientResponse, UploadRow } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
-import { ResumeBanner, SaveBanner, TopBar } from "./chrome";
+import { DeckNav, ResumeBanner, SaveBanner, TopBar } from "./chrome";
 import { FileUploadInput } from "./FileUpload";
 import type { DeckHandlers } from "./handlers";
 import {
@@ -200,11 +200,6 @@ export function CardView({
         total={total}
         orgLogoSrc={orgLogoSrc}
         orgName={orgName}
-        onBack={handlers.onNavBack}
-        onForward={handlers.onNavForward}
-        onPicker={handlers.onPickerOpen}
-        backDisabled={position <= 1}
-        forwardDisabled={position >= total}
       />
       {saveError ? (
         <SaveBanner message={saveError} onRetry={handlers.onRetry} />
@@ -266,6 +261,17 @@ export function CardView({
           ) : null}
         </article>
       </main>
+      <footer className="flex justify-center px-4 pb-6 pt-2">
+        <DeckNav
+          position={position}
+          total={total}
+          onBack={handlers.onNavBack}
+          onForward={handlers.onNavForward}
+          onPicker={handlers.onPickerOpen}
+          backDisabled={position <= 1}
+          forwardDisabled={position >= total}
+        />
+      </footer>
     </div>
   );
 }
