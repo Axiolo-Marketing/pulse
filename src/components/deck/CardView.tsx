@@ -50,7 +50,7 @@ function PriorHint({
   }
   if (!text) return null;
   return (
-    <div className="mt-4 rounded-md border-l-[3px] border-primary bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground">
+    <div className="mt-4 rounded-md bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground">
       {text}
     </div>
   );
