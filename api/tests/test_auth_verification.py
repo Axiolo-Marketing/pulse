@@ -28,13 +28,17 @@ def _enable_signup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "signup_enabled", True)
 
 
-def _extract_token(emails: list[OutboundEmail], rel_path: str) -> str:
-    """Pull the `token=...` query value out of the first matching email body."""
+def _extract_token(emails: list[OutboundEmail], param: str) -> str:
+    """Pull the `<param>=...` query value out of the first matching email body.
+
+    Links land on the admin shell as `/admin/?verify-email-token=…` /
+    `/admin/?reset-password-token=…` — the query param IS the route.
+    """
     for e in emails:
-        m = re.search(rf"{re.escape(rel_path)}\?token=([^\s]+)", e.body)
+        m = re.search(rf"[?&]{re.escape(param)}=([^\s&]+)", e.body)
         if m:
             return m.group(1)
-    raise AssertionError(f"no email containing {rel_path}?token=... in {len(emails)} captures")
+    raise AssertionError(f"no email containing {param}=... in {len(emails)} captures")
 
 
 # ── verify-email ──────────────────────────────────────────────────────────
@@ -53,7 +57,7 @@ async def test_signup_sends_verification_email(
     e = captured_emails[0]
     assert e.to == "verify-me@example.com"
     assert "verify" in e.subject.lower()
-    assert "verify-email?token=" in e.body
+    assert "/admin/?verify-email-token=" in e.body
     assert settings.frontend_base_url in e.body
 
 
@@ -66,7 +70,7 @@ async def test_verify_email_marks_user_verified(
         "/api/auth/signup",
         json={"email": "to-verify@example.com", "password": "long-enough-password"},
     )
-    token = _extract_token(captured_emails, "/verify-email")
+    token = _extract_token(captured_emails, "verify-email-token")
 
     r = await client.post("/api/auth/verify-email", json={"token": token})
     assert r.status_code == 200
@@ -90,7 +94,7 @@ async def test_verify_email_is_idempotent(
         "/api/auth/signup",
         json={"email": "click-twice@example.com", "password": "long-enough-password"},
     )
-    token = _extract_token(captured_emails, "/verify-email")
+    token = _extract_token(captured_emails, "verify-email-token")
     r1 = await client.post("/api/auth/verify-email", json={"token": token})
     assert r1.status_code == 200
     first_ts = r1.json()["email_verified_at"]
@@ -151,7 +155,7 @@ async def test_forgot_password_sends_email_when_user_exists(
 
     assert len(captured_emails) == 1
     assert captured_emails[0].to == seed_user["email"]
-    assert "/reset-password?token=" in captured_emails[0].body
+    assert "/admin/?reset-password-token=" in captured_emails[0].body
 
 
 async def test_forgot_password_silent_for_unknown_email(
@@ -194,7 +198,7 @@ async def test_reset_password_full_flow(
 ) -> None:
     # Request reset
     await client.post("/api/auth/forgot-password", json={"email": seed_user["email"]})
-    token = _extract_token(captured_emails, "/reset-password")
+    token = _extract_token(captured_emails, "reset-password-token")
 
     # Redeem
     r = await client.post(

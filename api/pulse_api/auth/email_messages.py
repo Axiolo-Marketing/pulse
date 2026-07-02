@@ -5,8 +5,15 @@ from pulse_api.config import settings
 
 
 def verification_email(token: str, name: str | None = None) -> tuple[str, str]:
-    """Returns (subject, body) for the email-verification message."""
-    link = f"{settings.frontend_base_url.rstrip('/')}/verify-email?token={token}"
+    """Returns (subject, body) for the email-verification message.
+
+    The link targets ``/admin/?verify-email-token=…`` — the admin shell
+    (v1 ``admin.ts`` and v2 ``AdminApp.tsx``) renders the verify flow off
+    that query param. There is no standalone ``/verify-email`` page.
+    """
+    link = (
+        f"{settings.frontend_base_url.rstrip('/')}/admin/?verify-email-token={token}"
+    )
     greeting = f"Hi {name}," if name else "Hi,"
     subject = "Verify your Pulse email"
     body = (
@@ -19,7 +26,14 @@ def verification_email(token: str, name: str | None = None) -> tuple[str, str]:
 
 
 def password_reset_email(token: str, name: str | None = None) -> tuple[str, str]:
-    link = f"{settings.frontend_base_url.rstrip('/')}/reset-password?token={token}"
+    """Returns (subject, body) for the password-reset message.
+
+    Same routing contract as ``verification_email``: the reset form lives
+    at ``/admin/?reset-password-token=…``, not a standalone page.
+    """
+    link = (
+        f"{settings.frontend_base_url.rstrip('/')}/admin/?reset-password-token={token}"
+    )
     greeting = f"Hi {name}," if name else "Hi,"
     subject = "Reset your Pulse password"
     body = (

@@ -250,7 +250,7 @@ async def test_full_signup_verify_login_me_logout_flow(
     assert r.status_code == 403
 
     # 3. User clicks the verification link
-    m = re.search(r"/verify-email\?token=([^\s]+)", captured_emails[0].body)
+    m = re.search(r"[?&]verify-email-token=([^\s&]+)", captured_emails[0].body)
     assert m, "no verification link in email"
     r = await client.post("/api/auth/verify-email", json={"token": m.group(1)})
     assert r.status_code == 200
