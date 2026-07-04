@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     cors_allowed_origin: str = "http://localhost:4321"
     upload_dir: Path = Path("/var/lib/pulse/uploads")
     max_upload_bytes: int = 26_214_400
+    # Per-recipient quota, checked in addition to the per-file cap above.
+    # A valid token holder otherwise has no ceiling on total disk usage —
+    # they could write files one-at-a-time forever. Both caps are
+    # generous defaults for a card deck's worth of attachments/voice
+    # notes; tune via env if a real engagement needs more.
+    max_uploads_per_recipient: int = 100
+    max_upload_bytes_per_recipient: int = 200_000_000
 
     # ── Observability ────────────────────────────────────────────────────
     sentry_dsn: str = ""

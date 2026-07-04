@@ -36,6 +36,12 @@ admin_router = APIRouter(
 )
 public_router = APIRouter(prefix="/api", tags=["client"])
 
+# Raster formats can't carry executable content, so they're the only
+# attachment types served without the defensive CSP below.
+_RASTER_IMAGE_MIME_TYPES = frozenset(
+    {"image/jpeg", "image/gif", "image/png", "image/webp"}
+)
+
 
 @admin_router.post("/attachments", status_code=201)
 @limiter.limit(settings.rate_limit_upload)
@@ -98,10 +104,20 @@ async def serve_attachment(filename: str) -> FileResponse:
     )
 
     headers: dict[str, str] = {}
-    # SVG can embed scripts; the inline <img src> render path is safe
-    # already, but we also serve a strict CSP so the file is safe when
-    # opened directly in a tab too.
-    if path.suffix.lower() == ".svg":
+    # Raster images (jpg/gif/png/webp) can't carry executable content, so
+    # they're safe to serve inline with no extra hardening. Everything
+    # else — SVG (can embed <script>), HTML/PDF, and
+    # `application/octet-stream` for anything that slips past the
+    # allow-list — gets a strict CSP so a directly-opened attachment
+    # can't execute script on our origin. This is what M2 in the audit
+    # flagged: HTML attachments were served with zero CSP, letting
+    # operator-uploaded JS run same-origin. HTML additionally gets a
+    # Content-Disposition nudge toward downloading rather than rendering
+    # inline, since some browsers' "view source"/inline viewers don't
+    # honor CSP consistently.
+    if mime_type not in _RASTER_IMAGE_MIME_TYPES:
         headers["Content-Security-Policy"] = "script-src 'none'; default-src 'self' data:;"
+    if path.suffix.lower() in (".html", ".htm"):
+        headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
 
     return FileResponse(path=path, media_type=mime_type, headers=headers)

@@ -117,6 +117,62 @@ async def test_serve_round_trip(
         await fresh.aclose()
 
 
+async def test_serve_html_includes_csp_and_content_disposition(
+    admin_authed: AsyncClient,
+) -> None:
+    """M2: HTML attachments used to be served with no CSP at all, letting
+    operator-uploaded JS execute on our origin. Assert both the strict
+    CSP and the download-nudging Content-Disposition are present."""
+    html = b"<!doctype html><script>alert(1)</script>"
+    r = await admin_authed.post(
+        "/api/admin/attachments",
+        files={"file": ("doc.html", html, "text/html")},
+    )
+    filename = r.json()["path"].rsplit("/", 1)[-1]
+
+    r2 = await admin_authed.get(f"/api/attachments/{filename}")
+    assert r2.status_code == 200
+    assert r2.headers["content-type"].startswith("text/html")
+    csp = r2.headers.get("content-security-policy", "")
+    assert "script-src 'none'" in csp
+    disposition = r2.headers.get("content-disposition", "")
+    assert disposition.startswith("attachment;")
+    assert filename in disposition
+
+
+async def test_serve_pdf_includes_csp_but_no_content_disposition(
+    admin_authed: AsyncClient,
+) -> None:
+    """Non-image types get the defensive CSP too, but only HTML gets the
+    inline-execution-discouraging Content-Disposition."""
+    r = await admin_authed.post(
+        "/api/admin/attachments",
+        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    filename = r.json()["path"].rsplit("/", 1)[-1]
+
+    r2 = await admin_authed.get(f"/api/attachments/{filename}")
+    assert r2.status_code == 200
+    assert "script-src 'none'" in r2.headers.get("content-security-policy", "")
+    assert "content-disposition" not in r2.headers
+
+
+async def test_serve_raster_image_has_no_csp_header(
+    admin_authed: AsyncClient,
+) -> None:
+    """Raster images can't carry executable content, so they're served
+    without the defensive CSP — inline rendering stays unaffected."""
+    r = await admin_authed.post(
+        "/api/admin/attachments",
+        files={"file": ("photo.png", b"\x89PNG fake bytes", "image/png")},
+    )
+    filename = r.json()["path"].rsplit("/", 1)[-1]
+
+    r2 = await admin_authed.get(f"/api/attachments/{filename}")
+    assert r2.status_code == 200
+    assert "content-security-policy" not in r2.headers
+
+
 async def test_serve_svg_includes_csp_header(admin_authed: AsyncClient) -> None:
     svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
     r = await admin_authed.post(

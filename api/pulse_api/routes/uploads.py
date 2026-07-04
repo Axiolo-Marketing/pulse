@@ -66,6 +66,16 @@ async def upload_file(
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="empty file")
 
+    # Per-file size is capped above, but nothing stops a valid token
+    # holder from writing unbounded *files* one at a time. Enforce a
+    # per-recipient ceiling on both count and cumulative bytes before
+    # touching disk.
+    existing_count, existing_bytes = await uploads_repo.get_recipient_usage(session)
+    if existing_count >= settings.max_uploads_per_recipient:
+        raise HTTPException(status_code=413, detail="upload count limit reached")
+    if existing_bytes + len(content) > settings.max_upload_bytes_per_recipient:
+        raise HTTPException(status_code=413, detail="upload storage limit reached")
+
     engagement_id = await uploads_repo.get_current_engagement_id(session)
     recipient_id = await uploads_repo.get_current_recipient_id(session)
     if engagement_id is None or recipient_id is None:

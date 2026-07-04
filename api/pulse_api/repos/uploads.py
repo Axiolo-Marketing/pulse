@@ -157,6 +157,23 @@ async def get_current_recipient_id(session: AsyncSession) -> str | None:
     return result.scalar()
 
 
+async def get_recipient_usage(session: AsyncSession) -> tuple[int, int]:
+    """Return (count, total_bytes) of uploads already on file for the
+    caller's recipient. RLS scopes the table to the token's own recipient
+    (same policy as every other client-facing query here), so this is
+    safe to call before an insert to enforce the per-recipient quota in
+    `upload_file` — a valid token holder would otherwise have no ceiling
+    on total disk usage."""
+    result = await session.execute(
+        text(
+            "select count(*), coalesce(sum(file_size_bytes), 0) "
+            "from public.uploads"
+        )
+    )
+    count, total_bytes = result.one()
+    return int(count), int(total_bytes)
+
+
 async def card_belongs_to_caller(session: AsyncSession, card_id: str) -> bool:
     """RLS-filtered existence check — analogue of the one in responses.py.
     Returns False on malformed UUIDs without raising."""

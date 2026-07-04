@@ -283,6 +283,76 @@ async def test_upload_rejects_oversize(
     assert r.status_code == 413
 
 
+async def test_upload_rejects_past_per_recipient_count_cap(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M3: a valid token holder must not be able to write unbounded
+    files. With the count cap set to 1, a second upload is rejected even
+    though each individual file is well under the size cap."""
+    from pulse_api.config import settings
+    monkeypatch.setattr(settings, "max_uploads_per_recipient", 1)
+
+    first = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"]},
+        files={"file": ("a.bin", b"x", "application/octet-stream")},
+    )
+    assert first.status_code == 201
+
+    second = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"]},
+        files={"file": ("b.bin", b"x", "application/octet-stream")},
+    )
+    assert second.status_code == 413
+    assert "count" in second.json()["detail"].lower()
+
+
+async def test_upload_rejects_past_per_recipient_byte_cap(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cumulative bytes across many small files must also be capped, not
+    just the size of any single file."""
+    from pulse_api.config import settings
+    monkeypatch.setattr(settings, "max_upload_bytes_per_recipient", 10)
+
+    first = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"]},
+        files={"file": ("a.bin", b"x" * 8, "application/octet-stream")},
+    )
+    assert first.status_code == 201
+
+    second = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"]},
+        files={"file": ("b.bin", b"x" * 8, "application/octet-stream")},
+    )
+    assert second.status_code == 413
+    assert "storage" in second.json()["detail"].lower()
+
+
+async def test_upload_under_per_recipient_caps_succeeds(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+) -> None:
+    """Sanity check: the default caps don't interfere with a normal,
+    well-under-quota upload."""
+    r = await client_authed.post(
+        "/api/uploads",
+        data={"card_id": seed_cards[0]["id"]},
+        files={"file": ("a.bin", b"x" * 8, "application/octet-stream")},
+    )
+    assert r.status_code == 201
+
+
 async def test_upload_rejects_empty(
     client_authed: AsyncClient, seed_cards: list[dict[str, str]]
 ) -> None:
