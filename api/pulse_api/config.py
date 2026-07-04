@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     rate_limit_default: str = "60/minute"
     rate_limit_token_validation: str = "10/minute"  # /api/me + /api/auth/login
     rate_limit_account_enumeration: str = "5/minute"  # signup + forgot-password
+    rate_limit_upload: str = "20/minute"  # client + admin file uploads
+    rate_limit_sensitive: str = "10/minute"  # invite-accept, reset-password, verify-email
 
     @property
     def mcp_issuer_base(self) -> str:

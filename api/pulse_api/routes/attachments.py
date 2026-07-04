@@ -15,7 +15,7 @@ org-scoped on disk (they're public via the unguessable URL once
 uploaded), so the admin upload route uses ``get_current_org_member``
 purely as the auth gate.
 """
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +27,7 @@ from pulse_api.auth.middleware import (
 )
 from pulse_api.config import settings
 from pulse_api.models import OrganizationMembership, User
+from pulse_api.observability import limiter
 
 admin_router = APIRouter(
     prefix="/api/admin",
@@ -37,7 +38,9 @@ public_router = APIRouter(prefix="/api", tags=["client"])
 
 
 @admin_router.post("/attachments", status_code=201)
+@limiter.limit(settings.rate_limit_upload)
 async def upload_attachment(
+    request: Request,
     file: UploadFile = File(...),
     org_member: tuple[User, OrganizationMembership] = Depends(
         get_current_org_member

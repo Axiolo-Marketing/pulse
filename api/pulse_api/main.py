@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +54,11 @@ app = FastAPI(title="Pulse API", version="0.1.0", lifespan=lifespan)
 # per-route limits via `@limiter.limit(...)` on specific handlers.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+# Without this, `default_limits` on the Limiter above is inert — slowapi
+# only enforces per-route `@limiter.limit(...)` decorators unless this
+# middleware is registered too. This is what makes the 60/min default
+# apply to every route, decorated or not.
+app.add_middleware(SlowAPIMiddleware)
 
 # 5xx + unhandled-exception logger. Runs before CORS so even errors
 # inside the CORS layer get recorded.

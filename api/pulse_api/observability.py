@@ -73,13 +73,28 @@ def configure_sentry() -> None:
 
 
 def _client_ip(request: Request) -> str:
-    """Use the first X-Forwarded-For entry if nginx is in front; fall back
-    to the direct peer address. nginx is configured (see deploy/) to set
-    X-Forwarded-For; if anything else is fronting us it should too."""
+    """Resolve the caller's IP for rate-limiting keys, trusting only what
+    nginx itself sets.
+
+    Order of preference:
+    1. ``X-Real-IP`` — nginx sets this itself (see deploy/) from its own
+       view of the connecting peer; the client cannot forge it because
+       nginx overwrites the header on every request, it doesn't append.
+    2. The LAST hop of ``X-Forwarded-For`` — nginx appends via
+       ``$proxy_add_x_forwarded_for``, so the last entry is the address
+       nginx observed directly. The client fully controls every entry to
+       its *left* (it can prepend arbitrary "X-Forwarded-For: 1.2.3.4"
+       before nginx appends its own hop), so trusting the leftmost entry
+       let a client pick a fresh rate-limit bucket on every request. Only
+       the rightmost (closest, trusted) hop is safe to key on.
+    3. The direct peer address, then ``"unknown"`` if nothing is present.
+    """
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        # The leftmost entry is the original client per RFC 7239.
-        return xff.split(",")[0].strip()
+        return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -91,6 +106,52 @@ limiter = Limiter(
     key_func=_client_ip,
     default_limits=[settings.rate_limit_default],
 )
+
+
+def _patch_slowapi_route_handler_lookup() -> None:
+    """Work around a slowapi/MCP-SDK interaction that would otherwise
+    crash (or worse, spuriously 429) every request to our root-mounted
+    OAuth routes once `SlowAPIMiddleware` is registered app-wide.
+
+    `oauth_root_routes()` (mcp/oauth/routes.py) hands back raw Starlette
+    `Route` objects built by the `mcp` SDK's `create_auth_routes` /
+    `create_protected_resource_routes`. Several of those routes'
+    `endpoint` is a `CORSMiddleware`-wrapped ASGI callable, not a plain
+    Python function — it has no `__name__`. slowapi's
+    `SlowAPIMiddleware.dispatch` unconditionally builds
+    `f"{handler.__module__}.{handler.__name__}"` (in `_get_route_name`,
+    called from `_should_exempt`) to decide per-route exemptions, which
+    raises `AttributeError` for those routes. That exception isn't just
+    an uncaught 500: slowapi's own `_check_limits` wraps the *next* call
+    site in a bare `except Exception` and maps whatever it catches to
+    the rate-limit-exceeded handler, so left unpatched every request to
+    these routes would 429 unconditionally instead of 500ing loudly.
+
+    Patch `_find_route_handler` (the one place a handler is resolved for
+    a request) to return `None` for any endpoint lacking `__name__` —
+    the same effective behavior as before this middleware existed:
+    those specific OAuth-root routes are unthrottled, but they no longer
+    crash or get spuriously rate-limited. Every other route in the app
+    is a normal `async def` FastAPI handler and is unaffected.
+    """
+    import slowapi.middleware as _slowapi_middleware
+
+    if getattr(_slowapi_middleware._find_route_handler, "_pulse_patched", False):
+        return  # idempotent — safe to call from a re-imported module
+
+    _original_find_route_handler = _slowapi_middleware._find_route_handler
+
+    def _safe_find_route_handler(routes: Any, scope: Any) -> Any:
+        handler = _original_find_route_handler(routes, scope)
+        if handler is not None and not hasattr(handler, "__name__"):
+            return None
+        return handler
+
+    _safe_find_route_handler._pulse_patched = True  # type: ignore[attr-defined]
+    _slowapi_middleware._find_route_handler = _safe_find_route_handler
+
+
+_patch_slowapi_route_handler_lookup()
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:

@@ -17,13 +17,14 @@ DELETE order: DB delete commits first, then on-disk file is removed. If
 the file delete fails (already gone, permissions), the DB state is still
 clean. Orphan files are cheaper to recover from than dangling rows.
 """
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import storage
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
+from pulse_api.observability import limiter
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import uploads as uploads_repo
 
@@ -35,7 +36,9 @@ ALLOWED_UPLOAD_KINDS = frozenset({"file", "voice"})
 
 
 @router.post("/uploads", status_code=201)
+@limiter.limit(settings.rate_limit_upload)
 async def upload_file(
+    request: Request,
     card_id: str = Form(...),
     file: UploadFile = File(...),
     kind: str = Form("file"),

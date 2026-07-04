@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ from pulse_api.auth.tokens import consume_token
 from pulse_api.config import settings
 from pulse_api.db import get_admin_session
 from pulse_api.models._helpers import utcnow_naive
+from pulse_api.observability import limiter
 from pulse_api.repos import invites as invites_repo
 from pulse_api.repos import users as users_repo
 
@@ -160,7 +161,9 @@ async def get_invite(
 
 
 @router.post("/{token}/accept")
+@limiter.limit(settings.rate_limit_sensitive)
 async def accept_invite(
+    request: Request,
     token: str,
     body: dict[str, Any],
     response: Response,

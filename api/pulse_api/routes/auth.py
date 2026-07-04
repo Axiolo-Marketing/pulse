@@ -170,7 +170,9 @@ async def signup(
 
 
 @router.post("/verify-email", response_model=UserResponse)
+@limiter.limit(settings.rate_limit_sensitive)
 async def verify_email(
+    request: Request,
     req: VerifyEmailRequest,
     session: AsyncSession = Depends(get_admin_session),
 ) -> UserResponse:
@@ -211,7 +213,9 @@ async def forgot_password(
 
 
 @router.post("/reset-password")
+@limiter.limit(settings.rate_limit_sensitive)
 async def reset_password(
+    request: Request,
     req: ResetPasswordRequest,
     session: AsyncSession = Depends(get_admin_session),
 ) -> dict[str, str]:

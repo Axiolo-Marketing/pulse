@@ -94,6 +94,56 @@ async def test_me_rate_limit_triggers_429(
     assert r.status_code == 429
 
 
+# ── reset-password: 10/minute (H1/M1 audit fix) ───────────────────────────
+
+
+async def test_reset_password_rate_limit_triggers_429(client: AsyncClient) -> None:
+    """``reset-password`` had no per-route decorator before the fix.
+    Bogus tokens 400 before touching the DB meaningfully, which is fine —
+    this only needs to prove the limiter fires, not exercise the token
+    consumption flow."""
+    n = _parse_per_minute(settings.rate_limit_sensitive)
+
+    last_status = None
+    for _ in range(n):
+        r = await client.post(
+            "/api/auth/reset-password",
+            json={"token": "not-a-real-token", "new_password": "long-enough"},
+        )
+        last_status = r.status_code
+    assert last_status == 400
+
+    r = await client.post(
+        "/api/auth/reset-password",
+        json={"token": "not-a-real-token", "new_password": "long-enough"},
+    )
+    assert r.status_code == 429
+
+
+# ── Global default (60/min) now actually applies via SlowAPIMiddleware ────
+
+
+async def test_undecorated_route_is_covered_by_global_default(
+    client: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    """Before the H1 fix, `SlowAPIMiddleware` was never registered, so
+    `default_limits` on the Limiter was inert and undecorated routes were
+    unthrottled no matter how many requests hit them. `/api/cards` carries
+    no `@limiter.limit(...)` of its own, so this only passes if the
+    global default is actually enforced by the middleware."""
+    client.headers["X-Pulse-Token"] = seed_client["token"]
+    n = _parse_per_minute(settings.rate_limit_default)
+
+    last_status = None
+    for _ in range(n):
+        r = await client.get("/api/cards")
+        last_status = r.status_code
+    assert last_status == 200
+
+    r = await client.get("/api/cards")
+    assert r.status_code == 429
+
+
 # ── Healthz is NOT rate-limited (would defeat upstream probes) ─────────────
 
 
