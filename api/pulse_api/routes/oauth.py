@@ -9,7 +9,10 @@ User linking precedence on a successful callback (PR 2 of the multi-
 tenant refactor):
 
 1. Existing ``oauth_identities`` row with matching ``(provider, sub)``
-   → log that user in.
+   → log that user in. Never gated on email trust — the identity was
+   already linked by a prior *trusted* flow (email-based match or
+   invite acceptance), so a returning sub match doesn't re-derive trust
+   from the (possibly attacker-set) email claim.
 2. Existing ``users`` row with the same email → link a new identity,
    log in.
 3. Neither → look up ``organization_invites`` by the OAuth-verified
@@ -19,6 +22,20 @@ tenant refactor):
    frontend with ``?error=invitation_required`` and DO NOT create a
    user. Self-signup is disabled — invite-only by design (plan section
    "Scope decisions").
+
+Email-trust gate (audit H6): steps 2 and 3's *implicit* email lookup
+(everything except the explicit invite-token-in-state branch — see
+``_resolve_invite_from_raw_token`` — which carries its own signed proof
+of intent and doesn't need the email to be trustworthy) both key off
+the provider's ``email`` claim. Google reliably marks that claim
+verified; Microsoft is configured with tenant="common" (personal +
+work/school accounts) and does not, which opens the "nOAuth" shape:
+register a personal Microsoft account with someone else's email, then
+ride the callback's email-lookup path into their account/org. Before
+either implicit path runs, ``_email_trust_ok`` requires Google's
+``email_verified`` or, for Microsoft, that the account's ``tid`` is on
+``settings.microsoft_allowed_tenant_ids``. Failing it redirects to
+``?error=email_unverified`` and creates nothing — see DO NOT below.
 """
 from __future__ import annotations
 
@@ -31,7 +48,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api.auth.invites import attach_invite_to_user as _attach_invite_to_user
-from pulse_api.auth.oauth import OAuthProviderError, get_provider
+from pulse_api.auth.oauth import (
+    OAuthProviderError,
+    get_provider,
+    microsoft_allowed_tenant_ids,
+)
 from pulse_api.auth.session import (
     InvalidSessionError,
     cookie_secure_flag,
@@ -62,6 +83,35 @@ def _admin_redirect(error: str | None = None) -> RedirectResponse:
     base = f"{settings.frontend_base_url.rstrip('/')}/admin/"
     url = f"{base}?error={error}" if error else base
     return RedirectResponse(url=url, status_code=302)
+
+
+def _email_trust_ok(provider: str, userinfo: dict) -> bool:
+    """Whether the OAuth-verified email may drive the IMPLICIT email-lookup
+    paths — existing-user-by-email match and auto-accept of a pending
+    invite found by email. Does NOT gate the explicit invite-token-in-
+    state branch (its own signed token is the trust proof) nor a
+    sub-matched existing identity (already trusted by a prior link).
+
+    Google sends a real ``email_verified`` boolean we can rely on.
+
+    Microsoft is tenant="common" (personal accounts included) and never
+    sends ``email_verified`` — so we only trust the email claim when the
+    account's tenant (``tid``) is on the configured allowlist, i.e. a
+    specific customer tenant the operator has explicitly pinned as
+    trusted. With no allowlist configured this is unconditionally False
+    for Microsoft: every implicit email-based path is rejected and only
+    the explicit invite-link flow works, which is the safe default.
+    """
+    if provider == "google":
+        return str(userinfo.get("email_verified")).lower() == "true"
+    if provider == "microsoft":
+        allowed = microsoft_allowed_tenant_ids()
+        if not allowed:
+            return False
+        tid = userinfo.get("tid")
+        return bool(tid) and str(tid).lower() in allowed
+    # Unknown/future providers: fail closed rather than silently trust.
+    return False
 
 
 async def _find_pending_invite(
@@ -226,7 +276,9 @@ async def oauth_callback(
         access_token = tokens.get("access_token")
         if not access_token:
             raise OAuthProviderError(f"{provider} returned no access_token")
-        userinfo = await config.fetch_userinfo(access_token)
+        userinfo = await config.fetch_userinfo(
+            access_token, id_token=tokens.get("id_token")
+        )
     except OAuthProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -276,6 +328,14 @@ async def oauth_callback(
     else:
         existing = await users_repo.get_user_by_email(session, email)
         if existing is not None:
+            if not _email_trust_ok(provider, userinfo):
+                # Linking a brand-new OAuth identity to somebody's
+                # existing account based on the (possibly forged) email
+                # claim alone is exactly the nOAuth account-takeover
+                # shape — refuse and create nothing rather than trust an
+                # unpinned Microsoft account or an unverified Google
+                # email enough to hand over access to this account.
+                return _admin_redirect(error="email_unverified")
             await users_repo.link_oauth_identity(
                 session, user_id=existing.id, provider=provider, provider_user_id=sub
             )
@@ -301,7 +361,14 @@ async def oauth_callback(
                         else None
                     )
         else:
-            invite = explicit_invite or await _find_pending_invite(session, email)
+            invite = explicit_invite
+            if invite is None:
+                # No explicit invite token in flight — falling back to
+                # the implicit email-lookup invite requires the email
+                # itself to be trustworthy (see `_email_trust_ok`).
+                if not _email_trust_ok(provider, userinfo):
+                    return _admin_redirect(error="email_unverified")
+                invite = await _find_pending_invite(session, email)
             if invite is None:
                 # Hard 302 back to the frontend with an error code. The
                 # SPA renders "you need an invitation" — see plan PR 4

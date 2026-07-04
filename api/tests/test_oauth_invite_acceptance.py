@@ -56,12 +56,26 @@ async def _do_authorize(client: AsyncClient) -> tuple[str, str]:
 def _stub_provider(
     respx_mock: respx.Router, *, sub: str, email: str, name: str | None = None
 ) -> None:
+    """Stub Google's token + userinfo endpoints.
+
+    ``email_verified: True`` by default — this matrix is about invite
+    lifecycle states, not the email-trust gate (audit H6), which has its
+    own dedicated coverage in ``test_oauth.py``. Without it every
+    implicit-invite scenario here would now be rejected before the
+    invite lookup ever runs.
+    """
     respx_mock.post(TOKEN_URL).mock(
         return_value=httpx.Response(200, json={"access_token": "fake"})
     )
     respx_mock.get(USERINFO_URL).mock(
         return_value=httpx.Response(
-            200, json={"sub": sub, "email": email, "name": name}
+            200,
+            json={
+                "sub": sub,
+                "email": email,
+                "name": name,
+                "email_verified": True,
+            },
         )
     )
 

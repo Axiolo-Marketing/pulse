@@ -77,6 +77,22 @@ class Settings(BaseSettings):
     microsoft_tenant_id: str = "common"
     microsoft_redirect_uri: str = ""
 
+    # Whitespace/comma-separated allowlist of trusted Microsoft Entra ID
+    # tenant ids (the `tid` claim). `microsoft_tenant_id` above is left at
+    # "common" so any work/school *or personal* Microsoft account can sign
+    # in — but Microsoft doesn't send a reliable `email_verified` claim,
+    # so a personal account's `email` claim can be attacker-set (the
+    # "nOAuth" invite-hijack shape: register a Microsoft personal account
+    # with someone else's email, then ride the OAuth callback's
+    # email-lookup paths into their org). The callback's email-based
+    # paths (existing-user-by-email match, implicit pending-invite
+    # accept — see `routes/oauth.py`) only trust a Microsoft account's
+    # email when its `tid` is on this list. Empty (the default) means no
+    # tenant is pinned, so those paths are rejected for every Microsoft
+    # account; the explicit invite-token-in-state path (signed token from
+    # an emailed invite link) is unaffected and still works regardless.
+    microsoft_allowed_tenant_ids: str = ""
+
     # ── Outbound email (Resend) ──────────────────────────────────────────
     # Transactional mail (org invites, email verification, password reset)
     # is sent via Resend's HTTPS API. Empty `resend_api_key` keeps
