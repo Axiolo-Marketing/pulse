@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api.auth.invites import attach_invite_to_user
-from pulse_api.auth.password import hash_password
+from pulse_api.auth.password import hash_password_async
 from pulse_api.auth.session import InvalidSessionError, write_session
 from pulse_api.auth.tokens import consume_token
 from pulse_api.config import settings
@@ -274,14 +274,14 @@ async def _accept_with_password(
         # update the hash and proceed to attach. The atomic claim
         # above already ran, so the second tab cannot reach this.
         await users_repo.update_password_hash(
-            session, existing.id, hash_password(req.password)
+            session, existing.id, await hash_password_async(req.password)
         )
         user_id = existing.id
     else:
         user = await users_repo.create_user(
             session,
             email=email,
-            password_hash=hash_password(req.password),
+            password_hash=await hash_password_async(req.password),
             name=req.name,
             email_verified_at=utcnow_naive(),
         )

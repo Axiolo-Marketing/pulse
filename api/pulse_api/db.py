@@ -28,7 +28,16 @@ from pulse_api.config import settings
 
 
 def _engine(url: str) -> AsyncEngine:
-    return create_async_engine(url, pool_pre_ping=True)
+    # Explicit, modest pool sizing. SQLAlchemy's defaults (pool_size=5,
+    # max_overflow=10 => up to 15 connections per engine) are sized for a
+    # single-app-per-database box. This module creates 4 engines per
+    # uvicorn worker process, and the shared VPS runs multiple workers —
+    # left at defaults, 2 workers * 4 engines * 15 could alone approach or
+    # exceed a typical Postgres max_connections. Keep per-engine ceilings
+    # small; pool_pre_ping still guards against stale/dropped connections.
+    return create_async_engine(
+        url, pool_pre_ping=True, pool_size=3, max_overflow=5
+    )
 
 
 engine: AsyncEngine = _engine(settings.database_url)

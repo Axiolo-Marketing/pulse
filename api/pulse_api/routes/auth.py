@@ -24,7 +24,7 @@ from pulse_api.audit import record_audit
 from pulse_api.auth import api_keys as api_keys_lib
 from pulse_api.auth.email_messages import password_reset_email, verification_email
 from pulse_api.auth.middleware import get_current_org_member, get_current_user
-from pulse_api.auth.password import hash_password, verify_password
+from pulse_api.auth.password import hash_password_async, verify_password_async
 from pulse_api.auth.session import (
     InvalidSessionError,
     clear_session,
@@ -157,7 +157,7 @@ async def signup(
     user = await users_repo.create_user(
         session,
         email=req.email,
-        password_hash=hash_password(req.password),
+        password_hash=await hash_password_async(req.password),
         name=req.name,
     )
     await session.commit()
@@ -230,7 +230,9 @@ async def reset_password(
     if user is None:
         raise HTTPException(status_code=400, detail="user not found")
 
-    await users_repo.update_password_hash(session, user.id, hash_password(req.new_password))
+    await users_repo.update_password_hash(
+        session, user.id, await hash_password_async(req.new_password)
+    )
     await session.commit()
     return {"status": "ok"}
 
@@ -249,7 +251,7 @@ async def login(
     if user is None or user.password_hash is None:
         log.info("auth.login.failed", email=req.email, reason="unknown-or-oauth-only")
         raise HTTPException(status_code=401, detail="invalid credentials")
-    if not verify_password(req.password, user.password_hash):
+    if not await verify_password_async(req.password, user.password_hash):
         log.info("auth.login.failed", email=req.email, reason="bad-password")
         raise HTTPException(status_code=401, detail="invalid credentials")
     if user.email_verified_at is None:
@@ -303,14 +305,14 @@ async def change_password(
     # (no password_hash) can set an initial one — the session cookie is
     # the auth gate, and they reached it by completing the OAuth flow.
     if user.password_hash is not None:
-        if not req.current_password or not verify_password(
+        if not req.current_password or not await verify_password_async(
             req.current_password, user.password_hash
         ):
             log.info("auth.change_password.failed", user_id=str(user.id), reason="bad-current")
             raise HTTPException(status_code=400, detail="current password is incorrect")
 
     await users_repo.update_password_hash(
-        session, user.id, hash_password(req.new_password)
+        session, user.id, await hash_password_async(req.new_password)
     )
     await session.commit()
     await session.refresh(user)
