@@ -412,13 +412,15 @@ async def add_recipient(
         target_id=row["id"],
         metadata={"engagement_id": engagement_id, "email": email},
     )
+    await session.commit()
     # Send the invite immediately (no-op when the deck has no cards yet — the
     # first card picks them up). The frontend re-fetches the list after add,
-    # so the returned row's pre-invite invited_at is fine here.
+    # so the returned row's pre-invite invited_at is fine here. Runs AFTER
+    # the recipient-add commit above so the email network call never holds
+    # that write's transaction open (audit finding M7).
     await _send_pending_invites(
-        session, engagement=engagement, membership=membership, user=user
+        session, engagement=engagement, org_id=membership.org_id, user=user
     )
-    await session.commit()
     return row
 
 
@@ -463,15 +465,21 @@ async def _send_pending_invites(
     session: AsyncSession,
     *,
     engagement: dict[str, Any],
-    membership: OrganizationMembership,
+    org_id: Any,
     user: User,
 ) -> int:
     """Email the deck link to every recipient of this engagement who has an
     email but hasn't been invited yet, then stamp ``invited_at``. Returns the
     count emailed; a no-op (0) when the deck has no cards yet or nobody is
     pending. Sends are best-effort (``send_email`` never raises) — a recipient
-    is marked invited once the attempt is made. Does NOT commit; the caller
-    owns the transaction.
+    is marked invited once the attempt is made.
+
+    Commits its own short transaction (the ``mark_invited`` stamp +
+    ``engagement.invites_sent`` audit row) once the emails are sent. The
+    caller MUST have already committed its own write (the recipient/card
+    creation that triggered this) before calling here — that way the
+    network-bound email calls never run while that write's transaction is
+    still open (see audit finding M7).
 
     Invites are sent automatically: adding a respondent invites them right
     away (this fires from ``add_recipient``), and adding the first card
@@ -489,7 +497,7 @@ async def _send_pending_invites(
     org_name = (
         await session.execute(
             text("select name from public.organizations where id = cast(:o as uuid)"),
-            {"o": str(membership.org_id)},
+            {"o": str(org_id)},
         )
     ).scalar_one_or_none() or "Your consultant"
 
@@ -506,13 +514,14 @@ async def _send_pending_invites(
     await recipients_repo.mark_invited(session, [r["id"] for r in pending])
     await record_audit(
         session,
-        org_id=membership.org_id,
+        org_id=org_id,
         user_id=user.id,
         action="engagement.invites_sent",
         target_type="engagement",
         target_id=engagement_id,
         metadata={"count": len(pending)},
     )
+    await session.commit()
     return len(pending)
 
 
@@ -582,12 +591,14 @@ async def add_card(
             "response_type": req.response_type,
         },
     )
+    await session.commit()
     # A deck that just gained its first card invites any respondents added
     # before there were questions to answer (no-op once everyone's invited).
+    # Runs after the card-create commit above so email I/O never holds that
+    # write's transaction open (audit finding M7).
     await _send_pending_invites(
-        session, engagement=engagement, membership=membership, user=user
+        session, engagement=engagement, org_id=membership.org_id, user=user
     )
-    await session.commit()
     return row
 
 
@@ -649,11 +660,13 @@ async def import_cards_markdown(
         # render "Tom imported 14 cards" without joining card rows.
         metadata={"count": len(created)},
     )
-    # First cards on the deck invite any respondents added beforehand.
-    await _send_pending_invites(
-        session, engagement=engagement, membership=membership, user=user
-    )
     await session.commit()
+    # First cards on the deck invite any respondents added beforehand. Runs
+    # after the import commit above so email I/O never holds that write's
+    # transaction open (audit finding M7).
+    await _send_pending_invites(
+        session, engagement=engagement, org_id=membership.org_id, user=user
+    )
     return {"created": created}
 
 
@@ -699,7 +712,7 @@ async def delete_card(
     # Snapshot the card title BEFORE deletion so the activity row can
     # render "deleted card 'X'" instead of a stale UUID. The delete and
     # the audit insert commit atomically below.
-    snapshot_title = await _peek_card_title(session, card_id)
+    snapshot_title = await cards_repo.peek_title(session, card_id)
     deleted = await cards_repo.delete_card(session, card_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="card not found")
@@ -713,32 +726,6 @@ async def delete_card(
         metadata={"title": snapshot_title},
     )
     await session.commit()
-
-
-async def _peek_card_title(
-    session: AsyncSession, card_id: str
-) -> str | None:
-    """Return the card's title, or None if the row doesn't resolve.
-
-    Used by the delete handler to capture the title BEFORE the row
-    cascades away so the audit log can render a human-readable label.
-    RLS scopes the read to the active org's cards.
-    """
-    from sqlalchemy import text as _text
-
-    try:
-        result = await session.execute(
-            _text(
-                "select title from public.cards where id = cast(:c as uuid)"
-            ),
-            {"c": card_id},
-        )
-    except Exception:
-        # A malformed UUID raises before the where evaluates; the
-        # surrounding handler will 404 on the delete anyway.
-        return None
-    row = result.mappings().one_or_none()
-    return None if row is None else row.get("title")
 
 
 # ── Admin downloads (org-scoped via RLS) ───────────────────────────────────

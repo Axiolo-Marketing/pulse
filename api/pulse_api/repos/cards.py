@@ -141,3 +141,24 @@ async def delete_card(session: AsyncSession, card_id: str) -> bool:
     except Exception:
         return False
     return result.rowcount > 0
+
+
+async def peek_title(session: AsyncSession, card_id: str) -> str | None:
+    """Return the card's title, or ``None`` if the row doesn't resolve.
+
+    Used by delete handlers (REST + MCP) to capture the title BEFORE the
+    row cascades away, so the audit log can render a human-readable
+    label instead of a bare UUID once the row is gone. RLS scopes the
+    read to the caller's session (org-scoped for admin/MCP callers).
+    """
+    try:
+        result = await session.execute(
+            text("select title from public.cards where id = cast(:cid as uuid)"),
+            {"cid": card_id},
+        )
+    except Exception:
+        # A malformed UUID raises before the where evaluates; the
+        # surrounding handler will 404/error on the delete anyway.
+        return None
+    row = result.mappings().one_or_none()
+    return None if row is None else row.get("title")

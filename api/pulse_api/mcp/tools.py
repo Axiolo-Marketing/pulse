@@ -29,6 +29,15 @@ query is RLS-narrowed to the right tenant. A missing / invalid /
 revoked credential, or one whose user lost their membership, never
 reaches a tool body — ``RequireAuthMiddleware`` 401s the request first
 (same outcome as the REST middleware's 403).
+
+Every mutating tool also writes the same ``audit_logs`` row its REST
+twin writes, via ``pulse_api.audit.record_audit`` on the same
+member-scoped session, before the commit — an MCP-driven mutation must
+show up in the org's Activity feed exactly like its REST equivalent
+does. ``pulse_add_recipient`` additionally fires the pending-invite
+send (``routes.admin_api._send_pending_invites``, imported rather than
+duplicated) so a respondent added via MCP gets the same auto-invite
+email a respondent added through the admin UI gets.
 """
 from __future__ import annotations
 
@@ -38,6 +47,7 @@ from typing import Any
 from mcp.server.fastmcp.server import Context
 
 from pulse_api import storage
+from pulse_api.audit import record_audit
 from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.config import settings
 from pulse_api.mcp.server import (
@@ -52,6 +62,7 @@ from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
+from pulse_api.routes.admin_api import _send_pending_invites
 
 
 # ── Engagements ──────────────────────────────────────────────────────────
@@ -132,6 +143,15 @@ async def pulse_create_engagement(
             org_id=org_id,
             created_by=str(user.id),
         )
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="engagement.create",
+            target_type="engagement",
+            target_id=row["id"],
+            metadata={"name": row.get("name")},
+        )
         await session.commit()
         return row
 
@@ -153,7 +173,7 @@ async def pulse_update_engagement(
     brief: str | None = None,
     reminders_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
     if engagement_name is not None:
         fields["engagement_name"] = engagement_name
@@ -166,6 +186,18 @@ async def pulse_update_engagement(
         row = await engagements_repo.update_engagement(session, engagement_id, fields)
         if row is None:
             raise ValueError("engagement not found")
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="engagement.update",
+            target_type="engagement",
+            target_id=engagement_id,
+            metadata={
+                "changed_fields": sorted(fields.keys()),
+                "name": row.get("name"),
+            },
+        )
         await session.commit()
         return row
 
@@ -206,9 +238,10 @@ async def pulse_add_recipient(
     email: str,
     name: str | None = None,
 ) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
-        if await engagements_repo.get_by_id(session, engagement_id) is None:
+        engagement = await engagements_repo.get_by_id(session, engagement_id)
+        if engagement is None:
             raise ValueError("engagement not found")
         clean = email.strip()
         if await recipients_repo.email_exists(
@@ -224,7 +257,22 @@ async def pulse_add_recipient(
         )
         if row is None:
             raise ValueError("could not add recipient")
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="recipient.add",
+            target_type="recipient",
+            target_id=row["id"],
+            metadata={"engagement_id": engagement_id, "email": clean},
+        )
         await session.commit()
+        # Send the invite immediately, same as the REST twin — runs AFTER
+        # the recipient-add commit above so the email network call never
+        # holds that write's transaction open (audit finding M7).
+        await _send_pending_invites(
+            session, engagement=engagement, org_id=org_id, user=user
+        )
         return row
 
 
@@ -240,14 +288,26 @@ async def pulse_add_recipient(
 async def pulse_delete_engagement(
     ctx: Context, engagement_id: str
 ) -> dict[str, bool]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
+        # Capture the name before the delete so the audit log can render
+        # something more useful than a UUID once the row is gone.
+        snapshot = await engagements_repo.get_by_id(session, engagement_id)
         upload_paths = await engagements_repo.list_upload_paths_for_engagement(
             session, engagement_id
         )
         deleted = await engagements_repo.delete_engagement(session, engagement_id)
         if not deleted:
             raise ValueError("engagement not found")
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="engagement.delete",
+            target_type="engagement",
+            target_id=engagement_id,
+            metadata={"name": (snapshot or {}).get("name") if snapshot else None},
+        )
         await session.commit()
 
     # Best-effort disk cleanup after the DB-side commit, identical to the
@@ -271,7 +331,7 @@ async def pulse_delete_engagement(
 async def pulse_import_deck(
     ctx: Context, engagement_id: str, markdown: str
 ) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
         if (await engagements_repo.get_by_id(session, engagement_id)) is None:
             raise ValueError("engagement not found")
@@ -292,6 +352,15 @@ async def pulse_import_deck(
             if row is None:
                 raise ValueError(f"failed to insert card {card.title!r}")
             created.append(row)
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="card.import",
+            target_type="engagement",
+            target_id=engagement_id,
+            metadata={"count": len(created)},
+        )
         await session.commit()
         return {"created": created}
 
@@ -317,7 +386,7 @@ async def pulse_add_card(
     skip_allowed: bool = True,
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
         if (await engagements_repo.get_by_id(session, engagement_id)) is None:
             raise ValueError("engagement not found")
@@ -337,6 +406,19 @@ async def pulse_add_card(
         )
         if row is None:
             raise ValueError("card creation failed")
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="card.create",
+            target_type="card",
+            target_id=row["id"],
+            metadata={
+                "engagement_id": engagement_id,
+                "title": row.get("title"),
+                "response_type": response_type,
+            },
+        )
         await session.commit()
         return row
 
@@ -360,7 +442,7 @@ async def pulse_update_card(
     skip_allowed: bool | None = None,
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     fields: dict[str, Any] = {}
     if category is not None:
         fields["category"] = category
@@ -383,6 +465,18 @@ async def pulse_update_card(
         row = await cards_repo.update_card(session, card_id, fields)
         if row is None:
             raise ValueError("card not found")
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="card.update",
+            target_type="card",
+            target_id=card_id,
+            metadata={
+                "changed_fields": sorted(fields.keys()),
+                "title": row.get("title"),
+            },
+        )
         await session.commit()
         return row
 
@@ -394,11 +488,23 @@ async def pulse_update_card(
 async def pulse_delete_card(
     ctx: Context, card_id: str
 ) -> dict[str, bool]:
-    _, org_id = await authenticate_request(ctx)
+    user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
+        # Snapshot the title BEFORE deletion so the audit log can render
+        # something more useful than a UUID once the row is gone.
+        snapshot_title = await cards_repo.peek_title(session, card_id)
         deleted = await cards_repo.delete_card(session, card_id)
         if not deleted:
             raise ValueError("card not found")
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="card.delete",
+            target_type="card",
+            target_id=card_id,
+            metadata={"title": snapshot_title},
+        )
         await session.commit()
         return {"ok": True}
 

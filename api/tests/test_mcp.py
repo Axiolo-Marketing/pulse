@@ -180,6 +180,31 @@ async def _insert_admin_key(
     return raw
 
 
+async def _fetch_audit_rows(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    action: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return audit rows for ``org_id``, optionally filtered by action.
+
+    Mirrors the helper in ``tests/test_audit_log.py`` — kept local (not
+    imported) so this module stays independently readable.
+    """
+    sql = (
+        "select id::text as id, user_id::text as user_id, "
+        "       action, target_type, target_id, metadata, created_at "
+        "from public.audit_logs where org_id = cast(:org as uuid)"
+    )
+    params: dict[str, Any] = {"org": org_id}
+    if action is not None:
+        sql += " and action = :a"
+        params["a"] = action
+    sql += " order by created_at desc, id desc"
+    result = await db.execute(text(sql), params)
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def _mcp_post(
     mcp_client: AsyncClient,
     method: str,
@@ -735,3 +760,242 @@ async def test_oversize_attachment_rejected_before_disk_write(
     # No disk write happened. This is the load-bearing assertion the plan
     # called out specifically: the size guard runs BEFORE storage.
     assert write_calls == []
+
+
+# ── Audit parity with the REST twins (audit finding H4) ───────────────────
+#
+# Every mutating MCP tool must write the SAME audit_logs row its REST
+# route does, on the same member session, before commit. These tests
+# drive each mutating tool and assert the expected row landed.
+
+
+async def test_mcp_create_update_delete_engagement_write_audit_rows(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    org_id = seed_admin_user["org_id"]
+
+    created = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload(
+                "pulse_create_engagement", {"client_name": "Audit Co"}
+            ),
+            api_key=raw,
+        )
+    )
+    eid = created["id"]
+
+    create_rows = await _fetch_audit_rows(db, org_id=org_id, action="engagement.create")
+    assert any(r["target_id"] == eid for r in create_rows)
+    assert any(r["user_id"] == seed_admin_user["id"] for r in create_rows)
+
+    await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_update_engagement",
+            {"engagement_id": eid, "engagement_name": "Renamed"},
+        ),
+        api_key=raw,
+    )
+    update_rows = await _fetch_audit_rows(db, org_id=org_id, action="engagement.update")
+    assert any(
+        r["target_id"] == eid
+        and sorted((r["metadata"] or {}).get("changed_fields") or []) == ["engagement_name"]
+        for r in update_rows
+    )
+
+    await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload("pulse_delete_engagement", {"engagement_id": eid}),
+        api_key=raw,
+    )
+    delete_rows = await _fetch_audit_rows(db, org_id=org_id, action="engagement.delete")
+    assert any(r["target_id"] == eid for r in delete_rows)
+
+
+async def test_mcp_add_recipient_writes_audit_row_and_sends_invite(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    captured_emails: list[Any],
+) -> None:
+    """``pulse_add_recipient`` must both audit AND fire the pending-invite
+    send, exactly like the REST twin — the deck already has a card so the
+    invite isn't a no-op."""
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    org_id = seed_admin_user["org_id"]
+
+    eng = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Invite Co"}),
+            api_key=raw,
+        )
+    )
+    eid = eng["id"]
+
+    # A card must exist for _send_pending_invites to actually send anything.
+    await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_card",
+            {
+                "engagement_id": eid,
+                "category": "Intro",
+                "title": "Welcome",
+                "context": "ctx",
+                "question": "ready?",
+                "response_type": "short-text",
+            },
+        ),
+        api_key=raw,
+    )
+
+    add_resp = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_recipient",
+            {"engagement_id": eid, "email": "invitee@example.com", "name": "Inv"},
+        ),
+        api_key=raw,
+    )
+    assert add_resp["result"].get("isError") is not True, add_resp
+    recipient = _structured(add_resp)
+
+    audit_rows = await _fetch_audit_rows(db, org_id=org_id, action="recipient.add")
+    assert any(r["target_id"] == recipient["id"] for r in audit_rows)
+
+    # The invite was actually sent (not just audited).
+    assert any(e.to == "invitee@example.com" for e in captured_emails)
+    invites_sent_rows = await _fetch_audit_rows(
+        db, org_id=org_id, action="engagement.invites_sent"
+    )
+    assert any(r["target_id"] == eid for r in invites_sent_rows)
+
+    # invited_at got stamped on the recipient row.
+    row = (
+        await db.execute(
+            text(
+                "select invited_at from public.recipients where id = cast(:i as uuid)"
+            ),
+            {"i": recipient["id"]},
+        )
+    ).mappings().one()
+    assert row["invited_at"] is not None
+
+
+async def test_mcp_card_lifecycle_writes_audit_rows(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    org_id = seed_admin_user["org_id"]
+
+    eng = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Card Audit"}),
+            api_key=raw,
+        )
+    )
+    eid = eng["id"]
+
+    card = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload(
+                "pulse_add_card",
+                {
+                    "engagement_id": eid,
+                    "category": "Intro",
+                    "title": "Welcome",
+                    "context": "ctx",
+                    "question": "ready?",
+                    "response_type": "short-text",
+                },
+            ),
+            api_key=raw,
+        )
+    )
+    card_id = card["id"]
+    create_rows = await _fetch_audit_rows(db, org_id=org_id, action="card.create")
+    assert any(r["target_id"] == card_id for r in create_rows)
+
+    await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload("pulse_update_card", {"card_id": card_id, "title": "V2"}),
+        api_key=raw,
+    )
+    update_rows = await _fetch_audit_rows(db, org_id=org_id, action="card.update")
+    assert any(r["target_id"] == card_id for r in update_rows)
+
+    await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload("pulse_delete_card", {"card_id": card_id}),
+        api_key=raw,
+    )
+    delete_rows = await _fetch_audit_rows(db, org_id=org_id, action="card.delete")
+    assert any(
+        r["target_id"] == card_id and (r["metadata"] or {}).get("title") == "V2"
+        for r in delete_rows
+    )
+
+
+async def test_mcp_import_deck_writes_single_audit_row_with_count(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    org_id = seed_admin_user["org_id"]
+
+    eng = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Import Audit"}),
+            api_key=raw,
+        )
+    )
+    eid = eng["id"]
+
+    deck = (
+        "## Card 1: A\n\n**Category:** C\n**Type:** short-text\n"
+        "**Skip:** optional\n\n**Context:** ctx\n\n**Question:** q?\n\n"
+        "## Card 2: B\n\n**Category:** C\n**Type:** short-text\n"
+        "**Skip:** optional\n\n**Context:** ctx\n\n**Question:** q?\n"
+    )
+    r = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload("pulse_import_deck", {"engagement_id": eid, "markdown": deck}),
+        api_key=raw,
+    )
+    assert r["result"].get("isError") is not True, r
+
+    rows = await _fetch_audit_rows(db, org_id=org_id, action="card.import")
+    assert len(rows) == 1
+    assert rows[0]["target_id"] == eid
+    assert (rows[0]["metadata"] or {}).get("count") == 2

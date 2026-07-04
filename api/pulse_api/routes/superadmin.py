@@ -218,17 +218,20 @@ async def create_org(
 ) -> CreateOrgResponse:
     """Create a new org and send an invite to the owner.
 
-    Sequenced inserts in one transaction:
+    Sequenced writes:
 
     1. Validate slug shape + uniqueness (409 on collision).
     2. Insert ``organizations`` row.
     3. Insert ``organization_invites`` row for ``owner_email`` with
-       ``role='owner'`` and a 7-day expiry.
-    4. Sign + email the invite link.
-
-    Failure at any step rolls back the whole transaction — half-created
-    orgs without an owner invite would strand the operator with an
-    unjoinable tenant.
+       ``role='owner'`` and a 7-day expiry, plus the audit rows, then
+       commit — half-created orgs without an owner invite would strand
+       the operator with an unjoinable tenant, so a failure at any of
+       these DB steps rolls back the whole transaction.
+    4. Only once that's durably committed: sign + email the invite link.
+       Sending happens after the commit (not inside the same
+       transaction) so the network-bound send never holds the write
+       open, and a send hiccup (``send_email`` is best-effort and never
+       raises) can't roll back an org that was actually created.
 
     Args:
         req: Validated request body.
@@ -269,14 +272,6 @@ async def create_org(
         expires_at=expires_at,
     )
 
-    subject, body = org_invite_email(
-        raw_token,
-        org_name=req.name.strip(),
-        inviter_name=user.name,
-        role="owner",
-    )
-    await email_module.send_email(owner_email, subject, body)
-
     # Audit on the BYPASSRLS session — the superadmin lives outside the
     # org, so we attribute the action under the new org's id so it
     # surfaces in *that* org's activity feed (the owner reading their
@@ -301,6 +296,17 @@ async def create_org(
         metadata={"email": owner_email, "role": "owner"},
     )
     await session.commit()
+
+    # Send the invite email AFTER the org + invite rows commit above so
+    # the network-bound send never runs while that write's transaction is
+    # still open (audit finding M7). Best-effort — never raises.
+    subject, body = org_invite_email(
+        raw_token,
+        org_name=req.name.strip(),
+        inviter_name=user.name,
+        role="owner",
+    )
+    await email_module.send_email(owner_email, subject, body)
 
     return CreateOrgResponse(
         org=OrgRow(

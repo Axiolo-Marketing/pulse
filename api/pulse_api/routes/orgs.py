@@ -656,12 +656,12 @@ async def upload_org_logo(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     storage.write_upload(relative_path=relative_path, content=content)
 
-    # Best-effort: delete the previous logo on disk so old files don't
-    # accumulate. The DB row is the source of truth; an orphan on disk
-    # is cheap to recover from.
+    # Snapshot the previous logo path before we overwrite it, but don't
+    # delete the file yet — if the commit below fails, the row must still
+    # point at a file that exists on disk. Mirrors delete_engagement's
+    # DB-first/disk-second order.
     previous = await orgs_repo.get_for_member(session, membership.org_id)
-    if previous and previous.get("logo_path"):
-        storage.delete_upload(str(previous["logo_path"]))
+    previous_logo_path = previous.get("logo_path") if previous else None
 
     await orgs_repo.set_logo_path(
         session, org_id=membership.org_id, logo_path=relative_path
@@ -676,6 +676,13 @@ async def upload_org_logo(
         metadata={"mime_type": mime, "size_bytes": len(content)},
     )
     await session.commit()
+
+    # Best-effort cleanup, now that the row durably points at the new file.
+    # Old files not accumulating is a nice-to-have; a row pointing at a
+    # deleted file (had the commit failed after an early delete) would not be.
+    if previous_logo_path:
+        storage.delete_upload(str(previous_logo_path))
+
     return {"logo_path": relative_path}
 
 
@@ -1108,13 +1115,6 @@ async def create_invite(
     org_row = await orgs_repo.get_for_member(session, membership.org_id)
     org_name = str(org_row["name"]) if org_row else "your organization"
 
-    subject, body = org_invite_email(
-        raw_token,
-        org_name=org_name,
-        inviter_name=user.name,
-        role=req.role,
-    )
-    await email_module.send_email(target_email, subject, body)
     await record_audit(
         session,
         org_id=membership.org_id,
@@ -1125,6 +1125,17 @@ async def create_invite(
         metadata={"email": target_email, "role": req.role},
     )
     await session.commit()
+
+    # Send the email AFTER the invite row + audit commit above so the
+    # network-bound send never runs while that write's transaction is
+    # still open (audit finding M7). Best-effort — never raises.
+    subject, body = org_invite_email(
+        raw_token,
+        org_name=org_name,
+        inviter_name=user.name,
+        role=req.role,
+    )
+    await email_module.send_email(target_email, subject, body)
 
     return InviteSummary(
         id=str(row["id"]),

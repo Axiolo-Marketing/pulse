@@ -186,6 +186,54 @@ async def test_delete_logo_clears_row(
     assert row["logo_path"] is None
 
 
+# ── Replace: DB-first, disk-second (audit finding M10) ────────────────────
+
+
+async def test_replace_logo_commits_before_deleting_old_file(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Uploading a second logo replaces the row and removes the old file
+    only AFTER the row commits — mirroring delete_engagement's DB-first/
+    disk-second order so a failed commit never leaves the row pointing at
+    an already-deleted file."""
+    from pulse_api import storage as storage_module
+
+    first = await admin_authed.post(
+        "/api/orgs/me/logo",
+        files={"file": ("first.png", b"first-bytes" * 10, "image/png")},
+    )
+    assert first.status_code == 200, first.text
+    first_path = first.json()["logo_path"]
+    first_on_disk = storage_module.resolve_within_upload_dir(first_path)
+    assert first_on_disk.exists()
+
+    second = await admin_authed.post(
+        "/api/orgs/me/logo",
+        files={"file": ("second.png", b"second-bytes" * 10, "image/png")},
+    )
+    assert second.status_code == 200, second.text
+    second_path = second.json()["logo_path"]
+    assert second_path != first_path
+
+    # New file lands, old file is cleaned up — but only after the row
+    # already pointed at the new path (verified by the row read below).
+    assert storage_module.resolve_within_upload_dir(second_path).exists()
+    assert not first_on_disk.exists()
+
+    row = (
+        await db.execute(
+            text(
+                "select logo_path from public.organizations "
+                "where id = cast(:o as uuid)"
+            ),
+            {"o": seed_admin_user["org_id"]},
+        )
+    ).mappings().one()
+    assert row["logo_path"] == second_path
+
+
 # ── Path traversal defense ───────────────────────────────────────────────
 
 
