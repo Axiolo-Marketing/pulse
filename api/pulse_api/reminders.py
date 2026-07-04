@@ -5,9 +5,9 @@ so it can't be redeemed as a session/verify/reset token even with the same
 ``SESSION_SECRET``). Unsubscribe links shouldn't rot, so the max-age is
 effectively forever (~10 years).
 """
+from pulse_api.auth.session import InvalidSessionError
 from pulse_api.auth.tokens import consume_token, issue_token
 from pulse_api.config import settings
-from pulse_api.auth.session import InvalidSessionError
 
 _UNSUBSCRIBE_PURPOSE = "reminder-unsubscribe"
 _UNSUBSCRIBE_MAX_AGE = 3650 * 24 * 3600  # ~10 years — links never practically expire

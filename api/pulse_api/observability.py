@@ -22,7 +22,6 @@ from starlette.responses import JSONResponse
 
 from pulse_api.config import settings
 
-
 # ── Structured logging ────────────────────────────────────────────────────
 
 

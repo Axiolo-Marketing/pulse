@@ -242,7 +242,7 @@ mcp = FastMCP(
 # break legacy `pulse_<key>` callers, which always send their credential.
 from pulse_api.mcp import tools as _tools  # noqa: E402, F401
 
-mcp_app: "Starlette" = mcp.streamable_http_app()
+mcp_app: Starlette = mcp.streamable_http_app()
 
 
 @asynccontextmanager

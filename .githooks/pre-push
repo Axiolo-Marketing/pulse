@@ -3,9 +3,11 @@
 # deploy/README.md and ~/.claude/plans/yes-i-want-to-kind-pearl.md).
 #
 # Runs lint, typecheck, unit tests, and the production build in the frontend
-# container before every push. Installed via `make install-hooks` (sets
-# core.hooksPath to .githooks). Bypass once with `git push --no-verify`, or set
-# SKIP_PREPUSH=1 to skip without disabling git's other verifications.
+# container, PLUS the backend test suite (with its 80% coverage gate) and
+# ruff lint in the backend container, before every push. Installed via
+# `make install-hooks` (sets core.hooksPath to .githooks). Bypass once with
+# `git push --no-verify`, or set SKIP_PREPUSH=1 to skip without disabling
+# git's other verifications.
 set -e
 
 if [ "$SKIP_PREPUSH" = "1" ]; then
@@ -23,6 +25,16 @@ if ! docker compose ps frontend --format '{{.State}}' 2>/dev/null | grep -q runn
   exit 1
 fi
 
+if ! docker compose ps backend --format '{{.State}}' 2>/dev/null | grep -q running; then
+  echo "pre-push: the 'backend' container isn't running, so checks can't run."
+  echo "  Start the dev stack:  make dev   (or: docker compose up -d backend)"
+  echo "  Or bypass once:       git push --no-verify"
+  exit 1
+fi
+
 echo "pre-push: running local checks (lint → typecheck → test → build)…"
 make front-check
+echo "pre-push: running backend checks (ruff → pytest)…"
+make back-lint
+make test
 echo "pre-push: all checks passed ✓"

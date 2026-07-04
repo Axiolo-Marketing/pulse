@@ -64,7 +64,6 @@ from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
 from pulse_api.routes.admin_api import _send_pending_invites
 
-
 # ── Engagements ──────────────────────────────────────────────────────────
 
 

@@ -259,9 +259,75 @@ Per deploy, via the `backend` role (see Migration safety above):
 - `pg_dump pulse | gzip` → `/var/backups/pulse/db-predeploy-<ts>.sql.gz`, taken
   right before `alembic upgrade head`; same 30-day local retention.
 
-Off-box copies are out of scope for the playbook. Recommended: set up
-`rclone` (or aws-cli) on the host with credentials for an R2/B2 bucket,
-add a Pulse-only cron that runs after the local backup cron.
+### Off-box backups (Cloudflare R2 via restic)
+
+The local backups above all live on the same VPS disk — a lost/corrupted
+disk or a bad `rm -rf` takes them out along with the app. The `pulse-backup`
+cron optionally pushes the *same* local backup directory (`/var/backups/pulse/`
+— DB dumps + the uploads mirror) off-box to Cloudflare R2 (an S3-compatible
+object store) via [restic](https://restic.net), a 04:00 job right after the
+03:15/03:30 local jobs.
+
+**Status: off by default, and UNTESTED until an operator provisions R2 and
+deploys it.** `pulse_restic_enabled: false` in `group_vars/all.yml` is the
+master switch — do not flip it to `true` without following the bootstrap
+below and verifying a manual `restic backup` first.
+
+**Bootstrap (one-time, manual — the playbook does not do this for you):**
+
+1. Create an R2 bucket + an API token scoped to it in the Cloudflare
+   dashboard (R2 → Manage API tokens). Note the bucket name, the
+   account-scoped S3 endpoint (`https://<accountid>.r2.cloudflarestorage.com`),
+   the access key id, and the secret access key.
+2. Fill in the non-secret vars in `group_vars/all.yml`:
+   `pulse_restic_r2_bucket`, `pulse_restic_r2_endpoint`.
+3. Vault the secrets (a strong restic repo password + the R2 credentials —
+   see the comment above `vault_pulse_restic_password` in
+   `group_vars/all.yml` for the exact `ansible-vault encrypt_string`
+   invocations). **Never invent or commit a real secret value in plaintext.**
+4. `restic` is installed by the `preflight` role's apt task (Debian's
+   package, `state: present`). SSH to the VPS as the `pulse` user (or
+   `sudo -u pulse`) and initialize the repo **once**, by hand:
+   ```bash
+   export RESTIC_REPOSITORY="s3:https://<accountid>.r2.cloudflarestorage.com/<bucket>"
+   export RESTIC_PASSWORD="<the restic repo password you vaulted>"
+   export AWS_ACCESS_KEY_ID="<R2 access key id>"
+   export AWS_SECRET_ACCESS_KEY="<R2 secret access key>"
+   restic init
+   restic backup /var/backups/pulse --tag pulse-daily --host pulse   # verify it works
+   restic snapshots
+   ```
+5. Only after step 4 succeeds, set `pulse_restic_enabled: true` and re-run
+   the playbook — this templates the 04:00 restic job into
+   `/etc/cron.d/pulse-backup` (see `pulse-backup.cron.j2`). It backs up
+   `/var/backups/pulse` (tag `pulse-daily`), then runs
+   `restic forget --keep-daily {{ pulse_restic_retention_days }} --prune`
+   to enforce retention on the R2 side independently of the 30-day local
+   retention.
+
+**Restore procedure:**
+
+- **Fast path (local, same box, most rollbacks — e.g. a bad deploy).** Stop
+  `pulse-api`, then:
+  ```bash
+  gunzip -c /var/backups/pulse/db-predeploy-<ts>.sql.gz | psql pulse
+  # or, for a routine daily dump instead of a pre-deploy snapshot:
+  gunzip -c /var/backups/pulse/db-YYYY-MM-DD.sql.gz | psql pulse
+  ```
+  Uploads: the local mirror at `/var/backups/pulse/uploads/` can be
+  `rsync`'d back to `/var/lib/pulse/uploads/` directly.
+- **Disaster recovery (R2, when the VPS disk itself is gone/corrupted —
+  requires a fresh host with `restic` installed).** Export the same four env
+  vars as step 4 above, then:
+  ```bash
+  restic snapshots                          # find the snapshot id/date you want
+  restic restore latest --target /var/backups/pulse-restored
+  # DB: gunzip -c /var/backups/pulse-restored/db-YYYY-MM-DD.sql.gz | psql pulse
+  # Uploads: rsync -a /var/backups/pulse-restored/uploads/ /var/lib/pulse/uploads/
+  ```
+  Restore to a scratch directory first (as above), not directly over a live
+  `/var/lib/pulse/uploads/` — confirm the snapshot is the one you want before
+  overwriting anything.
 
 ## What this playbook does NOT do
 

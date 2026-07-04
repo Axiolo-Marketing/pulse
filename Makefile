@@ -1,4 +1,4 @@
-.PHONY: dev down test backend-shell migrate makemigration build deploy-check deploy-apply seed-dev seed-deck reset-test-db front-lint front-typecheck front-test front-check test-e2e install-hooks
+.PHONY: dev down test back-lint backend-shell migrate makemigration build deploy-check deploy-apply seed-dev seed-deck reset-test-db front-lint front-typecheck front-test front-check test-e2e install-hooks
 
 # ── Local dev ──────────────────────────────────────────────────────────────
 
@@ -15,6 +15,12 @@ backend-shell:
 
 test:
 	docker compose exec backend uv run pytest
+
+# Ruff lint over the backend package. Config lives in api/pyproject.toml
+# ([tool.ruff]); wired-but-passing on the current code (see M6 in the audit
+# — this is not a repo-wide reformat gate).
+back-lint:
+	docker compose exec -T backend uv run ruff check pulse_api
 
 migrate:
 	docker compose exec backend uv run alembic upgrade head

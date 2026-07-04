@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -349,9 +349,8 @@ def invite_status(invite: dict[str, object]) -> str:
 
 def _utcnow() -> datetime:
     """Return current UTC time as a tz-aware datetime (UTC)."""
-    from datetime import timezone
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # Re-export the spec setting so the route layer can reach it via the

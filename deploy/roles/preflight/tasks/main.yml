@@ -13,6 +13,11 @@
       - acl
       - git
       - python3-psycopg2
+      # Off-box backup push (H2): Debian's `restic` package is old but
+      # workable for `backup`/`forget`/`restore` against an S3-compatible
+      # (R2) repo — state=present only, no third-party repo, per the
+      # shared-VPS coexistence rule.
+      - restic
     state: present
     update_cache: true
     cache_valid_time: 3600

@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pulse_api.models import OAuthAuthorizationCode, OAuthClient, OAuthGrant
 from pulse_api.models._helpers import as_naive_utc, utcnow_naive
 
-
 # ── clients ───────────────────────────────────────────────────────────────
 
 

@@ -9,3 +9,21 @@ PATH=/usr/local/bin:/usr/bin:/bin
 # 03:30 daily — mirror uploads. rsync is fine; files are immutable once
 # written (only delete removes them, and we tolerate stale snapshots).
 30 3 * * * pulse rsync -a --delete {{ pulse_uploads_dir }}/ {{ pulse_backup_dir }}/uploads/
+{% if pulse_restic_enabled | default(false) %}
+
+# 04:00 daily — off-box push of the local backup dir (DB dumps + uploads
+# mirror, both already written above) to Cloudflare R2 via restic, an
+# S3-compatible endpoint. This is the ONLY copy that leaves the VPS — without
+# it, a disk failure or an operator mistake on this box loses the local
+# backups too. Local dumps above remain the fast-path restore; this is the
+# disaster-recovery path. See deploy/README.md "Off-box backups" for the
+# restic repo bootstrap (one-time `restic init`, done manually — not by this
+# cron job) and the restore procedure.
+#
+# UNTESTED until first deployed — flip pulse_restic_enabled only after
+# verifying `restic snapshots` succeeds by hand with these credentials.
+# `forget --prune` enforces retention; a failure here does not touch the
+# local backups (`&&` short-circuits, but the local dump/rsync jobs above
+# already ran independently at 03:15/03:30).
+0 4 * * * pulse RESTIC_REPOSITORY={{ pulse_restic_repository }} RESTIC_PASSWORD={{ vault_pulse_restic_password }} AWS_ACCESS_KEY_ID={{ vault_pulse_restic_r2_access_key_id }} AWS_SECRET_ACCESS_KEY={{ vault_pulse_restic_r2_secret_access_key }} restic backup {{ pulse_backup_dir }} --tag pulse-daily --host pulse && RESTIC_REPOSITORY={{ pulse_restic_repository }} RESTIC_PASSWORD={{ vault_pulse_restic_password }} AWS_ACCESS_KEY_ID={{ vault_pulse_restic_r2_access_key_id }} AWS_SECRET_ACCESS_KEY={{ vault_pulse_restic_r2_secret_access_key }} restic forget --tag pulse-daily --keep-daily {{ pulse_restic_retention_days }} --prune
+{% endif %}

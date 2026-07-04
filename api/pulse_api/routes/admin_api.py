@@ -16,8 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
-from pulse_api import reminders
-from pulse_api import storage
+from pulse_api import reminders, storage
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (

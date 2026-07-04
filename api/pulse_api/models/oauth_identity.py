@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
-from pulse_api.models._helpers import utcnow_naive
 
 from sqlmodel import Field, SQLModel
+
+from pulse_api.models._helpers import utcnow_naive
 
 
 class OAuthIdentity(SQLModel, table=True):

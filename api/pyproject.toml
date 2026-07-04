@@ -31,6 +31,7 @@ dev = [
     "polyfactory>=2.18",
     "freezegun>=1.5",
     "respx>=0.22",
+    "ruff>=0.8",
 ]
 
 [tool.pytest.ini_options]
@@ -60,3 +61,29 @@ exclude_lines = [
 ]
 fail_under = 80
 show_missing = true
+
+# ── Lint (M6) ────────────────────────────────────────────────────────────
+# Wired-but-passing on purpose: the goal here is a lint gate the team can
+# trust, not a repo-wide reformat in the same PR. `make back-lint` runs
+# `ruff check pulse_api`. Widen `select` / drop `ignore` entries in a
+# follow-up cleanup PR once the codebase has been brought into line.
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    # Raw SQL via text() means long f-string/text() calls are common and
+    # more readable unwrapped; the repo idiom (see CLAUDE.md) predates this
+    # gate and isn't worth reflowing wholesale right now.
+    "E501",
+    # FastAPI's own idiom: `Depends(...)` / `File(...)` in a parameter
+    # default is how dependency injection works, not a mutable-default bug.
+    "B008",
+    # `class Foo(str, enum.Enum)` is the pre-3.11-compatible StrEnum shape
+    # already used across the models; switching to `enum.StrEnum` changes
+    # __str__/repr semantics and is a deliberate follow-up, not a lint fix.
+    "UP042",
+]
