@@ -12,6 +12,7 @@ server-side rather than trusting the request body, so a hostile client
 can't forge the engagement_id field on a write.
 """
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -32,11 +33,57 @@ router = APIRouter(prefix="/api", tags=["client"])
 
 VALID_STATES = ("viewed", "answered", "skipped", "needs_edit")
 
+# Schemes the deck itself accepts for a `document-link` answer (SPEC.md §4:
+# `{url, note?}`). Kept in sync with `isValidUrl()` in `src/lib/render.ts`,
+# which restricts the deck's own link input to the same two schemes.
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
 
 class SaveResponseRequest(BaseModel):
     card_id: str
     state: str = Field(pattern=r"^(viewed|answered|skipped|needs_edit)$")
     response_value: dict[str, Any] | None = None
+
+
+def _reject_unsafe_response_url(response_value: dict[str, Any] | None) -> None:
+    """Reject a `response_value.url` that isn't an absolute http(s) URL.
+
+    Trust boundary: `response_value` is attacker-controlled. It comes
+    straight from the deck-token holder (the client) via this route, and a
+    direct API call bypasses the deck UI's own scheme check (`isValidUrl`
+    in `src/lib/render.ts`). The victim is the *operator*: the admin
+    console later renders any `url` key as a clickable `<a href=...>` (v1
+    `src/scripts/admin.ts`, v2 `src/components/admin/detail/parts.tsx`).
+    HTML-escaping / JSX neutralizes markup characters but not the URL
+    *scheme* — a stored `javascript:`/`data:`/`vbscript:` (or
+    protocol-relative `//...`) value would still execute in the operator's
+    browser the moment they click the rendered link.
+
+    Only the `document-link` response type currently populates a `url`
+    key, but this checks any `response_value` dict so the rule holds
+    regardless of `response_type` — conservative by design: a
+    `response_value` with no `url` key, or where `url` isn't a non-empty
+    string, is left untouched so non-URL response types are unaffected.
+
+    Args:
+        response_value: The raw, still-untrusted value from the request
+            body, before it reaches `responses_repo.upsert_answer`.
+
+    Raises:
+        HTTPException: 400 if `url` is present, a non-empty string, and
+            not an absolute `http://` or `https://` URL.
+    """
+    if not isinstance(response_value, dict):
+        return
+    url = response_value.get("url")
+    if not isinstance(url, str) or not url:
+        return
+    parsed = urlsplit(url)
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES or not parsed.netloc:
+        raise HTTPException(
+            status_code=400,
+            detail="response_value.url must be an absolute http:// or https:// URL",
+        )
 
 
 class ViewRequest(BaseModel):
@@ -148,6 +195,7 @@ async def save_response(
     req: SaveResponseRequest,
     session: AsyncSession = Depends(get_anon_session),
 ) -> dict:
+    _reject_unsafe_response_url(req.response_value)
     row = await responses_repo.upsert_answer(
         session,
         card_id=req.card_id,

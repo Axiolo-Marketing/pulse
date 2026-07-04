@@ -282,6 +282,74 @@ async def test_save_response_rejects_unknown_card(client_authed: AsyncClient) ->
     assert r.status_code == 404
 
 
+# ── POST /api/responses — url scheme validation (audit M5/F2) ──────────────
+#
+# The operator's admin console later renders any `response_value.url` as a
+# clickable <a href=...>. HTML-escaping neutralizes markup but not the URL
+# *scheme*, so a hostile client could otherwise smuggle a `javascript:`/
+# `data:` link into storage for the operator to click. The server must
+# enforce the same http/https-only rule the deck UI applies client-side
+# (`isValidUrl` in `src/lib/render.ts`), since a direct API call bypasses it.
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "javascript:alert(document.cookie)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "//evil.example.com/payload",
+    ],
+)
+async def test_save_response_rejects_unsafe_url_schemes(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+    bad_url: str,
+) -> None:
+    card = next(c for c in seed_cards if c["response_type"] == "document-link")
+    r = await client_authed.post(
+        "/api/responses",
+        json={"card_id": card["id"], "state": "answered", "response_value": {"url": bad_url}},
+    )
+    assert r.status_code == 400
+
+    # Nothing was stored: the card has no saved response at all.
+    listed = await client_authed.get("/api/responses")
+    assert not any(row["card_id"] == card["id"] for row in listed.json())
+
+
+async def test_save_response_accepts_valid_https_url(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+) -> None:
+    card = next(c for c in seed_cards if c["response_type"] == "document-link")
+    r = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card["id"],
+            "state": "answered",
+            "response_value": {"url": "https://example.com"},
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["response_value"] == {"url": "https://example.com"}
+
+
+async def test_save_response_without_url_key_unaffected(
+    client_authed: AsyncClient,
+    seed_cards: list[dict[str, str]],
+) -> None:
+    """Response types with no `url` key (e.g. short-text) are untouched by
+    the URL-scheme check -- it must only fire when `url` is present."""
+    card = next(c for c in seed_cards if c["response_type"] == "short-text")
+    r = await client_authed.post(
+        "/api/responses",
+        json={"card_id": card["id"], "state": "answered", "response_value": {"text": "hello"}},
+    )
+    assert r.status_code == 200
+    assert r.json()["response_value"] == {"text": "hello"}
+
+
 # ── /api/responses (list) ──────────────────────────────────────────────────
 
 
