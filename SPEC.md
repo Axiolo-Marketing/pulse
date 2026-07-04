@@ -194,8 +194,6 @@ on conflict (client_id, order_index) do update set
 
 The `on conflict` clause means re-running the same SQL updates the cards in place. Useful for iterating on wording.
 
-For an example, see how Renee's 19 cards are inserted in `supabase/seed.sql`.
-
 ### Active References (HTML deliverables)
 
 If a card benefits from a visual reference (org chart, ICP one-pager, sales playbook excerpt), drop the HTML file at `pulse/public/deliverables/<slug>.html`, commit it, push it, then wire it onto the card via the admin Edit form (Active reference path = `deliverables/<slug>.html`).

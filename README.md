@@ -20,8 +20,8 @@ application layer reinforcing the same scope through a session-driven
 | `.claude/multi-tenant-workflow.md` | The sub-agent orchestration contract used to build the multi-tenant migration. Reference for future large initiatives. |
 | `deploy/README.md` | Production deployment runbook (Ansible on a shared Debian VPS). |
 | `api/` | FastAPI backend — Python 3.13, SQLModel, asyncpg, Alembic. |
-| `src/` | Astro frontend — vanilla TypeScript, no React, no Tailwind. |
-| `api/migrations/versions/` | Alembic migrations. `0001` (initial port from Supabase) → `0006` (latest, invite revocation column). |
+| `src/` | Astro frontend — v1 (vanilla TypeScript, current default) and v2 (React + Tailwind + shadcn/ui, opt-in) ship side by side during the migration. |
+| `api/migrations/versions/` | Alembic migrations. `0001` (initial port from Supabase) → `0015` (latest, multi-respondent recipients). |
 | `api/db-init/` | Postgres role bootstrap SQL — runs once on a fresh DB volume. |
 | `public/deliverables/` | Static HTML "active references" that cards can link to via `attachment_path`. |
 

@@ -175,11 +175,3 @@ Production runs on a **shared Debian VPS** (other apps coexist on the same host)
 If you're editing Ansible: anything outside prerequisite package installation/service start and Pulse's owned paths (`/opt/pulse/`, `/etc/pulse/`, `/var/www/pulse/`, `/var/lib/pulse/`, `/etc/nginx/sites-available/pulse`, `pulse-api.service`, `pulse_*` DB roles, the `pulse` database) is a bug — even if the playbook syntax-checks clean. Pre-existing other apps depend on the rest of the box being untouched.
 
 The repo is cloned on the VPS via the operator's `~/.ssh/github_deploy_key` — the same SSH key already used by `image-compressor`, `sitechecker`, and `octoping`. It has access to all Axiolo-Marketing repos, so no per-repo Deploy Key is needed. The preflight role copies it to `/etc/pulse/deploy_key` (0600, pulse-owned), and the backend role's `ansible.builtin.git` task uses `key_file:` against that path.
-
-## Obsolete files still in the tree
-
-Two top-level dirs from the pre-migration Supabase setup are unused but not deleted (would require explicit operator authorization):
-- `scripts/` — `apply-sql.mjs` + `verify.mjs` used the old supabase-js + `pg` deps. The SQL they applied lives in Alembic migration `0001_initial_schema.py` now.
-- `supabase/` — `schema.sql` + `seed.sql` are the source-of-truth-now-ported schema.
-
-Safe to `rm -rf scripts/ supabase/` when ready.

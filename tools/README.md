@@ -1,8 +1,7 @@
 # tools/
 
 Operator tooling that talks to a running Pulse instance over the admin API.
-Unlike the obsolete top-level `scripts/` (pre-Supabase-migration, safe to delete),
-nothing here touches the database directly — it all goes through `/api/admin/*`,
+Nothing here touches the database directly — it all goes through `/api/admin/*`,
 so RLS and request validation stay intact.
 
 ## apply-deck.py
