@@ -1,5 +1,7 @@
 """Repository helpers for `uploads`. Reads only here — create/delete land
 with the file-storage phase, since they need the disk-side counterpart."""
+import uuid
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +9,24 @@ UPLOAD_COLS = (
     "id::text, card_id::text, engagement_id::text, recipient_id::text, file_name, "
     "file_size_bytes, storage_path, mime_type, kind, uploaded_at"
 )
+
+
+def _valid_uuid(value: str) -> bool:
+    """True if `value` parses as a UUID.
+
+    Used as an explicit guard at function entry in place of a blanket
+    `except Exception` around the query — a malformed id is a routine
+    "not found" case, but a broad catch there also hid genuine DB errors
+    (connection loss, constraint violations, RLS refusals) as a silent
+    None/[]/False with no log. Guarding up front lets real errors
+    propagate to the 5xx logger while preserving the same not-found
+    response for bad ids.
+    """
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
@@ -17,16 +37,15 @@ async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
 
 
 async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
-    try:
-        result = await session.execute(
-            text(
-                f"select {UPLOAD_COLS} from public.uploads "
-                "where engagement_id = cast(:cid as uuid) order by uploaded_at"
-            ),
-            {"cid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return []
+    result = await session.execute(
+        text(
+            f"select {UPLOAD_COLS} from public.uploads "
+            "where engagement_id = cast(:cid as uuid) order by uploaded_at"
+        ),
+        {"cid": engagement_id},
+    )
     return [dict(r) for r in result.mappings().all()]
 
 
@@ -62,46 +81,44 @@ async def create_upload(
     `pulse_request_engagement_id()` so the wire body can't address another
     recipient's uploads. ``kind`` discriminates answer files (``'file'``)
     from recorded voice answers (``'voice'``). Returns None if card_id is
-    invalid (cast fails) or RLS rejects the insert because the card
+    invalid (malformed UUID) or RLS rejects the insert because the card
     doesn't belong to caller."""
-    try:
-        result = await session.execute(
-            text(
-                f"""
-                insert into public.uploads
-                  (card_id, engagement_id, recipient_id, file_name, file_size_bytes,
-                   storage_path, mime_type, kind)
-                values
-                  (cast(:cid as uuid), public.pulse_request_engagement_id(),
-                   public.pulse_request_recipient_id(),
-                   :fn, :sz, :sp, :mt, :kind)
-                returning {UPLOAD_COLS}
-                """
-            ),
-            {
-                "cid": card_id,
-                "fn": file_name,
-                "sz": file_size_bytes,
-                "sp": storage_path,
-                "mt": mime_type,
-                "kind": kind,
-            },
-        )
-    except Exception:
+    if not _valid_uuid(card_id):
         return None
+    result = await session.execute(
+        text(
+            f"""
+            insert into public.uploads
+              (card_id, engagement_id, recipient_id, file_name, file_size_bytes,
+               storage_path, mime_type, kind)
+            values
+              (cast(:cid as uuid), public.pulse_request_engagement_id(),
+               public.pulse_request_recipient_id(),
+               :fn, :sz, :sp, :mt, :kind)
+            returning {UPLOAD_COLS}
+            """
+        ),
+        {
+            "cid": card_id,
+            "fn": file_name,
+            "sz": file_size_bytes,
+            "sp": storage_path,
+            "mt": mime_type,
+            "kind": kind,
+        },
+    )
     return dict(result.mappings().one())
 
 
 async def get_by_id_for_caller(session: AsyncSession, upload_id: str) -> dict | None:
     """RLS narrows to the caller's uploads. Returns None for unknown
     or other-engagement uploads — same response so existence isn't leaked."""
-    try:
-        result = await session.execute(
-            text(f"select {UPLOAD_COLS} from public.uploads where id = cast(:uid as uuid)"),
-            {"uid": upload_id},
-        )
-    except Exception:
+    if not _valid_uuid(upload_id):
         return None
+    result = await session.execute(
+        text(f"select {UPLOAD_COLS} from public.uploads where id = cast(:uid as uuid)"),
+        {"uid": upload_id},
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
@@ -109,16 +126,15 @@ async def get_by_id_for_caller(session: AsyncSession, upload_id: str) -> dict | 
 async def delete_for_caller(session: AsyncSession, upload_id: str) -> dict | None:
     """RLS gates the DELETE. Returns the deleted row (so the route knows
     which on-disk file to also remove), or None if no match."""
-    try:
-        result = await session.execute(
-            text(
-                f"delete from public.uploads where id = cast(:uid as uuid) "
-                f"returning {UPLOAD_COLS}"
-            ),
-            {"uid": upload_id},
-        )
-    except Exception:
+    if not _valid_uuid(upload_id):
         return None
+    result = await session.execute(
+        text(
+            f"delete from public.uploads where id = cast(:uid as uuid) "
+            f"returning {UPLOAD_COLS}"
+        ),
+        {"uid": upload_id},
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
@@ -127,13 +143,12 @@ async def delete_for_caller(session: AsyncSession, upload_id: str) -> dict | Non
 
 
 async def admin_get_by_id(session: AsyncSession, upload_id: str) -> dict | None:
-    try:
-        result = await session.execute(
-            text(f"select {UPLOAD_COLS} from public.uploads where id = cast(:uid as uuid)"),
-            {"uid": upload_id},
-        )
-    except Exception:
+    if not _valid_uuid(upload_id):
         return None
+    result = await session.execute(
+        text(f"select {UPLOAD_COLS} from public.uploads where id = cast(:uid as uuid)"),
+        {"uid": upload_id},
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
@@ -177,11 +192,10 @@ async def get_recipient_usage(session: AsyncSession) -> tuple[int, int]:
 async def card_belongs_to_caller(session: AsyncSession, card_id: str) -> bool:
     """RLS-filtered existence check — analogue of the one in responses.py.
     Returns False on malformed UUIDs without raising."""
-    try:
-        result = await session.execute(
-            text("select 1 from public.cards where id = cast(:cid as uuid)"),
-            {"cid": card_id},
-        )
-    except Exception:
+    if not _valid_uuid(card_id):
         return False
+    result = await session.execute(
+        text("select 1 from public.cards where id = cast(:cid as uuid)"),
+        {"cid": card_id},
+    )
     return result.scalar() is not None

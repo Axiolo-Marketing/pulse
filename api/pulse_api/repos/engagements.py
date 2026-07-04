@@ -5,9 +5,28 @@ The magic-link token lives on `recipients` now (migration 0015), so an
 engagement is just the shared card set + per-recipient progress rollup.
 """
 import json
+import uuid
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _valid_uuid(value: str) -> bool:
+    """True if `value` parses as a UUID.
+
+    Used as an explicit guard at function entry in place of a blanket
+    `except Exception` around the query — a malformed id is a routine
+    "not found" case, but a broad catch there also hid genuine DB errors
+    (connection loss, constraint violations, RLS refusals) as a silent
+    None/[]/False with no log. Guarding up front lets real errors
+    propagate to the 5xx logger while preserving the same not-found
+    response for bad ids.
+    """
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 async def get_my_engagement(session: AsyncSession) -> dict | None:
@@ -228,21 +247,20 @@ async def enrich_owner_display(
 
 
 async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
-    try:
-        result = await session.execute(
-            text(
-                "select c.id::text, c.client_id::text as client_id, "
-                "cl.name as name, c.engagement_name, "
-                "c.brief, c.voice_enabled, c.reminders_enabled, "
-                "c.created_by::text as created_by, c.created_at "
-                "from public.engagements c "
-                "join public.clients cl on cl.id = c.client_id "
-                "where c.id = cast(:cid as uuid)"
-            ),
-            {"cid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return None
+    result = await session.execute(
+        text(
+            "select c.id::text, c.client_id::text as client_id, "
+            "cl.name as name, c.engagement_name, "
+            "c.brief, c.voice_enabled, c.reminders_enabled, "
+            "c.created_by::text as created_by, c.created_at "
+            "from public.engagements c "
+            "join public.clients cl on cl.id = c.client_id "
+            "where c.id = cast(:cid as uuid)"
+        ),
+        {"cid": engagement_id},
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
@@ -316,18 +334,17 @@ async def update_engagement(
     row joins ``clients`` so ``name`` + ``client_id`` stay present."""
     if not fields:
         return await get_by_id(session, engagement_id)
+    if not _valid_uuid(engagement_id):
+        return None
     set_clauses = ", ".join(f"{k} = :{k}" for k in fields)
     params = {"cid": engagement_id, **fields}
-    try:
-        await session.execute(
-            text(
-                f"update public.engagements set {set_clauses} "
-                f"where id = cast(:cid as uuid)"
-            ),
-            params,
-        )
-    except Exception:
-        return None
+    await session.execute(
+        text(
+            f"update public.engagements set {set_clauses} "
+            f"where id = cast(:cid as uuid)"
+        ),
+        params,
+    )
     return await get_by_id(session, engagement_id)
 
 
@@ -337,16 +354,15 @@ async def list_upload_paths_for_engagement(
     """Fetch storage_path values BEFORE deleting the engagement so the
     route layer knows which on-disk files to remove after the FK cascade
     wipes the uploads rows."""
-    try:
-        result = await session.execute(
-            text(
-                "select storage_path from public.uploads "
-                "where engagement_id = cast(:cid as uuid)"
-            ),
-            {"cid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return []
+    result = await session.execute(
+        text(
+            "select storage_path from public.uploads "
+            "where engagement_id = cast(:cid as uuid)"
+        ),
+        {"cid": engagement_id},
+    )
     return [row[0] for row in result.all()]
 
 
@@ -355,11 +371,10 @@ async def delete_engagement(session: AsyncSession, engagement_id: str) -> bool:
     and uploads. Returns True if a row was deleted. The caller is
     responsible for removing the on-disk upload files — fetch the paths
     via `list_upload_paths_for_engagement` *before* this call."""
-    try:
-        result = await session.execute(
-            text("delete from public.engagements where id = cast(:cid as uuid)"),
-            {"cid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return False
+    result = await session.execute(
+        text("delete from public.engagements where id = cast(:cid as uuid)"),
+        {"cid": engagement_id},
+    )
     return result.rowcount > 0

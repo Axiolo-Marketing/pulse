@@ -4,10 +4,34 @@ session (RLS scopes by ``org_id``); the reminder job reads these on a
 BYPASSRLS session. Each recipient also carries its own answered/total
 progress, computed from its ``responses`` against the engagement's cards.
 """
+import logging
 import secrets
+import uuid
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
+
+def _valid_uuid(value: str) -> bool:
+    """True if `value` parses as a UUID.
+
+    Used as an explicit guard at function entry in place of a blanket
+    `except Exception` around the query — a malformed id is a routine
+    "not found" case, but a broad catch there also hid genuine DB errors
+    (connection loss, constraint violations, RLS refusals) as a silent
+    None/[]/False with no log. Guarding up front lets real errors
+    propagate to the 5xx logger while preserving the same not-found
+    response for bad ids.
+    """
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
+
 
 # Base recipient columns + a per-recipient progress rollup (answered/skipped
 # vs the engagement's card count). The progress subqueries are correlated on
@@ -32,16 +56,15 @@ _RECIPIENT_SELECT = """
 async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
     """Every recipient on one engagement, oldest first, each with its own
     progress rollup. RLS (member session) keeps this in-org."""
-    try:
-        result = await session.execute(
-            text(
-                f"{_RECIPIENT_SELECT} where r.engagement_id = cast(:eid as uuid) "
-                "order by r.created_at"
-            ),
-            {"eid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return []
+    result = await session.execute(
+        text(
+            f"{_RECIPIENT_SELECT} where r.engagement_id = cast(:eid as uuid) "
+            "order by r.created_at"
+        ),
+        {"eid": engagement_id},
+    )
     return [dict(r) for r in result.mappings().all()]
 
 
@@ -73,7 +96,10 @@ async def add(
     ``org_id`` comes from the active membership, never the wire body — the
     member RLS WITH CHECK rejects any other org anyway. Returns the new row
     (with a freshly minted token + zeroed progress), or None if the insert
-    failed (e.g. a bad engagement_id)."""
+    failed (e.g. a bad engagement_id, or a unique-violation race against
+    the caller's own prior `email_exists` check)."""
+    if not (_valid_uuid(engagement_id) and _valid_uuid(org_id)):
+        return None
     token = secrets.token_hex(8)
     # A fresh recipient has zero responses, so the progress rollup is
     # computed inline in RETURNING (``completed_count`` = 0, ``total_cards``
@@ -100,7 +126,18 @@ async def add(
                 "token": token,
             },
         )
-    except Exception:
+    except IntegrityError:
+        # Expected race: `email_exists` and this INSERT aren't atomic, so
+        # two concurrent adds for the same email can both pass the check
+        # and one loses the partial unique index. Log it (this is the one
+        # DB error this function intentionally swallows) and let the route
+        # surface its generic 400 — a genuinely broken query would raise a
+        # different exception type and propagate.
+        logger.warning(
+            "recipients.add: unique-violation race for engagement_id=%s email=%s",
+            engagement_id,
+            email,
+        )
         return None
     row = result.mappings().one_or_none()
     return dict(row) if row else None
@@ -112,17 +149,16 @@ async def remove(
     """Delete a recipient (FK cascade wipes its responses/uploads). Returns
     the deleted row (for the audit log + on-disk file cleanup) or None when
     no match in the active org."""
-    try:
-        result = await session.execute(
-            text(
-                "delete from public.recipients "
-                "where id = cast(:rid as uuid) and engagement_id = cast(:eid as uuid) "
-                "returning id::text, email, name"
-            ),
-            {"rid": recipient_id, "eid": engagement_id},
-        )
-    except Exception:
+    if not (_valid_uuid(recipient_id) and _valid_uuid(engagement_id)):
         return None
+    result = await session.execute(
+        text(
+            "delete from public.recipients "
+            "where id = cast(:rid as uuid) and engagement_id = cast(:eid as uuid) "
+            "returning id::text, email, name"
+        ),
+        {"rid": recipient_id, "eid": engagement_id},
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
@@ -229,14 +265,13 @@ async def list_upload_paths_for_recipient(
 ) -> list[str]:
     """storage_path values for a recipient's uploads, fetched BEFORE the
     delete so the route can remove the on-disk files after the FK cascade."""
-    try:
-        result = await session.execute(
-            text(
-                "select storage_path from public.uploads "
-                "where recipient_id = cast(:rid as uuid)"
-            ),
-            {"rid": recipient_id},
-        )
-    except Exception:
+    if not _valid_uuid(recipient_id):
         return []
+    result = await session.execute(
+        text(
+            "select storage_path from public.uploads "
+            "where recipient_id = cast(:rid as uuid)"
+        ),
+        {"rid": recipient_id},
+    )
     return [row[0] for row in result.all()]

@@ -4,8 +4,28 @@ server-side (`pulse_request_recipient_id()` / `pulse_request_engagement_id()`)
 so the wire body can't pretend to be another recipient. The answer is
 unique on `(card_id, recipient_id)`, so two recipients on the same
 engagement answer the same card independently."""
+import uuid
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _valid_uuid(value: str) -> bool:
+    """True if `value` parses as a UUID.
+
+    Used as an explicit guard at function entry in place of a blanket
+    `except Exception` around the query — a malformed id is a routine
+    "not found" case, but a broad catch there also hid genuine DB errors
+    (connection loss, constraint violations, RLS refusals) as a silent
+    None/[]/False with no log. Guarding up front lets real errors
+    propagate to the 5xx logger while preserving the same not-found
+    response for bad ids.
+    """
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
@@ -23,14 +43,12 @@ async def _card_belongs_to_caller(session: AsyncSession, card_id: str) -> bool:
     """RLS filters `cards` by engagement_id automatically — if no row comes
     back, the card either doesn't exist or belongs to another engagement.
     Treat both the same way (404) so we don't leak existence."""
-    try:
-        result = await session.execute(
-            text("select 1 from public.cards where id = cast(:cid as uuid)"),
-            {"cid": card_id},
-        )
-    except Exception:
-        # Malformed UUID, etc. — same answer.
+    if not _valid_uuid(card_id):
         return False
+    result = await session.execute(
+        text("select 1 from public.cards where id = cast(:cid as uuid)"),
+        {"cid": card_id},
+    )
     return result.scalar() is not None
 
 
@@ -117,18 +135,17 @@ def _json_dump(value: dict | None) -> str | None:
 
 
 async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
-    try:
-        result = await session.execute(
-            text(
-                "select id::text, card_id::text, engagement_id::text, recipient_id::text, "
-                "state, response_value, viewed_at, answered_at, created_at, updated_at "
-                "from public.responses where engagement_id = cast(:cid as uuid) "
-                "order by created_at"
-            ),
-            {"cid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return []
+    result = await session.execute(
+        text(
+            "select id::text, card_id::text, engagement_id::text, recipient_id::text, "
+            "state, response_value, viewed_at, answered_at, created_at, updated_at "
+            "from public.responses where engagement_id = cast(:cid as uuid) "
+            "order by created_at"
+        ),
+        {"cid": engagement_id},
+    )
     return [dict(r) for r in result.mappings().all()]
 
 

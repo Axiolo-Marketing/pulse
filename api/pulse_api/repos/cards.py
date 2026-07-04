@@ -1,5 +1,6 @@
 """Repository helpers for `cards`."""
 import json
+import uuid
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,24 @@ CARD_COLS = (
     "id::text, engagement_id::text, order_index, category, title, context, question, "
     "response_type, options, default_value, skip_allowed, attachment_path, created_at"
 )
+
+
+def _valid_uuid(value: str) -> bool:
+    """True if `value` parses as a UUID.
+
+    Used as an explicit guard at function entry in place of a blanket
+    `except Exception` around the query — a malformed id is a routine
+    "not found" case, but a broad catch there also hid genuine DB errors
+    (connection loss, constraint violations, RLS refusals) as a silent
+    None/[]/False with no log. Guarding up front lets real errors
+    propagate to the 5xx logger while preserving the same not-found
+    response for bad ids.
+    """
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
@@ -22,16 +41,15 @@ async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
 
 
 async def list_for_engagement(session: AsyncSession, engagement_id: str) -> list[dict]:
-    try:
-        result = await session.execute(
-            text(
-                f"select {CARD_COLS} from public.cards "
-                "where engagement_id = cast(:cid as uuid) order by order_index"
-            ),
-            {"cid": engagement_id},
-        )
-    except Exception:
+    if not _valid_uuid(engagement_id):
         return []
+    result = await session.execute(
+        text(
+            f"select {CARD_COLS} from public.cards "
+            "where engagement_id = cast(:cid as uuid) order by order_index"
+        ),
+        {"cid": engagement_id},
+    )
     return [dict(r) for r in result.mappings().all()]
 
 
@@ -56,38 +74,37 @@ async def create_card(
     membership; ``pulse_admin`` callers (none in current code, reserved
     for superadmin work) must pick the right org explicitly.
     """
-    try:
-        result = await session.execute(
-            text(
-                f"""
-                insert into public.cards
-                  (engagement_id, order_index, category, title, context, question,
-                   response_type, options, default_value, skip_allowed,
-                   attachment_path, org_id)
-                values
-                  (cast(:cid as uuid),
-                   coalesce((select max(order_index) from public.cards where engagement_id = cast(:cid as uuid)), 0) + 1,
-                   :cat, :title, :ctx, :q, :rt,
-                   cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid))
-                returning {CARD_COLS}
-                """
-            ),
-            {
-                "cid": engagement_id,
-                "cat": category,
-                "title": title,
-                "ctx": context,
-                "q": question,
-                "rt": response_type,
-                "opts": json.dumps(options) if options is not None else None,
-                "dv": default_value,
-                "sa": skip_allowed,
-                "ap": attachment_path,
-                "org": org_id,
-            },
-        )
-    except Exception:
+    if not (_valid_uuid(engagement_id) and _valid_uuid(org_id)):
         return None
+    result = await session.execute(
+        text(
+            f"""
+            insert into public.cards
+              (engagement_id, order_index, category, title, context, question,
+               response_type, options, default_value, skip_allowed,
+               attachment_path, org_id)
+            values
+              (cast(:cid as uuid),
+               coalesce((select max(order_index) from public.cards where engagement_id = cast(:cid as uuid)), 0) + 1,
+               :cat, :title, :ctx, :q, :rt,
+               cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid))
+            returning {CARD_COLS}
+            """
+        ),
+        {
+            "cid": engagement_id,
+            "cat": category,
+            "title": title,
+            "ctx": context,
+            "q": question,
+            "rt": response_type,
+            "opts": json.dumps(options) if options is not None else None,
+            "dv": default_value,
+            "sa": skip_allowed,
+            "ap": attachment_path,
+            "org": org_id,
+        },
+    )
     return dict(result.mappings().one())
 
 
@@ -96,14 +113,13 @@ async def update_card(session: AsyncSession, card_id: str, fields: dict) -> dict
     accepted-fields whitelist at the route layer — changing it would
     invalidate any existing responses whose `response_value` shape is
     derived from the type."""
+    if not _valid_uuid(card_id):
+        return None
     if not fields:
-        try:
-            result = await session.execute(
-                text(f"select {CARD_COLS} from public.cards where id = cast(:cid as uuid)"),
-                {"cid": card_id},
-            )
-        except Exception:
-            return None
+        result = await session.execute(
+            text(f"select {CARD_COLS} from public.cards where id = cast(:cid as uuid)"),
+            {"cid": card_id},
+        )
         row = result.mappings().one_or_none()
         return dict(row) if row else None
 
@@ -118,28 +134,24 @@ async def update_card(session: AsyncSession, card_id: str, fields: dict) -> dict
         else:
             set_clauses.append(f"{k} = :{k}")
     params = {"cid": card_id, **fields}
-    try:
-        result = await session.execute(
-            text(
-                f"update public.cards set {', '.join(set_clauses)} "
-                f"where id = cast(:cid as uuid) returning {CARD_COLS}"
-            ),
-            params,
-        )
-    except Exception:
-        return None
+    result = await session.execute(
+        text(
+            f"update public.cards set {', '.join(set_clauses)} "
+            f"where id = cast(:cid as uuid) returning {CARD_COLS}"
+        ),
+        params,
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
 
 async def delete_card(session: AsyncSession, card_id: str) -> bool:
-    try:
-        result = await session.execute(
-            text("delete from public.cards where id = cast(:cid as uuid)"),
-            {"cid": card_id},
-        )
-    except Exception:
+    if not _valid_uuid(card_id):
         return False
+    result = await session.execute(
+        text("delete from public.cards where id = cast(:cid as uuid)"),
+        {"cid": card_id},
+    )
     return result.rowcount > 0
 
 
@@ -151,14 +163,11 @@ async def peek_title(session: AsyncSession, card_id: str) -> str | None:
     label instead of a bare UUID once the row is gone. RLS scopes the
     read to the caller's session (org-scoped for admin/MCP callers).
     """
-    try:
-        result = await session.execute(
-            text("select title from public.cards where id = cast(:cid as uuid)"),
-            {"cid": card_id},
-        )
-    except Exception:
-        # A malformed UUID raises before the where evaluates; the
-        # surrounding handler will 404/error on the delete anyway.
+    if not _valid_uuid(card_id):
         return None
+    result = await session.execute(
+        text("select title from public.cards where id = cast(:cid as uuid)"),
+        {"cid": card_id},
+    )
     row = result.mappings().one_or_none()
     return None if row is None else row.get("title")

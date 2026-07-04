@@ -45,19 +45,22 @@ async def get_by_id(
     """Fetch one client by id, or ``None`` if it doesn't resolve.
 
     RLS hides clients from other orgs, so a cross-org id yields ``None``
-    here even though the row exists in the table. A malformed UUID raises
-    on cast and is caught → ``None``.
+    here even though the row exists in the table. A malformed UUID is
+    guarded explicitly (instead of via a blanket ``except Exception``
+    around the cast) so it also resolves to ``None`` without swallowing
+    genuine DB errors.
     """
     try:
-        result = await session.execute(
-            text(
-                "select id::text as id, name, created_at "
-                "from public.clients where id = cast(:cid as uuid)"
-            ),
-            {"cid": client_id},
-        )
-    except Exception:
+        uuid.UUID(client_id)
+    except (ValueError, TypeError, AttributeError):
         return None
+    result = await session.execute(
+        text(
+            "select id::text as id, name, created_at "
+            "from public.clients where id = cast(:cid as uuid)"
+        ),
+        {"cid": client_id},
+    )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
 
