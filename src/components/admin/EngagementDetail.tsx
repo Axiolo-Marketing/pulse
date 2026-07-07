@@ -14,6 +14,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import Markdown from "react-markdown";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -28,6 +29,7 @@ import {
 } from "@/lib/markdown-export";
 import { suggestStatus } from "@/lib/status-suggest";
 import { formatTimestamp } from "@/lib/format-time";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -110,9 +112,24 @@ function BriefCard({
           </Button>
         </div>
         {brief ? (
-          <pre className="whitespace-pre-wrap font-sans text-sm text-foreground">
-            {brief}
-          </pre>
+          // Briefs are authored as Markdown (the v1 template is a full MD
+          // doc) — render them, capped like v1's 600px scroll box, so the
+          // cards & responses below stay within reach.
+          <div
+            className={cn(
+              "max-h-[420px] overflow-y-auto rounded-md bg-muted/40 px-4 py-3 text-sm text-foreground",
+              "[&>*:first-child]:mt-0 [&_p]:mt-2 [&_hr]:my-3 [&_hr]:border-border",
+              "[&_h1]:mt-3 [&_h1]:text-base [&_h1]:font-bold",
+              "[&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-bold",
+              "[&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold",
+              "[&_ul]:mt-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mt-1 [&_ol]:list-decimal [&_ol]:pl-5",
+              "[&_blockquote]:mt-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground",
+              "[&_a]:text-primary [&_a]:underline [&_strong]:font-semibold",
+              "[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.85em]",
+            )}
+          >
+            <Markdown>{brief}</Markdown>
+          </div>
         ) : (
           <p className="text-sm italic text-muted-foreground">No brief yet.</p>
         )}
