@@ -257,7 +257,20 @@ function DeckRunner({
     onAttachmentClose: () => dispatch({ type: "closeModal" }),
   };
 
-  if (!card) return <CompleteCard name={engagement.recipient_name} />;
+  if (!card) {
+    // Answers stay editable after completion — the review hint drops the
+    // recipient back on the last card.
+    return (
+      <CompleteCard
+        name={engagement.recipient_name}
+        onReview={
+          total > 0
+            ? () => dispatch({ type: "navigate", index: total - 1 })
+            : undefined
+        }
+      />
+    );
+  }
 
   const media = {
     token,

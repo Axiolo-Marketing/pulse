@@ -45,7 +45,7 @@ test("answer every card type through to 'All done'", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Engagement objectives" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Record answer" }).click();
+  await page.getByRole("button", { name: "Add a voice note" }).click();
   await expect(page.getByText("Recording", { exact: true })).toBeVisible();
   await page.waitForTimeout(1000);
   await page.getByRole("button", { name: "Stop" }).click();

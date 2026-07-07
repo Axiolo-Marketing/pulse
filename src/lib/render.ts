@@ -52,7 +52,11 @@ export function renderError(
   `;
 }
 
-export function renderComplete(mount: HTMLElement, name: string): void {
+export function renderComplete(
+  mount: HTMLElement,
+  name: string,
+  onReview?: () => void
+): void {
   mount.innerHTML = `
     <div class="card complete" role="status">
       <div class="category">Thank you</div>
@@ -61,8 +65,21 @@ export function renderComplete(mount: HTMLElement, name: string): void {
       <p class="context">
         Your responses are with Tom. He will follow up directly.
       </p>
+      ${
+        onReview
+          ? `<p class="review-hint">Need to change something?
+              <button type="button" class="review-link" data-action="review">Review or edit your answers</button>
+            </p>`
+          : ""
+      }
     </div>
   `;
+
+  if (onReview) {
+    mount
+      .querySelector<HTMLButtonElement>('[data-action="review"]')
+      ?.addEventListener("click", onReview);
+  }
 }
 
 function firstName(full: string): string {
@@ -408,11 +425,11 @@ function renderVoiceControl(voice: VoiceState, saving: boolean): string {
     `;
   }
 
-  // idle
+  // idle — a quiet supplement, never a peer of the primary answer actions
   return `
     <div class="voice-control is-idle">
-      <button class="voice-btn voice-record" type="button" data-action="voice-record" ${saving ? "disabled" : ""} aria-label="Record a voice answer">
-        <span class="voice-icon" aria-hidden="true">●</span> Record answer
+      <button class="voice-btn voice-record" type="button" data-action="voice-record" ${saving ? "disabled" : ""} aria-label="Add a voice note">
+        <span class="voice-icon" aria-hidden="true">●</span> Add a voice note
       </button>
     </div>
     ${errorHtml}

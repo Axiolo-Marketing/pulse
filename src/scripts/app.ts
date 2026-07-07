@@ -287,8 +287,14 @@ function runApp(ctx: RunCtx): void {
     if (index >= cards.length) {
       // Greet the recipient by their own name when we have it (multi-
       // respondent: each recipient is named), falling back to the client
-      // (company) name so the message still reads naturally.
-      renderComplete(mount, client.recipient_name?.trim() || client.name);
+      // (company) name so the message still reads naturally. The review
+      // hint drops the recipient back on the last card — answers stay
+      // editable after completion, this is just the way back in.
+      renderComplete(
+        mount,
+        client.recipient_name?.trim() || client.name,
+        cards.length > 0 ? () => navigateTo(cards.length - 1) : undefined
+      );
       return;
     }
     const card = cards[index];

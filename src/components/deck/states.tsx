@@ -51,8 +51,10 @@ export function DeckError({
 
 export function CompleteCard({
   name,
+  onReview,
 }: {
   name?: string | null;
+  onReview?: () => void;
 }): React.ReactElement {
   return (
     <main className="flex min-h-dvh items-center justify-center p-5">
@@ -69,6 +71,18 @@ export function CompleteCard({
             <CardDescription className="text-balance text-[0.95rem] leading-relaxed">
               Your responses are saved. Your consultant will follow up directly.
             </CardDescription>
+            {onReview ? (
+              <p className="mt-5 text-xs text-muted-foreground">
+                Need to change something?{" "}
+                <button
+                  type="button"
+                  onClick={onReview}
+                  className="font-medium underline underline-offset-2 hover:text-foreground"
+                >
+                  Review or edit your answers
+                </button>
+              </p>
+            ) : null}
           </CardContent>
         </CardHeader>
       </Card>

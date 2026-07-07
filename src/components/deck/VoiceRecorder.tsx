@@ -39,20 +39,19 @@ export function VoiceRecorder({
 
   return (
     <div>
-      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Prefer to talk?
-      </p>
-
+      {/* Voice supplements the typed answer — the idle affordance stays a
+          quiet ghost button so it never reads as a primary way to answer. */}
       {v.phase === "idle" ? (
         <Button
-          variant="outline"
+          variant="ghost"
+          size="sm"
           type="button"
           disabled={disabled}
           onClick={v.start}
-          className="w-full"
+          className="-ml-2 text-muted-foreground hover:text-foreground"
         >
           <Mic />
-          Record answer
+          Add a voice note
         </Button>
       ) : null}
 

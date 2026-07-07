@@ -549,16 +549,22 @@ button:focus-visible {
   line-height: 1;
 }
 
-/* Record / re-record — the inviting primary action. */
+/* Record — a quiet, optional supplement to the typed answer. Ghost
+   styling on purpose: it must never read as a peer of the primary
+   answer actions. */
 .voice-record {
-  color: var(--primary);
-  border-color: var(--primary);
-  width: 100%;
-  justify-content: center;
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+  font-size: 14px;
+  min-height: 36px;
+  padding: 8px 10px;
+  margin-left: -10px;
 }
 
 .voice-record:not(:disabled):hover {
   background: var(--primary-soft);
+  color: var(--primary-dark);
 }
 
 .voice-record .voice-icon,
@@ -811,6 +817,28 @@ button:focus-visible {
 }
 
 .card.complete .card-title {
+  color: var(--primary-dark);
+}
+
+.card.complete .review-hint {
+  margin-top: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.review-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.review-link:hover {
   color: var(--primary-dark);
 }
 
