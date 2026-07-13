@@ -186,27 +186,16 @@ def _reactive_settings_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "reactive_fake_mode", False)
 
 
-def _valid_trigger_kwargs(**overrides: object) -> dict:
-    base = dict(
-        card_source="operator",
-        response_type="confirm-edit",
-        state="answered",
-        response_value={"confirmed": False, "correction": "a real correction"},
-    )
-    base.update(overrides)
-    return base
-
-
 def test_is_candidate_false_when_all_gates_off() -> None:
-    assert reactive.is_candidate(**_valid_trigger_kwargs()) is False
+    assert reactive.is_candidate(card_source="operator") is False
 
 
-def test_is_candidate_true_when_enabled_with_key_and_valid_trigger(
+def test_is_candidate_true_when_enabled_with_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "reactive_cards_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-fake-key")
-    assert reactive.is_candidate(**_valid_trigger_kwargs()) is True
+    assert reactive.is_candidate(card_source="operator") is True
 
 
 def test_is_candidate_false_when_global_flag_off_even_with_key(
@@ -214,7 +203,7 @@ def test_is_candidate_false_when_global_flag_off_even_with_key(
 ) -> None:
     monkeypatch.setattr(settings, "reactive_cards_enabled", False)
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-fake-key")
-    assert reactive.is_candidate(**_valid_trigger_kwargs()) is False
+    assert reactive.is_candidate(card_source="operator") is False
 
 
 def test_is_candidate_false_when_no_key_and_no_fake_mode(
@@ -223,7 +212,7 @@ def test_is_candidate_false_when_no_key_and_no_fake_mode(
     monkeypatch.setattr(settings, "reactive_cards_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "reactive_fake_mode", False)
-    assert reactive.is_candidate(**_valid_trigger_kwargs()) is False
+    assert reactive.is_candidate(card_source="operator") is False
 
 
 def test_is_candidate_true_with_fake_mode_and_no_key(
@@ -233,7 +222,7 @@ def test_is_candidate_true_with_fake_mode_and_no_key(
     monkeypatch.setattr(settings, "reactive_cards_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "reactive_fake_mode", True)
-    assert reactive.is_candidate(**_valid_trigger_kwargs()) is True
+    assert reactive.is_candidate(card_source="operator") is True
 
 
 def test_is_candidate_false_for_ai_sourced_card_depth_guard(
@@ -243,20 +232,7 @@ def test_is_candidate_false_for_ai_sourced_card_depth_guard(
     never schedule another generation, even with every other gate on."""
     monkeypatch.setattr(settings, "reactive_cards_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-fake-key")
-    assert (
-        reactive.is_candidate(**_valid_trigger_kwargs(card_source="ai")) is False
-    )
-
-
-def test_is_candidate_false_without_a_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "reactive_cards_enabled", True)
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-fake-key")
-    assert (
-        reactive.is_candidate(
-            **_valid_trigger_kwargs(response_value={"confirmed": True})
-        )
-        is False
-    )
+    assert reactive.is_candidate(card_source="ai") is False
 
 
 # ── validate_proposals (the real trust boundary) ────────────────────────────

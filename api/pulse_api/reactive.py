@@ -62,6 +62,12 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 _VALID_RESPONSE_TYPES = {"single-select", "multi-select", "short-text", "long-text"}
 _SELECT_TYPES = {"single-select", "multi-select"}
 
+# `run_generation`'s bounded retry for the outer-transaction commit-
+# visibility race (see its docstring): 12 attempts * 0.25s between
+# retries bounds the wait to ~3s.
+_CONTEXT_LOAD_MAX_ATTEMPTS = 12
+_CONTEXT_LOAD_RETRY_SECONDS = 0.25
+
 # Structured-output schema for the Anthropic call. additionalProperties is
 # false at every object level — the schema alone is not the trust boundary
 # (see `validate_proposals`), but it keeps the model from wandering into an
@@ -181,13 +187,7 @@ def trigger_hash(normalized_text: str) -> str:
     return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
 
 
-def is_candidate(
-    *,
-    card_source: str,
-    response_type: str,
-    state: str,
-    response_value: dict | None,
-) -> bool:
+def is_candidate(*, card_source: str) -> bool:
     """Cheap, DB-free pre-check run inline in `routes/client_api.py::save_response`
     to decide whether to schedule `run_generation` as a background task at
     all. This is a heuristic, not authoritative — `run_generation` re-reads
@@ -195,18 +195,20 @@ def is_candidate(
     before doing any real work, since flags can flip between this check
     and the background task actually running.
 
-    Checks: the deployment gate (env key or fake mode, + the global
-    enabled flag), a triggerable correction is present, and the card being
-    corrected wasn't itself AI-generated (the depth-1 loop guard — answers
-    to generated cards never trigger further generation).
+    Checks only the deployment gate (env key or fake mode, + the global
+    enabled flag) and that the card being corrected wasn't itself
+    AI-generated (the depth-1 loop guard — answers to generated cards
+    never trigger further generation). Does NOT check for a triggerable
+    correction — the route extracts that once, up front, via
+    `extract_trigger_text`, and combines its own not-None check with this
+    function's result rather than asking this function to extract (or
+    re-extract) the trigger itself.
     """
     if not settings.reactive_cards_enabled:
         return False
     if not (settings.anthropic_api_key or settings.reactive_fake_mode):
         return False
-    if card_source == "ai":
-        return False
-    return extract_trigger_text(response_type, state, response_value) is not None
+    return card_source != "ai"
 
 
 async def ensure_org_allowed(session: AsyncSession, org_id: str | uuid.UUID) -> bool:
@@ -605,7 +607,17 @@ async def _load_generation_context(
     keeps the query from ever silently mixing data from unrelated rows if
     that ever changes. Returns `None` if anything doesn't resolve (e.g. the
     engagement was deleted between the save and this background task
-    running).
+    running, or — see `run_generation`'s retry loop — the response row's
+    commit hasn't become visible on this connection yet).
+
+    Does NOT select `responses.response_value`: the trigger text is
+    extracted once by the route (from the request body it already
+    validated) and passed into `run_generation` as `trigger_text`, so
+    nothing here needs the stored value — reading it would only risk
+    re-introducing the stale-snapshot bug `trigger_text` was added to
+    fix (see `run_generation`'s docstring). The join against `responses`
+    still runs, purely to confirm the response row exists and belongs to
+    this card/recipient/engagement.
     """
     if not (
         _valid_uuid(response_id)
@@ -626,9 +638,8 @@ async def _load_generation_context(
               crd.id::text as card_id,
               crd.category as card_category, crd.title as card_title,
               crd.context as card_context, crd.question as card_question,
-              crd.response_type as card_response_type, crd.options as card_options,
-              crd.default_value as card_default_value, crd.source as card_source,
-              resp.response_value as response_value
+              crd.options as card_options,
+              crd.default_value as card_default_value, crd.source as card_source
             from public.engagements eng
             join public.clients cli on cli.id = eng.client_id
             join public.organizations org on org.id = eng.org_id
@@ -678,6 +689,7 @@ async def run_generation(
     recipient_id: str,
     engagement_id: str,
     card_id: str,
+    trigger_text: str,
 ) -> None:
     """Background-task entry point, scheduled from
     `routes/client_api.py::save_response` via FastAPI `BackgroundTasks`
@@ -685,6 +697,24 @@ async def run_generation(
     has returned. Runs entirely on its own `_admin_session()` (BYPASSRLS) —
     the request's own anon connection may already be closed by the time
     this executes.
+
+    `trigger_text` is the normalized correction text, extracted by the
+    ROUTE (`extract_trigger_text`, from the request body it already
+    validated) and passed straight through — this function never derives
+    it from a `responses` row read. That used to be a stale-read bug:
+    `get_anon_session` wraps the whole request in an OUTER
+    connection-level transaction (needed so the `SET LOCAL
+    pulse.token/org_id` GUCs apply for the request), and the route's own
+    `await session.commit()` only ends the INNER SQLAlchemy transaction —
+    the real Postgres COMMIT doesn't happen until that dependency's
+    teardown runs, which (on this stack: fastapi 0.136.1 / starlette
+    1.0.0) happens AFTER `BackgroundTasks` run. So a `run_generation` that
+    read `response_value` off a fresh connection here could see the
+    pre-save snapshot (in the view-then-answer flow, `NULL` — the row
+    already existed from the `viewed` mark) and silently never trigger.
+    Trusting the caller's already-extracted text sidesteps that read
+    entirely. See `_load_generation_context`'s docstring for the
+    complementary fix on the context-load side.
 
     Full gate chain, every check re-read fresh (never trusting the
     route's cheap `is_candidate` heuristic): deployment flag + key/fake
@@ -697,18 +727,18 @@ async def run_generation(
     unique constraint, not on wall-clock timing.
 
     Runs in four short phases, each on its OWN `_admin_session()` (except
-    phase 3, which deliberately holds none at all): (1) load context +
-    gate chain + claim, committed immediately; (2) fetch this recipient's
-    deck listing for the prompt, a read-only session that's closed before
-    returning; (3) the Anthropic network call itself — no db session open
-    across it; (4) write the outcome (mark completed/skipped/failed,
-    create any cards, audit) on a fresh session. `admin_engine`
-    (BYPASSRLS) is a small shared pool (`pool_size=3, max_overflow=5`)
-    also used by MCP token verification, OAuth issuance, and superadmin
-    routes for every org — holding a connection checked out
-    idle-in-transaction across a 60-90s LLM call would let reactive-cards
-    load starve those unrelated control-plane paths, so no phase here ever
-    spans network I/O with a session open.
+    phase 3, which deliberately holds none at all): (1) load context (with
+    a bounded retry — see below) + gate chain + claim, committed
+    immediately; (2) fetch this recipient's deck listing for the prompt, a
+    read-only session that's closed before returning; (3) the Anthropic
+    network call itself — no db session open across it; (4) write the
+    outcome (mark completed/skipped/failed, create any cards, audit) on a
+    fresh session. `admin_engine` (BYPASSRLS) is a small shared pool
+    (`pool_size=3, max_overflow=5`) also used by MCP token verification,
+    OAuth issuance, and superadmin routes for every org — holding a
+    connection checked out idle-in-transaction across a 60-90s LLM call
+    would let reactive-cards load starve those unrelated control-plane
+    paths, so no phase here ever spans network I/O with a session open.
 
     On ANY exception past the claim, the generation row is marked
     `failed` on a fresh session via `_record_failure`, the error is
@@ -718,20 +748,37 @@ async def run_generation(
     recipient invite.
     """
     generation_id: str | None = None
-    trigger_text: str | None = None
     context: dict | None = None
 
     async with _admin_session() as session:
         try:
-            context = await _load_generation_context(
-                session,
-                response_id=response_id,
-                recipient_id=recipient_id,
-                engagement_id=engagement_id,
-                card_id=card_id,
-            )
+            # Bounded retry for commit-visibility latency: the same
+            # outer-transaction/background-task ordering described above
+            # means the FIRST read here can race a COMMIT that hasn't
+            # happened yet — not just for `response_value` (no longer
+            # read at all) but for the response ROW's very existence on
+            # this fresh `pulse_admin` connection. This matters most on
+            # the direct-save path (no prior `viewed` mark): the dedup
+            # claim below has an FK on `response_id`, so the row must be
+            # visible before we can even attempt the claim. Retry instead
+            # of reading once and giving up, bounded to ~3s (12 attempts
+            # * 0.25s) so a genuinely-missing row (bad ids, or the
+            # engagement/card deleted between the save and this task
+            # running) doesn't hang the background task indefinitely.
+            for attempt in range(_CONTEXT_LOAD_MAX_ATTEMPTS):
+                context = await _load_generation_context(
+                    session,
+                    response_id=response_id,
+                    recipient_id=recipient_id,
+                    engagement_id=engagement_id,
+                    card_id=card_id,
+                )
+                if context is not None:
+                    break
+                if attempt < _CONTEXT_LOAD_MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(_CONTEXT_LOAD_RETRY_SECONDS)
             if context is None:
-                return
+                return  # give up silently — see retry note above
 
             if not settings.reactive_cards_enabled:
                 return
@@ -742,12 +789,6 @@ async def run_generation(
             if not context["engagement_reactive_cards_enabled"]:
                 return
             if context["card_source"] == "ai":
-                return
-
-            trigger_text = extract_trigger_text(
-                context["card_response_type"], "answered", context["response_value"]
-            )
-            if trigger_text is None:
                 return
 
             existing_count = await card_generations_repo.count_for_recipient(

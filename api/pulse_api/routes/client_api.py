@@ -210,23 +210,28 @@ async def save_response(
     card_meta = row.pop("card")
     await session.commit()
 
-    # Reactive cards: a cheap, DB-free heuristic decides whether to even
-    # schedule the background generation task — `reactive.run_generation`
-    # re-checks every real gate (org/engagement flags, per-recipient cap,
-    # dedup) with fresh reads once it actually runs, after this response
-    # has already been returned to the respondent.
-    if reactive.is_candidate(
-        card_source=card_meta["source"],
-        response_type=card_meta["response_type"],
-        state=req.state,
-        response_value=req.response_value,
-    ):
+    # Reactive cards: extract the trigger text once, here, from the
+    # request body this route already validated — and pass it straight
+    # through to `run_generation` rather than letting it re-derive the
+    # trigger from a `responses` row read after the fact. That read used
+    # to race this request's own commit (the outer connection-level
+    # transaction in `get_anon_session` doesn't COMMIT until after
+    # BackgroundTasks run on this stack) and could observe a stale
+    # pre-save snapshot — see `reactive.run_generation`'s docstring.
+    # `is_candidate` still gates on the cheap deployment/source checks;
+    # `run_generation` re-checks everything with fresh reads once it
+    # actually runs.
+    trigger = reactive.extract_trigger_text(
+        card_meta["response_type"], req.state, req.response_value
+    )
+    if trigger is not None and reactive.is_candidate(card_source=card_meta["source"]):
         background_tasks.add_task(
             reactive.run_generation,
             response_id=row["id"],
             recipient_id=row["recipient_id"],
             engagement_id=row["engagement_id"],
             card_id=row["card_id"],
+            trigger_text=trigger,
         )
 
     return row

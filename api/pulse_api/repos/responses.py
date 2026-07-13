@@ -48,8 +48,10 @@ async def _card_belongs_to_caller(session: AsyncSession, card_id: str) -> dict |
     Returns the card's `response_type` and `source` rather than a bare
     bool — `routes/client_api.py::save_response` needs both to decide
     whether a save is a reactive-cards generation candidate
-    (`reactive.is_candidate`), and fetching them here avoids a second
-    query. `None` for a missing/foreign card is unchanged."""
+    (`response_type` for `reactive.extract_trigger_text`, `source` for
+    `reactive.is_candidate`'s depth-1 loop guard), and fetching them here
+    avoids a second query. `None` for a missing/foreign card is
+    unchanged."""
     if not _valid_uuid(card_id):
         return None
     result = await session.execute(

@@ -415,6 +415,146 @@ async def test_happy_path_generates_scoped_ai_card_and_records_ledger(
     assert audit_rows[0]["metadata"]["card_ids"] == gen["created_card_ids"]
 
 
+# ── regression: trigger passed from the route, never a stale row read ──────
+
+
+async def test_run_generation_uses_route_passed_trigger_not_stale_row(
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for the production race that made reactive cards
+    silently never fire on the view-then-answer path.
+
+    `run_generation` used to derive its trigger by re-reading
+    `response_value` off the `responses` row on its own fresh admin
+    session. But `save_response` schedules it via `BackgroundTasks` after
+    `await session.commit()` on the request's `pulse_anon` session — and
+    that commit only ends the INNER SQLAlchemy transaction; the real
+    Postgres COMMIT happens later, in `get_anon_session`'s teardown, which
+    (on this stack) runs AFTER background tasks. In the view-then-answer
+    flow the response row pre-exists from the `viewed` mark with
+    `response_value = NULL`, so a `run_generation` that re-read the row
+    could observe that stale NULL and silently skip generation even
+    though the respondent's correction had already been saved and
+    returned to them.
+
+    This seeds exactly that stale state directly — a response row still
+    sitting at `state='viewed'`, `response_value=NULL` — and calls
+    `run_generation` with a valid `trigger_text` the way the route now
+    does. Generation must still complete: the trigger comes from the
+    argument, never from re-reading the row.
+    """
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+    card_id = _confirm_edit_card_id(seed_cards)
+
+    # A response row that only ever recorded the `viewed` mark — mirrors
+    # exactly what `responses_repo.mark_viewed` inserts: no
+    # `response_value`, `state='viewed'`. Never updated with the
+    # respondent's correction, which is the "stale/pre-save snapshot"
+    # `run_generation` must NOT depend on.
+    view_row = (
+        await db.execute(
+            text(
+                "insert into public.responses "
+                "(card_id, engagement_id, recipient_id, org_id, state, viewed_at) "
+                "values (cast(:card as uuid), cast(:eng as uuid), cast(:rid as uuid), "
+                "        cast(:org as uuid), 'viewed', now()) "
+                "returning id::text"
+            ),
+            {
+                "card": card_id,
+                "eng": seed_client["id"],
+                "rid": seed_client["recipient_id"],
+                "org": seed_client["org_id"],
+            },
+        )
+    ).mappings().one()
+    response_id = view_row["id"]
+
+    stale_row = await _response_row(db, response_id)
+    assert stale_row is not None
+    assert stale_row["state"] == "viewed"
+    assert stale_row["response_value"] is None
+
+    route = _stub_anthropic_success(
+        respx_mock, needs_followup=True, cards=[_followup_card_payload()]
+    )
+
+    await reactive.run_generation(
+        response_id=response_id,
+        recipient_id=seed_client["recipient_id"],
+        engagement_id=seed_client["id"],
+        card_id=card_id,
+        trigger_text=_CORRECTION_A,
+    )
+
+    assert route.call_count == 1
+    gens = await _generation_rows_for_response(db, response_id)
+    assert len(gens) == 1
+    assert gens[0]["status"] == "completed"
+    assert len(gens[0]["created_card_ids"]) == 1
+
+    ai_cards = await _ai_cards_for_recipient(db, seed_client["recipient_id"])
+    assert len(ai_cards) == 1
+
+    # The seeded row itself was never touched — proving the completed
+    # generation really did come from the passed-in `trigger_text`, not
+    # from any update to the row's own `response_value`.
+    untouched_row = await _response_row(db, response_id)
+    assert untouched_row is not None
+    assert untouched_row["state"] == "viewed"
+    assert untouched_row["response_value"] is None
+
+
+async def test_view_then_answer_sequence_generates_via_route(
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route-level companion to the regression test above: drives the
+    actual deck sequence (`POST /api/responses/view` — which creates the
+    response row `run_generation` must not depend on the stale snapshot
+    of — followed by `POST /api/responses` with the correction) through
+    the real HTTP surface, and asserts a generation still completes."""
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+    card_id = _confirm_edit_card_id(seed_cards)
+    route = _stub_anthropic_success(
+        respx_mock, needs_followup=True, cards=[_followup_card_payload()]
+    )
+
+    view_resp = await client_authed.post(
+        "/api/responses/view", json={"card_id": card_id}
+    )
+    assert view_resp.status_code == 200
+
+    r = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    assert r.status_code == 200
+    response_id = r.json()["id"]
+    assert route.call_count == 1
+
+    gens = await _generation_rows_for_response(db, response_id)
+    assert len(gens) == 1
+    assert gens[0]["status"] == "completed"
+    assert len(gens[0]["created_card_ids"]) == 1
+
+
 # ── needs_followup: false ────────────────────────────────────────────────────
 
 
@@ -795,6 +935,7 @@ async def test_run_generation_direct_call_re_checks_gates_bypassing_is_candidate
         recipient_id=seed_client["recipient_id"],
         engagement_id=seed_client["id"],
         card_id=card_id,
+        trigger_text=_CORRECTION_A,
     )
 
     await reactive.run_generation(**run_kwargs)  # global flag off
@@ -819,6 +960,114 @@ async def test_run_generation_direct_call_re_checks_gates_bypassing_is_candidate
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
     assert gens[0]["status"] == "completed"
+
+
+# ── context-load retry (commit-visibility latency) ──────────────────────────
+
+
+async def test_context_load_retries_then_succeeds(
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_load_generation_context` returning `None` a few times (the
+    outer-transaction commit-visibility window described in
+    `run_generation`'s docstring) must not give up immediately —
+    `run_generation` retries with a short sleep in between, up to
+    `_CONTEXT_LOAD_MAX_ATTEMPTS` attempts, before proceeding once the
+    context resolves."""
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+    _stub_anthropic_success(
+        respx_mock, needs_followup=True, cards=[_followup_card_payload()]
+    )
+
+    real_load_context = reactive._load_generation_context
+    calls = {"n": 0}
+
+    async def _flaky_load_context(session, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return None
+        return await real_load_context(session, **kwargs)
+
+    monkeypatch.setattr(reactive, "_load_generation_context", _flaky_load_context)
+
+    sleeps: list[float] = []
+
+    async def _fast_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(reactive.asyncio, "sleep", _fast_sleep)
+
+    card_id = _confirm_edit_card_id(seed_cards)
+    r = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    assert r.status_code == 200
+    response_id = r.json()["id"]
+
+    assert calls["n"] == 3
+    assert sleeps == [reactive._CONTEXT_LOAD_RETRY_SECONDS] * 2
+
+    gens = await _generation_rows_for_response(db, response_id)
+    assert len(gens) == 1
+    assert gens[0]["status"] == "completed"
+
+
+async def test_context_load_gives_up_silently_after_max_attempts(
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the context never resolves (row genuinely missing, deleted
+    engagement, etc.), `run_generation` gives up silently after
+    `_CONTEXT_LOAD_MAX_ATTEMPTS` attempts — no exception, no generation
+    row, no LLM call."""
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+
+    calls = {"n": 0}
+
+    async def _always_none(session, **kwargs):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(reactive, "_load_generation_context", _always_none)
+
+    async def _instant_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(reactive.asyncio, "sleep", _instant_sleep)
+
+    card_id = _confirm_edit_card_id(seed_cards)
+    r = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    assert r.status_code == 200
+    response_id = r.json()["id"]
+
+    assert calls["n"] == reactive._CONTEXT_LOAD_MAX_ATTEMPTS
+    assert await _generation_rows_for_response(db, response_id) == []
+    assert len(respx_mock.calls) == 0
 
 
 # ── depth-1 guard ────────────────────────────────────────────────────────────
