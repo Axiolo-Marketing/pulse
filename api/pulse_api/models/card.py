@@ -28,6 +28,18 @@ class Card(SQLModel, table=True):
         default_value: Pre-populated answer shown to the client.
         skip_allowed: Whether the client can skip without answering.
         attachment_path: Optional path under `public/deliverables/`.
+        recipient_id: Owning recipient when this card is scoped to one
+            respondent (migration 0017). ``None`` (the default for every
+            pre-existing card) means the card is engagement-shared and
+            every recipient sees it, as before.
+        source: ``"operator"`` (the default) for hand-authored cards or
+            ``"ai"`` for cards inserted by the reactive-cards generation
+            engine.
+        generated_from_response_id: The correction `Response` that
+            triggered this card's generation, or ``None`` for
+            operator-authored cards. Provenance only — ``on delete set
+            null`` so deleting the triggering response never deletes the
+            card it produced.
         created_at: Insert timestamp (naive UTC).
     """
 
@@ -48,4 +60,11 @@ class Card(SQLModel, table=True):
     default_value: str | None = None
     skip_allowed: bool = True
     attachment_path: str | None = None
+    recipient_id: uuid.UUID | None = Field(
+        default=None, foreign_key="recipients.id"
+    )
+    source: str = "operator"
+    generated_from_response_id: uuid.UUID | None = Field(
+        default=None, foreign_key="responses.id"
+    )
     created_at: datetime = Field(default_factory=utcnow_naive)

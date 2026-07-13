@@ -36,7 +36,10 @@ def _valid_uuid(value: str) -> bool:
 # Base recipient columns + a per-recipient progress rollup (answered/skipped
 # vs the engagement's card count). The progress subqueries are correlated on
 # the recipient + its engagement so two recipients on one engagement report
-# independent progress.
+# independent progress. ``total_cards`` counts only cards this recipient can
+# actually see — shared cards (recipient_id is null) plus any generated
+# specifically for them (migration 0017) — so recipient B's progress isn't
+# thrown off by AI follow-up cards generated for recipient A.
 _RECIPIENT_SELECT = """
     select
       r.id::text                                      as id,
@@ -48,7 +51,8 @@ _RECIPIENT_SELECT = """
          where rr.recipient_id = r.id
            and rr.state in ('answered', 'skipped'))::int   as completed_count,
       (select count(*) from public.cards cd
-         where cd.engagement_id = r.engagement_id)::int    as total_cards
+         where cd.engagement_id = r.engagement_id
+           and (cd.recipient_id is null or cd.recipient_id = r.id))::int as total_cards
     from public.recipients r
 """
 
@@ -103,20 +107,29 @@ async def add(
     token = secrets.token_hex(8)
     # A fresh recipient has zero responses, so the progress rollup is
     # computed inline in RETURNING (``completed_count`` = 0, ``total_cards``
-    # from the engagement's cards). RETURNING — not a same-statement SELECT —
+    # from the engagement's cards this recipient can see — shared cards
+    # plus any already scoped to them, though a brand-new recipient can't
+    # yet have any of the latter). RETURNING — not a same-statement SELECT —
     # because a data-modifying CTE's inserted row isn't visible to an outer
     # SELECT in the same query (both run against the pre-INSERT snapshot).
+    # ``as rcpt`` gives RETURNING an unambiguous name for the just-inserted
+    # row to correlate against inside the subquery (the cards table has its
+    # own ``id`` column, so a bare ``id`` there would resolve to the wrong
+    # table).
     try:
         result = await session.execute(
             text(
-                "insert into public.recipients "
+                "insert into public.recipients as rcpt "
                 "  (engagement_id, org_id, email, name, token) "
                 "values (cast(:eid as uuid), cast(:org as uuid), :email, :name, :token) "
-                "returning id::text, engagement_id::text, email, name, token, "
-                "  last_active_at, invited_at, last_reminded_at, reminder_count, "
-                "  unsubscribed_at, created_at, 0 as completed_count, "
+                "returning rcpt.id::text, rcpt.engagement_id::text, rcpt.email, rcpt.name, "
+                "  rcpt.token, rcpt.last_active_at, rcpt.invited_at, rcpt.last_reminded_at, "
+                "  rcpt.reminder_count, rcpt.unsubscribed_at, rcpt.created_at, "
+                "  0 as completed_count, "
                 "  (select count(*) from public.cards cd "
-                "     where cd.engagement_id = cast(:eid as uuid))::int as total_cards"
+                "     where cd.engagement_id = cast(:eid as uuid) "
+                "       and (cd.recipient_id is null or cd.recipient_id = rcpt.id))::int "
+                "     as total_cards"
             ),
             {
                 "eid": engagement_id,
@@ -207,12 +220,16 @@ async def list_due_reminders(
     Runs on a BYPASSRLS (``pulse_admin``) session from the cron job — it
     deliberately crosses orgs. A recipient is due when: they were invited
     (``invited_at`` set) but not unsubscribed and still have an email; their
-    engagement has reminders enabled and at least one card; they haven't
-    finished (answered+skipped < total cards); the engagement has been
-    inactive for ``inactivity_days`` (no recipient activity since the
-    invite); they're under the ``max_reminders`` cap; and the last reminder
-    (if any) was at least ``cadence_days`` ago. Returns the fields the email
-    needs: ``id, email, name, token, engagement_name, org_name``.
+    engagement has reminders enabled and at least one card *they can see*
+    (shared, or scoped to them — migration 0017 recipient-scoped cards);
+    they haven't finished (answered+skipped < total cards they can see);
+    the engagement has been inactive for ``inactivity_days`` (no recipient
+    activity since the invite); they're under the ``max_reminders`` cap; and
+    the last reminder (if any) was at least ``cadence_days`` ago. Both
+    card-count checks are scoped per recipient so recipient B isn't kept
+    "unfinished" by AI follow-up cards generated only for recipient A.
+    Returns the fields the email needs: ``id, email, name, token,
+    engagement_name, org_name``.
     """
     result = await session.execute(
         text(
@@ -233,12 +250,14 @@ async def list_due_reminders(
               and (r.last_reminded_at is null
                    or r.last_reminded_at < now() - make_interval(days => :cadence))
               and (select count(*) from public.cards c
-                     where c.engagement_id = e.id) > 0
+                     where c.engagement_id = e.id
+                       and (c.recipient_id is null or c.recipient_id = r.id)) > 0
               and (select count(*) from public.responses rr
                      where rr.recipient_id = r.id
                        and rr.state in ('answered', 'skipped'))
                   < (select count(*) from public.cards c2
-                       where c2.engagement_id = e.id)
+                       where c2.engagement_id = e.id
+                         and (c2.recipient_id is null or c2.recipient_id = r.id))
             order by r.invited_at
             """
         ),

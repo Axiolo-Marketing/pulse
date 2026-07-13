@@ -42,7 +42,7 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
     result = await session.execute(
         text(
             "select c.id::text, cl.name as name, c.engagement_name, "
-            "c.brief, c.voice_enabled, c.created_at, "
+            "c.brief, c.voice_enabled, c.reactive_cards_enabled, c.created_at, "
             "r.last_active_at, r.name as recipient_name, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.engagements c "
@@ -134,13 +134,19 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
     than a single answered/skipped count.
 
     A recipient counts as complete when their answered+skipped responses
-    reach ``total_cards`` (and the deck has cards). ``last_active_at`` is the
+    reach the count of cards *they can see* (and there's at least one) —
+    shared cards plus any scoped to them (migration 0017's AI follow-up
+    cards) — so an AI card generated for recipient A never makes
+    recipient B look permanently incomplete. ``last_active_at`` is the
     most-recent activity across the engagement's recipients.
 
     ``answered_responses`` is the raw answered+skipped response count across
     *all* recipients — the numerator the admin list divides by the expected
     total (``total_cards * recipients_count``) to show deck-wide answer
-    progress alongside the per-recipient rollup.
+    progress alongside the per-recipient rollup. ``total_cards`` here is the
+    engagement's full card count (every card, including any recipient-scoped
+    ones) — the admin overview intentionally shows the whole deck size, only
+    the per-recipient completeness check is scoped.
 
     ``recipients`` is a per-engagement JSON array (``id``/``email``/``name``/
     ``answered``) so the list can show each respondent with their own
@@ -159,7 +165,7 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               cl.name                                            as client_name,
               c.created_by::text                                 as created_by,
               c.engagement_name, c.brief, c.voice_enabled,
-              c.reminders_enabled, c.created_at,
+              c.reminders_enabled, c.reactive_cards_enabled, c.created_at,
               (select count(*) from public.cards cd
                  where cd.engagement_id = c.id)::int             as total_cards,
               (select count(*) from public.recipients rc
@@ -170,12 +176,14 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
                 select count(*) from public.recipients rc
                 where rc.engagement_id = c.id
                   and (select count(*) from public.cards cd2
-                         where cd2.engagement_id = c.id) > 0
+                         where cd2.engagement_id = c.id
+                           and (cd2.recipient_id is null or cd2.recipient_id = rc.id)) > 0
                   and (select count(*) from public.responses rr
                          where rr.recipient_id = rc.id
                            and rr.state in ('answered', 'skipped'))
                       >= (select count(*) from public.cards cd3
-                            where cd3.engagement_id = c.id)
+                            where cd3.engagement_id = c.id
+                              and (cd3.recipient_id is null or cd3.recipient_id = rc.id))
               )::int                                             as completed_recipients,
               (select count(*) from public.responses rr
                  where rr.engagement_id = c.id
@@ -254,6 +262,7 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
             "select c.id::text, c.client_id::text as client_id, "
             "cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.reminders_enabled, "
+            "c.reactive_cards_enabled, "
             "c.created_by::text as created_by, c.created_at "
             "from public.engagements c "
             "join public.clients cl on cl.id = c.client_id "
@@ -302,12 +311,14 @@ async def create_engagement(
             "  values (cast(:cid as uuid), :e, cast(:org as uuid), "
             "          cast(:by as uuid)) "
             "  returning id, client_id, engagement_name, brief, "
-            "            voice_enabled, reminders_enabled, created_by, created_at"
+            "            voice_enabled, reminders_enabled, reactive_cards_enabled, "
+            "            created_by, created_at"
             ") "
             "select ins.id::text, ins.client_id::text as client_id, "
             "cl.name as name, cl.name as client_name, "
             "ins.engagement_name, "
             "ins.brief, ins.voice_enabled, ins.reminders_enabled, "
+            "ins.reactive_cards_enabled, "
             "ins.created_by::text as created_by, ins.created_at "
             "from ins join public.clients cl on cl.id = ins.client_id"
         ),

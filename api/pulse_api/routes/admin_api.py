@@ -317,8 +317,10 @@ async def reset_engagement(
 ) -> dict[str, int]:
     """Reset an engagement for a clean restart: wipe every response and
     every upload (rows + on-disk files), returning all cards to an
-    unanswered state. The cards, the engagement, and the magic link are
-    left intact, so the same URL can be re-run by the client (or a fresh
+    unanswered state, and remove any AI-generated follow-up cards (they
+    were produced from responses that no longer exist after the reset).
+    Operator-authored cards, the engagement, and the magic link are left
+    intact, so the same URL can be re-run by the client (or a fresh
     reviewer). Distinct from delete, which removes everything.
 
     Use when multiple people need to take the deck, or a client wants to
@@ -327,8 +329,27 @@ async def reset_engagement(
     if (await engagements_repo.get_by_id(session, engagement_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
+    # Uploads go first, before anything cascades them away silently: an
+    # AI-generated card can carry an upload today (the upload route has no
+    # response_type restriction — a voice note can attach to any card the
+    # recipient can see), and `uploads.card_id` is `on delete cascade`. If
+    # the AI-card delete below ran first, such an upload's row would
+    # vanish out from under this query before it ever got a chance to
+    # collect its `storage_path`, orphaning the on-disk file. Deleting
+    # uploads first guarantees every current upload — regardless of which
+    # card owns it — is captured for on-disk cleanup.
+    #
+    # Responses go next, while every card (AI-generated included) still
+    # exists, so `responses_cleared` counts answers to AI cards too — and
+    # every card_generations row cascades away here via its response_id
+    # FK. Only then are the AI cards themselves removed; by that point
+    # their responses and generation rows are already gone, so the delete
+    # cascades nothing and `ai_cards_removed` is an exact card count.
     removed_uploads = await uploads_repo.delete_all_for_engagement(session, engagement_id)
     responses_cleared = await responses_repo.delete_all_for_engagement(session, engagement_id)
+    ai_cards_removed = await cards_repo.delete_generated_for_engagement(
+        session, engagement_id
+    )
     await record_audit(
         session,
         org_id=membership.org_id,
@@ -339,6 +360,7 @@ async def reset_engagement(
         metadata={
             "responses_cleared": responses_cleared,
             "uploads_cleared": len(removed_uploads),
+            "ai_cards_removed": ai_cards_removed,
         },
     )
     await session.commit()

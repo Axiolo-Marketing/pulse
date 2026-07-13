@@ -30,6 +30,10 @@ class Organization(SQLModel, table=True):
         branding: Optional JSONB blob of brand overrides (``brand_color``,
             ``background_color``, ``text_color``, ``font``). A missing
             key means "use the built-in default".
+        reactive_cards_allowed: Superadmin-managed org-level gate for the
+            reactive follow-up generation feature (migration 0017).
+            Defaults ``False`` — an org must be explicitly allowed before
+            any of its engagements can turn the feature on.
         created_at: Insert timestamp (naive UTC).
     """
 
@@ -40,4 +44,5 @@ class Organization(SQLModel, table=True):
     slug: str = Field(unique=True, index=True)
     logo_path: str | None = None
     branding: dict | None = Field(default=None, sa_column=Column(JSONB))
+    reactive_cards_allowed: bool = False
     created_at: datetime = Field(default_factory=utcnow_naive)

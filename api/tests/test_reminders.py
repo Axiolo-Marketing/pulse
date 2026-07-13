@@ -168,6 +168,59 @@ async def test_no_cards_engagement_excluded(
     assert rid not in await _due_ids(db)
 
 
+async def test_recipient_scoped_card_excluded_from_other_recipients_total(
+    db: AsyncSession, seed_client: dict[str, str]
+) -> None:
+    """Regression for migration 0017's recipient-scoping fix in
+    `list_due_reminders`: a card scoped to recipient A (e.g. a reactive-cards
+    AI follow-up) must not count toward recipient B's total — otherwise B
+    could never reach "complete" and would be nudged forever."""
+    eid, org_id = seed_client["id"], seed_client["org_id"]
+    rid_a = seed_client["recipient_id"]
+    shared_card_id = await _add_card(db, engagement_id=eid, org_id=org_id)
+    # AI-scoped card, visible only to recipient A.
+    await db.execute(
+        text(
+            "insert into public.cards "
+            "(engagement_id, order_index, category, title, context, question, "
+            " response_type, org_id, recipient_id, source) "
+            "values (cast(:e as uuid), 2, 'C', 'ai-followup', 'x', 'q?', "
+            "        'short-text', cast(:o as uuid), cast(:r as uuid), 'ai')"
+        ),
+        {"e": eid, "o": org_id, "r": rid_a},
+    )
+    rid_b = await _insert_recipient(
+        db, engagement_id=eid, org_id=org_id, email="b@example.com"
+    )
+    # Make recipient A eligible-by-timing too (seed_client's default
+    # recipient starts with no email and invited_at NULL — i.e. never
+    # invited) — so the "A is still due" sanity check below isn't
+    # excluded for an unrelated reason.
+    await db.execute(
+        text(
+            "update public.recipients "
+            "set email = 'a@example.com', invited_at = now() - interval '10 days' "
+            "where id = cast(:r as uuid)"
+        ),
+        {"r": rid_a},
+    )
+    # Recipient B answers the only card they can see (the shared one).
+    await db.execute(
+        text(
+            "insert into public.responses "
+            "(card_id, engagement_id, recipient_id, state, org_id) "
+            "values (cast(:c as uuid), cast(:e as uuid), cast(:r as uuid), "
+            "        'answered', cast(:o as uuid))"
+        ),
+        {"c": shared_card_id, "e": eid, "r": rid_b, "o": org_id},
+    )
+    # B is complete (total is 1, not 2) → not due for a reminder.
+    assert rid_b not in await _due_ids(db)
+    # A hasn't answered anything yet → still due (sanity: the fix doesn't
+    # just exclude everyone).
+    assert rid_a in await _due_ids(db)
+
+
 async def test_engagement_reminders_disabled_excluded(
     db: AsyncSession, seed_client: dict[str, str]
 ) -> None:
