@@ -1,3 +1,5 @@
+import { Sparkles } from "lucide-react";
+
 import {
   adminApi,
   type Card as CardModel,
@@ -5,6 +7,7 @@ import {
   type Recipient,
   type UploadRow,
 } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export function rcKey(recipientId: string, cardId: string): string {
@@ -13,6 +16,47 @@ export function rcKey(recipientId: string, cardId: string): string {
 
 export function recipientLabel(r: Recipient): string {
   return r.email || r.name || "Respondent";
+}
+
+/** Provenance badge for a reactive-cards follow-up (`card.source ===
+ * "ai"`) — which recipient it's scoped to, and (if cheaply resolvable)
+ * the question whose correction triggered it, as a tooltip. Renders
+ * nothing for operator-authored cards. */
+export function AiFollowupBadge({
+  card,
+  recipients,
+  cards,
+  responses,
+}: {
+  card: CardModel;
+  recipients: Recipient[];
+  cards: CardModel[];
+  responses: ClientResponse[];
+}): React.ReactElement | null {
+  if (card.source !== "ai") return null;
+
+  const recipient = recipients.find((r) => r.id === card.recipient_id);
+  const triggerResponse = card.generated_from_response_id
+    ? responses.find((r) => r.id === card.generated_from_response_id)
+    : undefined;
+  const parentCard = triggerResponse
+    ? cards.find((c) => c.id === triggerResponse.card_id)
+    : undefined;
+
+  return (
+    <Badge
+      variant="secondary"
+      className="gap-1"
+      title={
+        parentCard
+          ? `Generated from a correction on "${parentCard.title}"`
+          : "AI-generated follow-up card"
+      }
+    >
+      <Sparkles />
+      AI follow-up{recipient ? ` · for ${recipientLabel(recipient)}` : ""}
+    </Badge>
+  );
 }
 
 export function fmtSize(bytes: number): string {

@@ -43,6 +43,7 @@ from pulse_api.config import settings
 from pulse_api.db import get_admin_session
 from pulse_api.models import User
 from pulse_api.models._helpers import utcnow_naive
+from pulse_api.repos import card_generations as card_generations_repo
 from pulse_api.repos import invites as invites_repo
 from pulse_api.repos import memberships as memberships_repo
 from pulse_api.repos import orgs as orgs_repo
@@ -60,12 +61,24 @@ _SLUG_MAX_LEN = 40
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 200
 
+# Reactive-cards usage report window bounds (days).
+_USAGE_DAYS_DEFAULT = 30
+_USAGE_DAYS_MIN = 1
+_USAGE_DAYS_MAX = 365
+
 
 # ── Request / response models ─────────────────────────────────────────────
 
 
 class OrgListRow(BaseModel):
-    """Row in the ``GET /api/superadmin/orgs`` listing."""
+    """Row in the ``GET /api/superadmin/orgs`` listing.
+
+    ``reactive_cards_allowed`` is included so the superadmin org table's
+    per-org toggle (both v1 and v2 UIs) can render its current state
+    directly from the listing — the UI mutates via ``PATCH
+    /api/superadmin/orgs/{id}`` and then re-fetches this listing rather
+    than holding separate state, so this field must round-trip here too.
+    """
 
     id: str
     name: str
@@ -74,6 +87,7 @@ class OrgListRow(BaseModel):
     pending_invite_count: int
     created_at: object  # datetime — Pydantic v2 handles it
     owner_emails: list[str]
+    reactive_cards_allowed: bool
 
 
 class CreateOrgRequest(BaseModel):
@@ -128,6 +142,63 @@ class SuperadminMemberRow(BaseModel):
     name: str | None
     role: str
     joined_at: object  # datetime
+
+
+class UpdateOrgFlagsRequest(BaseModel):
+    """Body for ``PATCH /api/superadmin/orgs/{org_id}``.
+
+    Currently a single admin-managed flag: the org-level gate for the
+    reactive-cards feature (see ``pulse_api.reactive`` module docstring
+    for the full three-gate chain — deployment, org, engagement). An
+    org member can only turn on their own engagement's toggle while
+    this is ``True``.
+    """
+
+    reactive_cards_allowed: bool
+
+
+class OrgFlagsRow(BaseModel):
+    """Returned by ``PATCH /api/superadmin/orgs/{org_id}``."""
+
+    id: str
+    name: str
+    slug: str
+    reactive_cards_allowed: bool
+
+
+class ReactiveUsageOrgRow(BaseModel):
+    """One org's row in the reactive-cards usage report."""
+
+    org_id: str
+    org_name: str
+    generations: int
+    completed: int
+    skipped: int
+    failed: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
+class ReactiveUsageTotals(BaseModel):
+    """All-orgs sums across the same window as ``orgs`` in
+    :class:`ReactiveUsageResponse`."""
+
+    generations: int
+    completed: int
+    skipped: int
+    failed: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
+class ReactiveUsageResponse(BaseModel):
+    """``GET /api/superadmin/reactive-usage`` body."""
+
+    days: int
+    orgs: list[ReactiveUsageOrgRow]
+    totals: ReactiveUsageTotals
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -203,6 +274,7 @@ async def list_all_orgs(
             pending_invite_count=int(r["pending_invite_count"]),
             created_at=r["created_at"],
             owner_emails=list(r.get("owner_emails") or []),
+            reactive_cards_allowed=bool(r.get("reactive_cards_allowed")),
         )
         for r in rows
     ]
@@ -398,6 +470,69 @@ async def delete_org(
     await session.commit()
 
 
+@router.patch(
+    "/api/superadmin/orgs/{org_id}", response_model=OrgFlagsRow
+)
+async def update_org_flags(
+    org_id: str,
+    req: UpdateOrgFlagsRequest,
+    user: User = Depends(get_current_superadmin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> OrgFlagsRow:
+    """Flip an org's reactive-cards allow gate.
+
+    The only admin-managed org flag today. Superadmin-only, BYPASSRLS —
+    the target org need not be one the caller belongs to. Audited under
+    the existing ``org.update`` action (the same one ``PATCH
+    /api/orgs/me`` uses for a name change) with ``changed_fields`` +
+    before/after values in the metadata, so the affected org's own
+    Activity feed shows exactly what changed and by whom.
+
+    Status codes:
+
+    * 200 — updated; returns the refreshed row.
+    * 404 — unknown org id (or malformed UUID).
+    """
+    try:
+        as_uuid = uuid.UUID(org_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="organization not found") from exc
+
+    previous = await orgs_repo.get_by_id(session, as_uuid)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    row = await orgs_repo.set_reactive_cards_allowed(
+        session, as_uuid, allowed=req.reactive_cards_allowed
+    )
+    if row is None:  # pragma: no cover — previous fetch above guards
+        raise HTTPException(status_code=404, detail="organization not found")
+
+    await record_audit(
+        session,
+        org_id=as_uuid,
+        user_id=user.id,
+        action="org.update",
+        target_type="org",
+        target_id=str(as_uuid),
+        metadata={
+            "changed_fields": ["reactive_cards_allowed"],
+            "old_reactive_cards_allowed": bool(
+                previous.get("reactive_cards_allowed")
+            ),
+            "new_reactive_cards_allowed": bool(row.get("reactive_cards_allowed")),
+        },
+    )
+    await session.commit()
+
+    return OrgFlagsRow(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        slug=str(row["slug"]),
+        reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
+    )
+
+
 @router.get(
     "/api/superadmin/orgs/{org_id}/members",
     response_model=list[SuperadminMemberRow],
@@ -447,3 +582,58 @@ async def list_org_members(
             )
         )
     return out
+
+
+@router.get(
+    "/api/superadmin/reactive-usage", response_model=ReactiveUsageResponse
+)
+async def reactive_usage(
+    days: int = _USAGE_DAYS_DEFAULT,
+    _: User = Depends(get_current_superadmin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> ReactiveUsageResponse:
+    """Reactive-cards usage + cost report across every org.
+
+    Operating-cost monitoring for the reactive-cards LLM feature — NOT a
+    billing surface (no per-customer invoicing hooks off this; see the
+    plan's "monitoring/reporting only" note). One ``GROUP BY`` over
+    ``card_generations`` joined to ``organizations``
+    (``card_generations_repo.usage_report``), served by the
+    ``(org_id, created_at)`` index from migration 0017, over the
+    trailing ``days``-day window (clamped to
+    ``[1, 365]``; default 30). The ``totals`` row sums the per-org rows
+    in Python rather than a second query.
+
+    Superadmin-only — 403 for any other caller via
+    ``get_current_superadmin``.
+
+    Args:
+        days: Trailing window size in days. Clamped to ``[1, 365]``.
+    """
+    bounded_days = max(_USAGE_DAYS_MIN, min(int(days), _USAGE_DAYS_MAX))
+    rows = await card_generations_repo.usage_report(session, days=bounded_days)
+
+    org_rows = [
+        ReactiveUsageOrgRow(
+            org_id=str(r["org_id"]),
+            org_name=str(r["org_name"]),
+            generations=int(r["generations"]),
+            completed=int(r["completed"]),
+            skipped=int(r["skipped"]),
+            failed=int(r["failed"]),
+            input_tokens=int(r["input_tokens"]),
+            output_tokens=int(r["output_tokens"]),
+            cost_usd=float(r["cost_usd"]),
+        )
+        for r in rows
+    ]
+    totals = ReactiveUsageTotals(
+        generations=sum(r.generations for r in org_rows),
+        completed=sum(r.completed for r in org_rows),
+        skipped=sum(r.skipped for r in org_rows),
+        failed=sum(r.failed for r in org_rows),
+        input_tokens=sum(r.input_tokens for r in org_rows),
+        output_tokens=sum(r.output_tokens for r in org_rows),
+        cost_usd=sum(r.cost_usd for r in org_rows),
+    )
+    return ReactiveUsageResponse(days=bounded_days, orgs=org_rows, totals=totals)

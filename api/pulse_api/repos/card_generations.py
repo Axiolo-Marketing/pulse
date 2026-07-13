@@ -240,6 +240,62 @@ async def mark_failed(
     )
 
 
+async def usage_report(session: AsyncSession, *, days: int) -> list[dict]:
+    """Per-org reactive-cards usage + cost aggregates over a trailing window.
+
+    Backs ``GET /api/superadmin/reactive-usage`` — the operating-cost
+    monitoring surface (not billing; see the route docstring). One
+    ``GROUP BY`` over ``card_generations`` joined to ``organizations``,
+    filtered to the trailing ``days``-day window by ``created_at``
+    (served by the ``(org_id, created_at)`` index from migration 0017).
+    Superadmin-only at the route layer; runs on the BYPASSRLS
+    ``pulse_admin`` session since the report spans every org.
+
+    ``make_interval(days => :days)`` builds the window bound rather than
+    string-concatenating ``:days`` into an interval literal — the latter
+    needs the bound parameter to already be text, which asyncpg doesn't
+    coerce automatically for an ``integer`` bind.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        days: Trailing window size in days (already validated/clamped
+            at the route layer).
+
+    Returns:
+        One dict per org that had at least one generation in the
+        window (an inner join — orgs with zero activity are omitted):
+        ``{org_id, org_name, generations, completed, skipped, failed,
+        input_tokens, output_tokens, cost_usd}``. ``cost_usd`` is a
+        ``Decimal`` (``0`` when every generation in the window recorded
+        no cost, e.g. all dev-fake-mode calls). The route sums these
+        rows to build the all-orgs totals row rather than issuing a
+        second query.
+    """
+    result = await session.execute(
+        text(
+            """
+            select
+              org.id::text as org_id,
+              org.name as org_name,
+              count(*)::int as generations,
+              count(*) filter (where cg.status = 'completed')::int as completed,
+              count(*) filter (where cg.status = 'skipped')::int as skipped,
+              count(*) filter (where cg.status = 'failed')::int as failed,
+              coalesce(sum(cg.input_tokens), 0)::bigint as input_tokens,
+              coalesce(sum(cg.output_tokens), 0)::bigint as output_tokens,
+              coalesce(sum(cg.cost_usd), 0) as cost_usd
+            from public.card_generations cg
+            join public.organizations org on org.id = cg.org_id
+            where cg.created_at >= now() - make_interval(days => :days)
+            group by org.id, org.name
+            order by generations desc, org.name
+            """
+        ),
+        {"days": int(days)},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def list_for_my_recipient(
     session: AsyncSession, response_id: str | None = None
 ) -> list[dict]:

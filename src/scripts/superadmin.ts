@@ -14,6 +14,8 @@ import {
   ApiError,
   superadminApi,
   type AuthUser,
+  type ReactiveUsageOrgRow,
+  type ReactiveUsageResponse,
   type SuperadminMemberRow,
   type SuperadminOrgRow,
 } from "../lib/api";
@@ -49,6 +51,10 @@ const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_MIN = 2;
 const SLUG_MAX = 40;
 
+// Reactive-cards usage report window choices (days).
+const USAGE_DAY_OPTIONS = [30, 90] as const;
+const DEFAULT_USAGE_DAYS = 30;
+
 // ── Top-level entry point ─────────────────────────────────────────────────
 
 export async function renderSuperadmin(args: RenderSuperadminArgs): Promise<void> {
@@ -71,8 +77,12 @@ export async function renderSuperadmin(args: RenderSuperadminArgs): Promise<void
   }
 
   bindCreateForm(container, helpers);
+  bindUsageWindowButtons(container);
 
-  await refreshList(container, helpers);
+  await Promise.all([
+    refreshList(container, helpers),
+    refreshUsage(container, DEFAULT_USAGE_DAYS),
+  ]);
 }
 
 function renderShell(): string {
@@ -119,6 +129,22 @@ function renderShell(): string {
       <section class="settings-section" aria-labelledby="superadmin-list-h">
         <h3 class="settings-section-h" id="superadmin-list-h">All organizations</h3>
         <div id="superadmin-org-list" class="superadmin-list-slot"></div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="superadmin-usage-h">
+        <h3 class="settings-section-h" id="superadmin-usage-h">Reactive cards usage</h3>
+        <p class="settings-section-p">
+          LLM calls, tokens, and estimated cost per org — monitoring only, not a billing surface.
+        </p>
+        <div class="superadmin-usage-controls" role="group" aria-label="Usage window">
+          ${USAGE_DAY_OPTIONS.map(
+            (d) => `
+            <button class="btn-secondary-sm" type="button" data-usage-days="${d}"
+                    aria-pressed="${d === DEFAULT_USAGE_DAYS ? "true" : "false"}">${d} days</button>
+          `,
+          ).join("")}
+        </div>
+        <div id="superadmin-usage-slot" class="superadmin-list-slot"></div>
       </section>
     </section>
   `;
@@ -181,6 +207,7 @@ function paintList(
             <th scope="col" class="num">Members</th>
             <th scope="col" class="num">Pending invites</th>
             <th scope="col">Owners</th>
+            <th scope="col">Reactive cards</th>
             <th scope="col">Created</th>
             <th scope="col" aria-label="Actions"></th>
           </tr>
@@ -216,6 +243,13 @@ function rowMarkup(row: SuperadminOrgRow): string {
       <td class="num">${row.member_count}</td>
       <td class="num">${row.pending_invite_count}</td>
       <td class="superadmin-owners">${owners}</td>
+      <td class="superadmin-reactive-cell">
+        <label class="superadmin-reactive-toggle-label">
+          <input type="checkbox" class="superadmin-reactive-toggle" data-action="toggle-reactive"
+                 aria-label="Reactive cards for ${escape(row.name)}"
+                 ${row.reactive_cards_allowed ? "checked" : ""} />
+        </label>
+      </td>
       <td class="superadmin-when">${escape(formatTimestamp(row.created_at))}</td>
       <td class="superadmin-actions-cell">
         <button class="btn-ghost-sm" type="button" data-action="view-members">View members</button>
@@ -252,6 +286,12 @@ function cardMarkup(row: SuperadminOrgRow): string {
         <div><dt>Created</dt><dd>${escape(formatTimestamp(row.created_at))}</dd></div>
       </dl>
       <p class="superadmin-card-owners">${owners}</p>
+      <label class="superadmin-reactive-toggle-label superadmin-card-reactive">
+        <input type="checkbox" class="superadmin-reactive-toggle" data-action="toggle-reactive"
+               aria-label="Reactive cards for ${escape(row.name)}"
+               ${row.reactive_cards_allowed ? "checked" : ""} />
+        Reactive cards
+      </label>
       <div class="superadmin-card-actions">
         <button class="btn-ghost-sm" type="button" data-action="view-members">View members</button>
         ${
@@ -264,6 +304,104 @@ function cardMarkup(row: SuperadminOrgRow): string {
       <div class="superadmin-row-confirm" role="alertdialog" aria-modal="false" hidden></div>
     </li>
   `;
+}
+
+// ── Reactive-cards usage report ─────────────────────────────────────────────
+
+function formatTokenCount(n: number): string {
+  return n.toLocaleString();
+}
+
+function formatCostUsd(n: number): string {
+  return `$${n.toFixed(4)}`;
+}
+
+async function refreshUsage(
+  container: HTMLElement,
+  days: number,
+): Promise<void> {
+  const slot = container.querySelector<HTMLElement>("#superadmin-usage-slot");
+  if (!slot) return;
+  slot.innerHTML = `<p class="superadmin-loading">Loading usage…</p>`;
+  try {
+    const report = await superadminApi.reactiveUsage({ days });
+    slot.innerHTML = renderUsageTable(report);
+  } catch (err) {
+    const detail = err instanceof ApiError ? err.detail : "Could not load";
+    slot.innerHTML = `<p class="superadmin-error">${escape(detail)}</p>`;
+  }
+}
+
+function usageRowMarkup(row: ReactiveUsageOrgRow): string {
+  return `
+    <tr>
+      <th scope="row">${escape(row.org_name)}</th>
+      <td class="num">${row.generations}</td>
+      <td class="num">${row.completed}</td>
+      <td class="num">${row.skipped}</td>
+      <td class="num">${row.failed}</td>
+      <td class="num">${formatTokenCount(row.input_tokens)} / ${formatTokenCount(row.output_tokens)}</td>
+      <td class="num">${formatCostUsd(row.cost_usd)}</td>
+    </tr>
+  `;
+}
+
+function renderUsageTable(report: ReactiveUsageResponse): string {
+  if (report.orgs.length === 0) {
+    return `
+      <p class="superadmin-empty-list">
+        No reactive-cards activity in the last ${report.days} days.
+      </p>
+    `;
+  }
+  const totalsRow = `
+    <tr class="superadmin-usage-totals">
+      <th scope="row">All organizations</th>
+      <td class="num">${report.totals.generations}</td>
+      <td class="num">${report.totals.completed}</td>
+      <td class="num">${report.totals.skipped}</td>
+      <td class="num">${report.totals.failed}</td>
+      <td class="num">${formatTokenCount(report.totals.input_tokens)} / ${formatTokenCount(report.totals.output_tokens)}</td>
+      <td class="num">${formatCostUsd(report.totals.cost_usd)}</td>
+    </tr>
+  `;
+  return `
+    <div class="superadmin-usage-table-wrap" role="region" aria-label="Reactive cards usage">
+      <table class="superadmin-table">
+        <thead>
+          <tr>
+            <th scope="col">Organization</th>
+            <th scope="col" class="num">Calls</th>
+            <th scope="col" class="num">Completed</th>
+            <th scope="col" class="num">Skipped</th>
+            <th scope="col" class="num">Failed</th>
+            <th scope="col" class="num">Tokens (in / out)</th>
+            <th scope="col" class="num">Est. cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${report.orgs.map(usageRowMarkup).join("")}
+          ${totalsRow}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function bindUsageWindowButtons(container: HTMLElement): void {
+  const buttons = container.querySelectorAll<HTMLButtonElement>(
+    "[data-usage-days]",
+  );
+  for (const btn of buttons) {
+    btn.addEventListener("click", async () => {
+      const days = Number(btn.dataset.usageDays);
+      if (!Number.isFinite(days) || days <= 0) return;
+      for (const b of buttons) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      }
+      await refreshUsage(container, days);
+    });
+  }
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────
@@ -349,6 +487,17 @@ function bindRowActions(
   helpers: SuperadminHostHelpers,
   container: HTMLElement,
 ): void {
+  // paintList() replaces listEl's innerHTML but listEl itself persists,
+  // so this runs again after every refreshList(). Bind the delegated
+  // listeners exactly once or each repaint stacks another copy (double
+  // PATCHes + double toasts on the reactive toggle). The handlers read
+  // everything from the DOM at event time, so binding once is safe.
+  if (listEl.dataset.actionsBound === "true") {
+    void rows;
+    return;
+  }
+  listEl.dataset.actionsBound = "true";
+
   listEl.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -391,6 +540,44 @@ function bindRowActions(
       });
     }
   });
+
+  // Reactive-cards allow toggle — "change" (not "click") so the fired
+  // event always carries the checkbox's already-committed new value.
+  // Reverts the checkbox on failure rather than doing a full list
+  // repaint, so an operator flipping several orgs in a row doesn't lose
+  // scroll position on every toggle.
+  listEl.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.action !== "toggle-reactive") return;
+
+    const rowEl = target.closest<HTMLElement>(
+      ".superadmin-row, .superadmin-card",
+    );
+    const orgId = rowEl?.dataset.orgId;
+    const orgName = rowEl?.dataset.orgName ?? "this organization";
+    if (!orgId) return;
+
+    const allowed = target.checked;
+    target.disabled = true;
+    superadminApi
+      .updateOrgFlags(orgId, { reactive_cards_allowed: allowed })
+      .then(() => {
+        helpers.toast(
+          `Reactive cards ${allowed ? "enabled" : "disabled"} for ${orgName}`,
+        );
+      })
+      .catch((err: unknown) => {
+        target.checked = !allowed;
+        const detail =
+          err instanceof ApiError ? err.detail : "Could not update";
+        helpers.toast(detail);
+      })
+      .finally(() => {
+        target.disabled = false;
+      });
+  });
+
   void rows;
 }
 

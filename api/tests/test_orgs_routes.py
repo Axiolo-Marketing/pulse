@@ -77,6 +77,33 @@ async def test_get_my_org_requires_auth(client: AsyncClient) -> None:
     assert r.status_code == 401
 
 
+async def test_get_my_org_reflects_reactive_cards_allowed_after_toggle(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """`reactive_cards_allowed` defaults false and carries the
+    superadmin-managed org flag once flipped — the admin-facing
+    engagement toggle reads this field to decide whether it's
+    selectable at all."""
+    r0 = await admin_authed.get("/api/orgs/me")
+    assert r0.status_code == 200, r0.text
+    assert r0.json()["reactive_cards_allowed"] is False
+
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = true "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+
+    r1 = await admin_authed.get("/api/orgs/me")
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["reactive_cards_allowed"] is True
+
+
 # ── PATCH /api/orgs/me ────────────────────────────────────────────────────
 
 

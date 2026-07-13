@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
-from pulse_api import reminders, storage
+from pulse_api import reactive, reminders, storage
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (
@@ -65,12 +65,16 @@ class UpdateEngagementRequest(BaseModel):
     ``voice_enabled`` toggles the per-engagement voice recorder and
     ``reminders_enabled`` pauses/resumes the scheduled reminder fan-out;
     omitting either (the `model_dump(exclude_unset=True)` path) leaves it
-    untouched."""
+    untouched. ``reactive_cards_enabled`` toggles the reactive-cards
+    engine for this engagement — setting it ``True`` 403s unless the
+    caller's org has ``reactive_cards_allowed`` (see
+    ``reactive.ensure_org_allowed``, checked in the route handler)."""
 
     engagement_name: str | None = None
     brief: str | None = None
     voice_enabled: bool | None = None
     reminders_enabled: bool | None = None
+    reactive_cards_enabled: bool | None = None
 
 
 class AddRecipientRequest(BaseModel):
@@ -248,6 +252,25 @@ async def update_engagement(
 ) -> dict[str, Any]:
     user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
+    if fields.get("reactive_cards_enabled") is True:
+        # Gate only the false→true transition: a UI resending an
+        # already-enabled engagement's flag (stale org-allow snapshot
+        # after a mid-session revocation) must not 403 an unrelated
+        # edit. Revocation stops NEW enables; already-enabled
+        # engagements stop generating anyway because the engine
+        # re-reads the org flag on every run.
+        current = await engagements_repo.get_by_id(session, engagement_id)
+        already_enabled = bool(current and current.get("reactive_cards_enabled"))
+        if not already_enabled and not await reactive.ensure_org_allowed(
+            session, membership.org_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "reactive cards are not enabled for this organization — "
+                    "ask an Axiolo admin to turn them on first"
+                ),
+            )
     row = await engagements_repo.update_engagement(session, engagement_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")

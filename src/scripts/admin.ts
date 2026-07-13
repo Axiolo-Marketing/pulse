@@ -806,7 +806,7 @@ async function draw(
   container.innerHTML = `<div class="loading">Loading responses...</div>`;
   try {
     const detail = await adminApi.getEngagement(route.engagementId);
-    renderDetail(container, detail);
+    renderDetail(container, detail, state.activeOrg.reactive_cards_allowed);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       container.innerHTML = `<div class="error"><h1 class="error-title">Not found</h1><p class="error-body">No client with that id.</p></div>`;
@@ -1461,6 +1461,7 @@ function openConfirmModal(opts: ConfirmModalOptions): void {
 
 function openEditEngagementModal(
   client: Engagement,
+  reactiveCardsAllowed: boolean,
   onSaved: (updated: { name: string; engagement_name: string | null }) => void,
 ): void {
   const modalEl = document.createElement("div");
@@ -1491,6 +1492,15 @@ function openEditEngagementModal(
           <span class="edit-label">Send reminders</span>
         </label>
         <p class="edit-hint">Email respondents periodic reminders to finish their answers.</p>
+        <label class="edit-field edit-field--check">
+          <input type="checkbox" id="ee-reactive" ${client.reactive_cards_enabled ? "checked" : ""} ${reactiveCardsAllowed ? "" : "disabled"} />
+          <span class="edit-label">AI follow-up questions</span>
+        </label>
+        <p class="edit-hint">${
+          reactiveCardsAllowed
+            ? "When a respondent corrects an answer, propose a short AI-generated follow-up card, live in their session."
+            : "Ask an Axiolo admin to enable reactive cards for your organization first."
+        }</p>
         <div class="edit-actions">
           <button class="btn-primary-sm" type="submit">Save changes</button>
           <button class="btn-ghost-sm" type="button" data-close>Cancel</button>
@@ -1530,11 +1540,20 @@ function openEditEngagementModal(
       voice_enabled: voiceEnabled,
       reminders_enabled: remindersEnabled,
     };
+    // Only sent when the org allows it — the checkbox is disabled
+    // otherwise, and never resending a stale `true` avoids a 403 from
+    // `reactive.ensure_org_allowed` for an org whose access was revoked
+    // after the engagement's flag was already on.
+    if (reactiveCardsAllowed) {
+      args.reactive_cards_enabled =
+        modalEl.querySelector<HTMLInputElement>("#ee-reactive")?.checked ?? false;
+    }
 
     try {
       const updated = await adminApi.updateEngagement(client.id, args);
       client.voice_enabled = updated.voice_enabled;
       client.reminders_enabled = updated.reminders_enabled;
+      client.reactive_cards_enabled = updated.reactive_cards_enabled;
       onSaved({
         name: updated.name,
         engagement_name: updated.engagement_name,
@@ -1677,7 +1696,11 @@ function recipientsPanelHtml(recipients: Recipient[]): string {
     </div>`;
 }
 
-function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
+function renderDetail(
+  container: HTMLElement,
+  payload: EngagementDetail,
+  reactiveCardsAllowed: boolean,
+): void {
   const data = bucketDetail(payload);
   const { client, cards, responses, uploads, recipients } = data;
 
@@ -1695,8 +1718,26 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   const recipientById = (recipientId: string): Recipient | undefined =>
     recipients.find((r) => r.id === recipientId);
 
+  // Reactive cards: resolve provenance display info for an AI-generated
+  // card — which recipient it's scoped to, and (if cheaply resolvable) the
+  // question whose correction triggered it. `payload.responses` (the flat
+  // list, not the rcKey-bucketed map above) is the only place a response
+  // can be looked up by its own id.
+  const responseById = new Map(payload.responses.map((r) => [r.id, r]));
+  const aiProvenance = (card: Card): { recipient?: Recipient; parentCard?: Card } | null => {
+    if (card.source !== "ai") return null;
+    const recipient = card.recipient_id ? recipientById(card.recipient_id) : undefined;
+    const triggerResponse = card.generated_from_response_id
+      ? responseById.get(card.generated_from_response_id)
+      : undefined;
+    const parentCard = triggerResponse
+      ? cards.find((c) => c.id === triggerResponse.card_id)
+      : undefined;
+    return { recipient, parentCard };
+  };
+
   const cardsHtml = cards
-    .map((card) => renderResponseCard(card, recipients, respOf, upsOf))
+    .map((card) => renderResponseCard(card, recipients, respOf, upsOf, aiProvenance))
     .join("");
 
   container.innerHTML = `
@@ -1727,7 +1768,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
   // each card's handlers since the markup is regenerated.
   const repaintCards = (): void => {
     cardsListEl.innerHTML = cards
-      .map((card) => renderResponseCard(card, recipients, respOf, upsOf))
+      .map((card) => renderResponseCard(card, recipients, respOf, upsOf, aiProvenance))
       .join("");
     for (const articleEl of cardsListEl.querySelectorAll<HTMLElement>(".response-card[data-card-id]")) {
       attachCardHandlers(articleEl);
@@ -1874,7 +1915,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     });
 
     headerEl.querySelector<HTMLButtonElement>("#edit-engagement")?.addEventListener("click", () => {
-      openEditEngagementModal(client, (updated) => {
+      openEditEngagementModal(client, reactiveCardsAllowed, (updated) => {
         client.name = updated.name;
         client.engagement_name = updated.engagement_name;
         headerEl.innerHTML = renderDetailHeader(client);
@@ -2044,7 +2085,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
     articleEl.querySelector<HTMLButtonElement>("[data-action='edit-card-cancel']")?.addEventListener("click", () => {
       swapCardHtml(
         articleEl,
-        renderResponseCard(card, recipients, respOf, upsOf)
+        renderResponseCard(card, recipients, respOf, upsOf, aiProvenance)
       );
     });
 
@@ -2061,7 +2102,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         if (idx >= 0) cards[idx] = updated;
         swapCardHtml(
           articleEl,
-          renderResponseCard(updated, recipients, respOf, upsOf)
+          renderResponseCard(updated, recipients, respOf, upsOf, aiProvenance)
         );
         toast("Card saved");
       } catch (err) {
@@ -2198,7 +2239,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         for (const card of created) {
           cards.push(card);
           const tmp = document.createElement("div");
-          tmp.innerHTML = renderResponseCard(card, recipients, respOf, upsOf).trim();
+          tmp.innerHTML = renderResponseCard(card, recipients, respOf, upsOf, aiProvenance).trim();
           const next = tmp.firstElementChild as HTMLElement | null;
           if (next) {
             cardsList.appendChild(next);
@@ -2243,7 +2284,7 @@ function renderDetail(container: HTMLElement, payload: EngagementDetail): void {
         const created = await adminApi.createCard(client.id, newCard);
         cards.push(created);
         const tmp = document.createElement("div");
-        tmp.innerHTML = renderResponseCard(created, recipients, respOf, upsOf).trim();
+        tmp.innerHTML = renderResponseCard(created, recipients, respOf, upsOf, aiProvenance).trim();
         const next = tmp.firstElementChild as HTMLElement | null;
         if (next) {
           cardsList.appendChild(next);
@@ -2586,7 +2627,17 @@ function renderResponseCard(
   recipients: Recipient[],
   respOf: (recipientId: string, cardId: string) => ClientResponse | undefined,
   upsOf: (recipientId: string, cardId: string) => UploadRow[],
+  aiProvenance: (card: Card) => { recipient?: Recipient; parentCard?: Card } | null,
 ): string {
+  const provenance = aiProvenance(card);
+  const aiBadgeHtml = provenance
+    ? `<span class="ai-badge" title="${
+        provenance.parentCard
+          ? escape(`Generated from a correction on "${provenance.parentCard.title}"`)
+          : "AI-generated follow-up card"
+      }">AI follow-up${provenance.recipient ? ` · for ${escape(recipientLabel(provenance.recipient))}` : ""}</span>`
+    : "";
+
   const answersHtml = recipients.length
     ? recipients
         .map((r) => {
@@ -2616,7 +2667,7 @@ function renderResponseCard(
       <div class="response-card-head">
         <div>
           <div class="card-num">Card ${card.order_index} · ${escape(card.category)}</div>
-          <h3 class="card-h">${escape(card.title)}</h3>
+          <h3 class="card-h">${escape(card.title)}${aiBadgeHtml ? ` ${aiBadgeHtml}` : ""}</h3>
         </div>
         <div class="response-card-head-right">
           <button class="action-icon" type="button" data-action="edit-card-start" aria-label="Edit card text" title="Edit card text"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>

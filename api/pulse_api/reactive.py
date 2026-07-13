@@ -209,6 +209,40 @@ def is_candidate(
     return extract_trigger_text(response_type, state, response_value) is not None
 
 
+async def ensure_org_allowed(session: AsyncSession, org_id: str | uuid.UUID) -> bool:
+    """Return whether `org_id`'s `reactive_cards_allowed` flag is set.
+
+    Shared gate-check for the two admin-facing surfaces that let an
+    operator flip `engagements.reactive_cards_enabled` to `True`: the
+    REST `PATCH /api/admin/engagements/{id}` handler
+    (`routes/admin_api.py::update_engagement`) and the
+    `pulse_update_engagement` MCP tool. Both call this with their own
+    `pulse_member`-scoped session (`get_org_scoped_session` /
+    `_open_member_session`) — the `organizations_member_scope` RLS
+    policy (migration 0004) already narrows any `organizations` read on
+    that session to the caller's own org, but this still filters
+    explicitly on `org_id` rather than relying on RLS alone, matching
+    the belt-and-suspenders style `_load_generation_context` uses.
+
+    Deliberately returns a plain `bool` rather than raising — REST wants
+    an `HTTPException(403)` and MCP wants a `ValueError`, so the caller
+    picks the error shape appropriate to its surface. Returns `False`
+    (never raises) for a malformed id or an org row that doesn't
+    resolve — the safe "not allowed" default.
+    """
+    org_id_str = str(org_id)
+    if not _valid_uuid(org_id_str):
+        return False
+    result = await session.execute(
+        text(
+            "select reactive_cards_allowed from public.organizations "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": org_id_str},
+    )
+    return bool(result.scalar_one_or_none())
+
+
 # ── Prompt construction ─────────────────────────────────────────────────────
 
 

@@ -411,6 +411,12 @@ export interface OrgDetails {
    * defaults). Drives the Brand & theme settings form and the live
    * admin-console theme via `applyBranding`. */
   branding: BrandingSettings | null;
+  /** Superadmin-managed org-level gate for the reactive-cards feature
+   * (default `false`). The per-engagement `reactive_cards_enabled` toggle
+   * (see `UpdateEngagementArgs`) can only be turned on while this is
+   * `true` — the engagement edit UI reads this to decide whether that
+   * checkbox is selectable at all. */
+  reactive_cards_allowed: boolean;
 }
 
 export interface MemberRow {
@@ -598,6 +604,13 @@ export interface UpdateEngagementArgs {
   /** Toggle reminder emails for this engagement's recipients. Omit to
    * leave it unchanged (same `exclude_unset` semantics as `voice_enabled`). */
   reminders_enabled?: boolean;
+  /** Toggle the reactive-cards engine (AI follow-up questions on
+   * respondent corrections) for this engagement. Omit to leave it
+   * unchanged. Setting `true` 403s server-side unless the org's
+   * `reactive_cards_allowed` is also `true` (see `OrgDetails`) — callers
+   * should gate the control on that flag rather than relying on the
+   * error alone. */
+  reactive_cards_enabled?: boolean;
 }
 
 export interface CreateCardArgs {
@@ -897,6 +910,49 @@ export interface SuperadminOrgRow {
   pending_invite_count: number;
   created_at: string;
   owner_emails: string[];
+  /** Org-level gate for the reactive-cards feature. Superadmin-only
+   * toggle — an engagement can only enable its own reactive-cards
+   * checkbox while this is `true`. */
+  reactive_cards_allowed: boolean;
+}
+
+/** Returned by `PATCH /api/superadmin/orgs/{id}`. */
+export interface SuperadminOrgFlagsRow {
+  id: string;
+  name: string;
+  slug: string;
+  reactive_cards_allowed: boolean;
+}
+
+/** One org's row in the reactive-cards usage/cost report
+ * (`GET /api/superadmin/reactive-usage`). */
+export interface ReactiveUsageOrgRow {
+  org_id: string;
+  org_name: string;
+  generations: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+/** All-orgs sums across the same window as `orgs`. */
+export interface ReactiveUsageTotals {
+  generations: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+export interface ReactiveUsageResponse {
+  days: number;
+  orgs: ReactiveUsageOrgRow[];
+  totals: ReactiveUsageTotals;
 }
 
 export interface SuperadminInviteSummary {
@@ -951,6 +1007,23 @@ export const superadminApi = {
 
   listOrgMembers: (orgId: string): Promise<SuperadminMemberRow[]> =>
     request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}/members`),
+
+  /** Flip an org's reactive-cards allow gate. */
+  updateOrgFlags: (
+    orgId: string,
+    args: { reactive_cards_allowed: boolean },
+  ): Promise<SuperadminOrgFlagsRow> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(args),
+    }),
+
+  /** Reactive-cards usage/cost report across every org, trailing `days`
+   * (default 30). Monitoring/reporting only — not a billing surface. */
+  reactiveUsage: (opts: { days?: number } = {}): Promise<ReactiveUsageResponse> => {
+    const q = opts.days ? `?days=${encodeURIComponent(opts.days)}` : "";
+    return request(`/api/superadmin/reactive-usage${q}`);
+  },
 };
 
 /** Build an absolute URL for an org logo served by

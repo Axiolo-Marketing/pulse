@@ -30,7 +30,8 @@ string emitted by the route layer appears in this list.
 * ``card.import``           — bulk markdown import (one row per call)
 * ``card.reactive_generate`` — reactive-cards engine auto-inserted an AI follow-up card
 * ``attachment.upload``     — admin uploaded an active-reference file
-* ``org.update``            — org name changed
+* ``org.update``            — org name changed, or (superadmin) an org-level
+  admin flag like ``reactive_cards_allowed`` changed
 * ``org.branding``          — org branding/theme overrides changed
 * ``org.logo_set``          — org logo uploaded (new or replaced)
 * ``org.logo_remove``       — org logo cleared

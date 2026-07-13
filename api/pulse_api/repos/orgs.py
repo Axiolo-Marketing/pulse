@@ -149,14 +149,14 @@ async def get_for_member(
         org_id: UUID of the active org (matches the GUC).
 
     Returns:
-        ``{id, name, slug, logo_path, branding, created_at}`` or
-        ``None``. ``branding`` is the JSONB dict (asyncpg decodes it to a
-        ``dict``) or ``None`` when unset.
+        ``{id, name, slug, logo_path, branding, reactive_cards_allowed,
+        created_at}`` or ``None``. ``branding`` is the JSONB dict
+        (asyncpg decodes it to a ``dict``) or ``None`` when unset.
     """
     result = await session.execute(
         text(
             "select id::text as id, name, slug, logo_path, branding, "
-            "created_at "
+            "reactive_cards_allowed, created_at "
             "from public.organizations where id = cast(:o as uuid)"
         ),
         {"o": str(org_id)},
@@ -185,7 +185,8 @@ async def update_name(
         text(
             "update public.organizations set name = :n "
             "where id = cast(:o as uuid) "
-            "returning id::text as id, name, slug, logo_path, branding, created_at"
+            "returning id::text as id, name, slug, logo_path, branding, "
+            "reactive_cards_allowed, created_at"
         ),
         {"n": name, "o": str(org_id)},
     )
@@ -252,7 +253,7 @@ async def set_branding(
             "set branding = cast(:b as jsonb) "
             "where id = cast(:o as uuid) "
             "returning id::text as id, name, slug, logo_path, branding, "
-            "created_at"
+            "reactive_cards_allowed, created_at"
         ),
         {"b": encoded, "o": str(org_id)},
     )
@@ -330,7 +331,7 @@ async def list_all_with_summary(
     Returns:
         List of dicts with keys ``id``, ``name``, ``slug``,
         ``created_at``, ``member_count``, ``pending_invite_count``,
-        ``owner_emails`` (``list[str]``).
+        ``owner_emails`` (``list[str]``), ``reactive_cards_allowed``.
     """
     result = await session.execute(
         text(
@@ -340,6 +341,7 @@ async def list_all_with_summary(
                 o.name,
                 o.slug,
                 o.created_at,
+                o.reactive_cards_allowed,
                 coalesce((
                     select count(*)::int
                     from public.organization_memberships m
@@ -394,7 +396,8 @@ async def get_by_id(
         org_id: UUID of the target org.
 
     Returns:
-        ``{id, name, slug, logo_path, created_at}`` or ``None``.
+        ``{id, name, slug, logo_path, reactive_cards_allowed, created_at}``
+        or ``None``.
     """
     try:
         as_uuid = uuid.UUID(str(org_id))
@@ -402,10 +405,48 @@ async def get_by_id(
         return None
     result = await session.execute(
         text(
-            "select id::text as id, name, slug, logo_path, created_at "
+            "select id::text as id, name, slug, logo_path, "
+            "reactive_cards_allowed, created_at "
             "from public.organizations where id = cast(:o as uuid)"
         ),
         {"o": str(as_uuid)},
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def set_reactive_cards_allowed(
+    session: AsyncSession, org_id: uuid.UUID | str, *, allowed: bool
+) -> dict[str, object] | None:
+    """Superadmin-only: set the org-level reactive-cards gate.
+
+    This is the second of the three reactive-cards feature gates (see
+    ``pulse_api.reactive`` module docstring) — an org member can only
+    flip their own engagement's ``reactive_cards_enabled`` toggle to
+    ``True`` when this is also ``True`` (enforced by
+    ``reactive.ensure_org_allowed`` at the ``PATCH
+    /api/admin/engagements/{id}`` and MCP ``pulse_update_engagement``
+    call sites). BYPASSRLS — a superadmin operates across tenants by
+    definition.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        org_id: UUID of the target org.
+        allowed: New value for ``reactive_cards_allowed``.
+
+    Returns:
+        ``{id, name, slug, logo_path, reactive_cards_allowed,
+        created_at}`` for the updated row, or ``None`` if no org with
+        that id existed.
+    """
+    result = await session.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = :a "
+            "where id = cast(:o as uuid) "
+            "returning id::text as id, name, slug, logo_path, "
+            "reactive_cards_allowed, created_at"
+        ),
+        {"a": allowed, "o": str(org_id)},
     )
     row = result.mappings().one_or_none()
     return dict(row) if row else None

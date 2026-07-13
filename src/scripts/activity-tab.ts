@@ -51,6 +51,7 @@ const ACTION_LABELS: Record<string, string> = {
   "card.update": "Edited card",
   "card.delete": "Deleted card",
   "card.import": "Imported cards",
+  "card.reactive_generate": "AI follow-up generated",
   "attachment.upload": "Uploaded attachment",
   "org.update": "Updated organization",
   "org.logo_set": "Updated logo",
@@ -77,6 +78,7 @@ const FILTER_ACTIONS: ReadonlyArray<string> = [
   "card.update",
   "card.delete",
   "card.import",
+  "card.reactive_generate",
   "attachment.upload",
   "org.update",
   "org.logo_set",
@@ -320,6 +322,11 @@ function formatActivityPhrase(
       const count = typeof meta.count === "number" ? meta.count : 0;
       return `imported ${count} card${count === 1 ? "" : "s"}`;
     }
+    case "card.reactive_generate": {
+      const ids = Array.isArray(meta.card_ids) ? meta.card_ids : [];
+      const count = ids.length;
+      return `generated ${count} AI follow-up card${count === 1 ? "" : "s"}`;
+    }
     case "attachment.upload":
       return `uploaded attachment ${emName(meta.filename)}`;
     case "org.update": {
@@ -327,6 +334,11 @@ function formatActivityPhrase(
       const newName = stringOrNull(meta.new_name);
       if (oldName && newName) {
         return `renamed the organization from ${emName(oldName)} to ${emName(newName)}`;
+      }
+      if (typeof meta.new_reactive_cards_allowed === "boolean") {
+        return meta.new_reactive_cards_allowed
+          ? "enabled reactive cards for the organization"
+          : "disabled reactive cards for the organization";
       }
       return `updated the organization`;
     }
