@@ -32,7 +32,16 @@ export type DeckAction =
   | { type: "openModal" }
   | { type: "closeModal" }
   | { type: "openPicker" }
-  | { type: "closePicker" };
+  | { type: "closePicker" }
+  /** Reactive cards: `count` cards were just spliced into the live deck
+   * array (by the caller, alongside a matching `setCards`) starting at
+   * `insertAt`. Grows `total` to match. If the respondent was on the
+   * complete screen (`index === total`, the old total) when the cards
+   * landed, jumps them straight to the new follow-up with per-card UI
+   * state reset — otherwise `index` is left untouched, since
+   * `insertAt` never lands at or before the respondent's current
+   * position (see `spliceIndexFor` in `src/lib/deck-order.ts`). */
+  | { type: "cardsInserted"; insertAt: number; count: number };
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
@@ -92,6 +101,21 @@ export function deckReducer(
       return { ...state, pickerOpen: true };
     case "closePicker":
       return { ...state, pickerOpen: false };
+    case "cardsInserted": {
+      const wasComplete = state.index === state.total;
+      const total = state.total + action.count;
+      if (!wasComplete) return { ...state, total };
+      return {
+        ...state,
+        total,
+        index: action.insertAt,
+        mode: "view",
+        saveError: null,
+        modalOpen: false,
+        pickerOpen: false,
+        showResume: false,
+      };
+    }
     default:
       return state;
   }

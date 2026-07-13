@@ -98,3 +98,65 @@ describe("save + edit + overlay transitions", () => {
     ).toBe(false);
   });
 });
+
+describe("cardsInserted (reactive cards live splice)", () => {
+  it("grows total and leaves index untouched when mid-deck", () => {
+    const s = base({ index: 2, total: 5 });
+    const next = deckReducer(s, {
+      type: "cardsInserted",
+      insertAt: 4,
+      count: 1,
+    });
+    expect(next.total).toBe(6);
+    expect(next.index).toBe(2);
+  });
+
+  it("grows total by count for a multi-card generation", () => {
+    const s = base({ index: 2, total: 5 });
+    const next = deckReducer(s, {
+      type: "cardsInserted",
+      insertAt: 4,
+      count: 2,
+    });
+    expect(next.total).toBe(7);
+  });
+
+  it("jumps to insertAt and resets per-card UI state when it lands on the complete screen", () => {
+    const s = base({
+      index: 5,
+      total: 5,
+      mode: "edit",
+      saveError: "old",
+      modalOpen: true,
+      pickerOpen: true,
+      showResume: true,
+    });
+    const next = deckReducer(s, {
+      type: "cardsInserted",
+      insertAt: 5,
+      count: 1,
+    });
+    expect(next).toMatchObject({
+      total: 6,
+      index: 5,
+      mode: "view",
+      saveError: null,
+      modalOpen: false,
+      pickerOpen: false,
+      showResume: false,
+    });
+  });
+
+  it("does not treat an in-deck index equal to a stale total as complete", () => {
+    // Sanity check: "was complete" is index === total at the time of the
+    // action, not some other coincidental equality.
+    const s = base({ index: 3, total: 3 });
+    const next = deckReducer(s, {
+      type: "cardsInserted",
+      insertAt: 3,
+      count: 1,
+    });
+    expect(next.index).toBe(3); // jumped to insertAt (same value here)
+    expect(next.total).toBe(4);
+  });
+});

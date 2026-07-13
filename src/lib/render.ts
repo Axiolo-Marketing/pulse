@@ -193,6 +193,11 @@ export interface RenderCardArgs {
   /** Optional human-readable org name (shown next to or instead of
    * "Pulse" in the brand row). Falls back to the Pulse wordmark. */
   orgName?: string | null;
+  /** Reactive cards: a quiet one-line status shown under the progress area
+   * while a background generation poll is active for the current session
+   * ("Checking if we need a quick follow-up…"). `undefined` renders
+   * nothing — never an alert/confirm, just an inline status line. */
+  pollHint?: string;
 }
 
 export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
@@ -241,6 +246,10 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
   const backDisabled = position === 1 ? "disabled" : "";
   const forwardDisabled = position === total ? "disabled" : "";
 
+  const pollHintHtml = args.pollHint
+    ? `<div class="poll-hint" role="status">${escape(args.pollHint)}</div>`
+    : "";
+
   // Brand row: the Pulse product wordmark first, optionally followed by
   // the operator's org logo (renders as `Pulse · [org logo]`). The Axiolo
   // wordmark lives in the page footer ("Made by Axiolo"). With no org logo
@@ -265,6 +274,7 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
         <button class="nav-arrow" type="button" data-action="nav-forward" ${forwardDisabled} aria-label="Next card">›</button>
       </nav>
     </header>
+    ${pollHintHtml}
     ${banner}
     <article class="card" aria-labelledby="card-title">
       <div class="category">${escape(card.category)}</div>

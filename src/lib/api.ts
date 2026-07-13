@@ -144,6 +144,13 @@ export interface Engagement {
    * client deck applies it via `applyBranding` on boot. Absent/null →
    * the deck keeps the product defaults. */
   org_branding?: BrandingSettings | null;
+  /** Reactive cards feature flag, fully resolved server-side (deployment +
+   * org `reactive_cards_allowed` + this engagement's own toggle). When
+   * `true`, the deck starts polling `clientApi.generations` after a
+   * qualifying confirm-edit correction (see `src/lib/deck-order.ts`).
+   * Optional so both decks type-check pre-rollout; treat an absent value
+   * as `false`. */
+  reactive_cards_enabled?: boolean;
 }
 
 export interface Card {
@@ -160,6 +167,35 @@ export interface Card {
   skip_allowed: boolean;
   attachment_path: string | null;
   created_at: string;
+  /** Reactive cards: which recipient this card is scoped to, or `null` for
+   * an engagement-shared card (every pre-existing card, and everything an
+   * operator creates). RLS already keeps a foreign recipient's scoped card
+   * off this list entirely — the field is here for deck ordering/display,
+   * not as a client-side trust boundary. Optional so callers pre-rollout
+   * (or fixtures) still type-check. */
+  recipient_id?: string | null;
+  /** Who authored this card: `"operator"` (default, omitted on older rows)
+   * or `"ai"` for a reactive-cards follow-up. Drives deck ordering — see
+   * `orderDeckCards` in `src/lib/deck-order.ts`. */
+  source?: "operator" | "ai";
+  /** For `source === "ai"` cards: the id of the `responses` row (the
+   * correction) that triggered this card's generation. `orderDeckCards`
+   * resolves this back to a parent card id to place the follow-up right
+   * after it. `null`/absent for operator cards. */
+  generated_from_response_id?: string | null;
+}
+
+/** One row from `GET /api/generations` — the client deck's poll surface for
+ * a reactive-cards generation kicked off by a confirm-edit correction. RLS
+ * scopes rows to the calling recipient; `card_ids` is only populated once
+ * `status` reaches `"completed"`. */
+export interface GenerationRow {
+  id: string;
+  response_id: string;
+  status: "pending" | "completed" | "skipped" | "failed";
+  card_ids: string[];
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface ClientResponse {
@@ -228,6 +264,17 @@ export const clientApi = {
 
   heartbeat: (token: string): Promise<{ status: string }> =>
     request("/api/me/heartbeat", { method: "PATCH", token }),
+
+  /** Poll surface for a reactive-cards generation. Pass the saved response's
+   * `id` to scope to that specific correction; omitting it returns every
+   * generation row for the calling recipient. Used by the shared
+   * `runPoll` helper in `src/lib/deck-order.ts`. */
+  generations: (token: string, responseId?: string): Promise<GenerationRow[]> => {
+    const qs = responseId
+      ? `?response_id=${encodeURIComponent(responseId)}`
+      : "";
+    return request(`/api/generations${qs}`, { token });
+  },
 
   /** Upload a file (or recorded blob) against a card. `kind` defaults to
    * `"file"`; voice answers pass `{ kind: "voice", filename: "voice.webm" }`.

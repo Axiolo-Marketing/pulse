@@ -8,6 +8,12 @@ import {
   type UploadRow,
 } from "@/lib/api";
 import { applyBranding } from "@/lib/branding";
+import {
+  hasTriggerPotential,
+  orderDeckCards,
+  runPoll,
+  spliceIndexFor,
+} from "@/lib/deck-order";
 
 import { AttachmentModal } from "./AttachmentModal";
 import { CardPicker } from "./CardPicker";
@@ -62,7 +68,7 @@ export default function DeckApp(): React.ReactElement {
     (async () => {
       try {
         const engagement = await clientApi.me(token);
-        const [cards, responses, uploads] = await Promise.all([
+        const [rawCards, responses, uploads] = await Promise.all([
           clientApi.cards(token),
           clientApi.responses(token),
           clientApi.uploads(token),
@@ -71,6 +77,11 @@ export default function DeckApp(): React.ReactElement {
         applyBranding(engagement.org_branding);
         logoUrl = await clientApi.logoObjectUrl(token);
         if (cancelled) return;
+        // Reactive cards: an AI-generated follow-up is appended at the end
+        // of the deck server-side. Re-order for display so it shows up
+        // directly after the card whose correction triggered it, even on a
+        // fresh page load — see src/lib/deck-order.ts.
+        const cards = orderDeckCards(rawCards, responses);
         setBoot({
           status: "ready",
           token,
@@ -113,7 +124,15 @@ function DeckRunner({
   token: string;
   boot: ReadyBoot;
 }): React.ReactElement {
-  const { cards, engagement } = boot;
+  const { engagement } = boot;
+  // Reactive cards: cards are lifted into state (rather than a plain const
+  // off `boot`) so a live-generation splice can grow the deck mid-session.
+  // `orderDeckCards` is idempotent — `boot.cards` is already ordered (the
+  // boot effect ran it once to compute `bootIndex`), so this just re-derives
+  // the identical order as the initial state value.
+  const [cards, setCards] = useState<CardModel[]>(() =>
+    orderDeckCards(boot.cards, boot.responses),
+  );
   const total = cards.length;
 
   const [ui, dispatch] = useReducer(deckReducer, undefined, () =>
@@ -149,6 +168,15 @@ function DeckRunner({
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const indexRef = useRef(ui.index);
   indexRef.current = ui.index;
+  // Reactive cards: read inside the async poll-completion callback, which
+  // otherwise would've closed over a stale `cards` from whichever render
+  // kicked the poll off.
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
+  // At most one poll in flight at a time — a *new triggering* save (via
+  // startFollowUpPoll) or unmount aborts whatever's running; a save that
+  // doesn't itself trigger a generation leaves the existing poll alone.
+  const activePollRef = useRef<AbortController | null>(null);
 
   function clearRetry(): void {
     if (retryRef.current) {
@@ -158,12 +186,20 @@ function DeckRunner({
     pendingRef.current = null;
   }
 
+  function cancelActivePoll(): void {
+    activePollRef.current?.abort();
+    activePollRef.current = null;
+  }
+
   // Clear any pending retry on unmount and whenever the card changes (mirrors
   // navigateTo() cancelling the retry timer in app.ts).
   useEffect(() => () => clearRetry(), []);
   useEffect(() => {
     clearRetry();
   }, [ui.index]);
+
+  // Cancel any in-flight follow-up poll on unmount.
+  useEffect(() => () => cancelActivePoll(), []);
 
   const card = ui.index < total ? cards[ui.index] : null;
   const cardId = card?.id;
@@ -185,12 +221,78 @@ function DeckRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardId]);
 
+  // Reactive cards: poll `GET /api/generations` for the generation kicked
+  // off by `responseId` (the just-saved correction on `parentCardId`), and
+  // splice any resulting cards into the live deck. Guarded by
+  // `activePollRef` so only the poll matching the currently-tracked
+  // controller can act — a newer save (or unmount) aborts this one.
+  async function pollForFollowUp(
+    responseId: string,
+    parentCardId: string,
+    controller: AbortController,
+  ): Promise<void> {
+    const result = await runPoll(
+      () => clientApi.generations(token, responseId),
+      responseId,
+      controller.signal,
+    );
+    if (activePollRef.current !== controller) return; // superseded or cancelled
+    activePollRef.current = null;
+    if (!result || result.status !== "completed" || result.cardIds.length === 0) {
+      return;
+    }
+
+    let freshCards: CardModel[];
+    try {
+      freshCards = await clientApi.cards(token);
+    } catch {
+      return;
+    }
+
+    const liveCards = cardsRef.current;
+    const existingIds = new Set(liveCards.map((c) => c.id));
+    const newCards = result.cardIds
+      .map((id) => freshCards.find((c) => c.id === id))
+      .filter((c): c is CardModel => !!c && !existingIds.has(c.id));
+    if (newCards.length === 0) return;
+
+    // spliceIndexFor never returns an index at or before wherever the
+    // respondent currently is; for the complete screen (index === total,
+    // a sentinel, not a real card position) treat "current position" as
+    // the last real card, so a parent-less generation lands at the very
+    // end rather than one slot past it.
+    const atComplete = indexRef.current >= liveCards.length;
+    const effectiveIndex = atComplete
+      ? Math.max(0, liveCards.length - 1)
+      : indexRef.current;
+    const insertAt = spliceIndexFor(liveCards, parentCardId, effectiveIndex);
+
+    const updated = [...liveCards];
+    updated.splice(insertAt, 0, ...newCards);
+    setCards(updated);
+    dispatch({ type: "cardsInserted", insertAt, count: newCards.length });
+  }
+
+  function startFollowUpPoll(responseId: string, parentCardId: string): void {
+    cancelActivePoll();
+    const controller = new AbortController();
+    activePollRef.current = controller;
+    void pollForFollowUp(responseId, parentCardId, controller);
+  }
+
   async function performSave(action: PendingAction): Promise<void> {
     const startIndex = indexRef.current;
     const current = startIndex < total ? cards[startIndex] : null;
     if (!current) return;
 
     clearRetry();
+    // Deliberately not cancelling an in-flight follow-up poll here: this
+    // save might just be the respondent continuing to answer while an
+    // earlier correction's generation is still running in the background,
+    // and cancelling it would drop that follow-up for good. If *this* save
+    // turns out to be a new trigger, startFollowUpPoll() below cancels the
+    // old poll itself before starting the new one, so the "at most one
+    // poll" invariant still holds.
     pendingRef.current = action;
     dispatch({ type: "saveStart" });
 
@@ -221,6 +323,18 @@ function DeckRunner({
     clearRetry();
     setResponses((m) => new Map(m).set(current.id, saved));
     clientApi.heartbeat(token).catch(() => {});
+
+    // Reactive cards: a "Needs edit" correction may have kicked off a
+    // background generation. Only start the poll — never block navigation
+    // on it, and a false-positive client-side guess just costs one wasted
+    // poll loop (the backend re-derives the trigger independently).
+    if (
+      engagement.reactive_cards_enabled &&
+      hasTriggerPotential(current.response_type, state, response_value)
+    ) {
+      startFollowUpPoll(saved.id, current.id);
+    }
+
     // Only advance if the recipient is still on the card we saved.
     if (indexRef.current === startIndex) dispatch({ type: "advance" });
   }
