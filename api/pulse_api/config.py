@@ -115,6 +115,35 @@ class Settings(BaseSettings):
     reminder_cadence_days: int = 7
     reminder_max: int = 3
 
+    # ── Reactive cards (LLM-generated follow-up questions) ───────────────
+    # When a respondent corrects a `confirm-edit` card, the generation
+    # engine (`reactive.py`) evaluates the correction against the
+    # engagement and may insert 1-2 follow-up cards into that respondent's
+    # deck live. Three gates, all default-off: this deployment-wide switch
+    # (plus a non-empty `anthropic_api_key`), the per-org
+    # `organizations.reactive_cards_allowed` flag (superadmin-managed), and
+    # the per-engagement `engagements.reactive_cards_enabled` flag (org
+    # members). An empty `anthropic_api_key` disables the feature
+    # regardless of `reactive_cards_enabled` — UNLESS `reactive_fake_mode`
+    # is on, which waives the key requirement so the deck -> generation ->
+    # poll -> splice loop is clickable locally with no key. Never set
+    # `reactive_fake_mode` true in production.
+    anthropic_api_key: str = ""
+    reactive_cards_enabled: bool = False
+    reactive_model: str = "claude-opus-4-8"
+    reactive_max_output_tokens: int = 2048
+    reactive_timeout_seconds: float = 60.0
+    reactive_max_cards_per_generation: int = 2
+    reactive_max_generated_per_recipient: int = 10
+    reactive_max_trigger_chars: int = 4000
+    reactive_fake_mode: bool = False
+    # SDK-level retry count for transient errors (429/5xx/connection).
+    # 2 matches the `anthropic` package's own default — set explicitly
+    # (rather than relying on the SDK default) so tests can dial it to 0
+    # for deterministic, fast error-path tests without real backoff
+    # sleeps; production keeps automatic retries for transient failures.
+    reactive_max_retries: int = 2
+
     cors_allowed_origin: str = "http://localhost:4321"
     upload_dir: Path = Path("/var/lib/pulse/uploads")
     max_upload_bytes: int = 26_214_400

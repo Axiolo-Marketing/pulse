@@ -39,24 +39,35 @@ async def list_for_my_engagement(session: AsyncSession) -> list[dict]:
     return [dict(r) for r in result.mappings().all()]
 
 
-async def _card_belongs_to_caller(session: AsyncSession, card_id: str) -> bool:
-    """RLS filters `cards` by engagement_id automatically — if no row comes
-    back, the card either doesn't exist or belongs to another engagement.
-    Treat both the same way (404) so we don't leak existence."""
+async def _card_belongs_to_caller(session: AsyncSession, card_id: str) -> dict | None:
+    """RLS filters `cards` by engagement_id (and, since migration 0017, by
+    recipient scoping) automatically — if no row comes back, the card
+    either doesn't exist or isn't visible to the token's caller. Treat both
+    the same way (404 at the route layer) so we don't leak existence.
+
+    Returns the card's `response_type` and `source` rather than a bare
+    bool — `routes/client_api.py::save_response` needs both to decide
+    whether a save is a reactive-cards generation candidate
+    (`reactive.is_candidate`), and fetching them here avoids a second
+    query. `None` for a missing/foreign card is unchanged."""
     if not _valid_uuid(card_id):
-        return False
+        return None
     result = await session.execute(
-        text("select 1 from public.cards where id = cast(:cid as uuid)"),
+        text(
+            "select response_type, source from public.cards "
+            "where id = cast(:cid as uuid)"
+        ),
         {"cid": card_id},
     )
-    return result.scalar() is not None
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
 
 
 async def mark_viewed(session: AsyncSession, card_id: str) -> dict | None:
     """Insert a viewed row if none exists; otherwise leave the existing
     row alone. Returns the row's current state, or None if the card
     isn't visible to the token's engagement (404 at the route layer)."""
-    if not await _card_belongs_to_caller(session, card_id):
+    if await _card_belongs_to_caller(session, card_id) is None:
         return None
 
     result = await session.execute(
@@ -94,8 +105,15 @@ async def upsert_answer(
 ) -> dict | None:
     """Insert or update the response for (card_id, current engagement). For
     answered/skipped/needs_edit states this sets `answered_at = now()`; for
-    'viewed' it sets `viewed_at = now()` and leaves `answered_at` alone."""
-    if not await _card_belongs_to_caller(session, card_id):
+    'viewed' it sets `viewed_at = now()` and leaves `answered_at` alone.
+
+    The returned dict carries an extra `"card"` key (`{response_type,
+    source}`, from `_card_belongs_to_caller`) alongside the response row's
+    own columns — the route layer pops it off before returning the row to
+    the client, and uses it to decide whether this save is a reactive-
+    cards generation candidate without a second query."""
+    card = await _card_belongs_to_caller(session, card_id)
+    if card is None:
         return None
 
     set_answered = state in ("answered", "skipped", "needs_edit")
@@ -123,7 +141,11 @@ async def upsert_answer(
         {"cid": card_id, "state": state, "rv": _json_dump(response_value)},
     )
     row = result.mappings().one_or_none()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    out = dict(row)
+    out["card"] = card
+    return out
 
 
 def _json_dump(value: dict | None) -> str | None:

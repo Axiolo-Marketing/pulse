@@ -14,14 +14,16 @@ can't forge the engagement_id field on a write.
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pulse_api import reactive
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
 from pulse_api.observability import limiter
+from pulse_api.repos import card_generations as card_generations_repo
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import responses as responses_repo
@@ -193,6 +195,7 @@ async def mark_viewed(
 @router.post("/responses")
 async def save_response(
     req: SaveResponseRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_anon_session),
 ) -> dict:
     _reject_unsafe_response_url(req.response_value)
@@ -204,8 +207,46 @@ async def save_response(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="card not found")
+    card_meta = row.pop("card")
     await session.commit()
+
+    # Reactive cards: a cheap, DB-free heuristic decides whether to even
+    # schedule the background generation task — `reactive.run_generation`
+    # re-checks every real gate (org/engagement flags, per-recipient cap,
+    # dedup) with fresh reads once it actually runs, after this response
+    # has already been returned to the respondent.
+    if reactive.is_candidate(
+        card_source=card_meta["source"],
+        response_type=card_meta["response_type"],
+        state=req.state,
+        response_value=req.response_value,
+    ):
+        background_tasks.add_task(
+            reactive.run_generation,
+            response_id=row["id"],
+            recipient_id=row["recipient_id"],
+            engagement_id=row["engagement_id"],
+            card_id=row["card_id"],
+        )
+
     return row
+
+
+@router.get("/generations")
+@limiter.limit(settings.rate_limit_default)
+async def list_generations(
+    request: Request,
+    response_id: str | None = None,
+    session: AsyncSession = Depends(get_anon_session),
+) -> list[dict]:
+    """Poll surface for the deck's post-save "checking for a follow-up"
+    loop. RLS (`card_generations_self_read`, migration 0017) scopes this
+    to the caller's own recipient; `response_id` narrows further to the
+    one save the deck just made, since that's the only generation the
+    client cares about right after a correction."""
+    return await card_generations_repo.list_for_my_recipient(
+        session, response_id=response_id
+    )
 
 
 @router.get("/uploads")

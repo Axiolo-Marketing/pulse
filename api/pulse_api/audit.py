@@ -28,6 +28,7 @@ string emitted by the route layer appears in this list.
 * ``card.update``           — card field change
 * ``card.delete``           — card removed
 * ``card.import``           — bulk markdown import (one row per call)
+* ``card.reactive_generate`` — reactive-cards engine auto-inserted an AI follow-up card
 * ``attachment.upload``     — admin uploaded an active-reference file
 * ``org.update``            — org name changed
 * ``org.branding``          — org branding/theme overrides changed
@@ -70,6 +71,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "card.update",
         "card.delete",
         "card.import",
+        "card.reactive_generate",
         # Attachments
         "attachment.upload",
         # Organization
