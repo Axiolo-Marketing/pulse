@@ -13,7 +13,14 @@ vi.mock("@/lib/api", () => ({
   adminApi: { uploadDownloadUrl: (id: string) => `/dl/${id}` },
 }));
 
-import { AiFollowupBadge, fmtSize, recipientLabel, ResponseBody, StateBadge } from "./parts";
+import {
+  AiFollowupBadge,
+  AiFollowupCountBadge,
+  fmtSize,
+  recipientLabel,
+  ResponseBody,
+  StateBadge,
+} from "./parts";
 
 function makeCard(over: Partial<CardModel> = {}): CardModel {
   return {
@@ -318,5 +325,31 @@ describe("AiFollowupBadge", () => {
     expect(
       (window as unknown as { __pwned?: boolean }).__pwned,
     ).toBeUndefined();
+  });
+});
+
+describe("AiFollowupCountBadge", () => {
+  it("renders nothing when count is 0", () => {
+    const { container } = render(<AiFollowupCountBadge count={0} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders +N with a singular label at count 1", () => {
+    render(<AiFollowupCountBadge count={1} />);
+    const badge = screen.getByText("+1");
+    expect(badge).toHaveAttribute("title", "1 AI follow-up question added");
+    expect(badge).toHaveAttribute(
+      "aria-label",
+      "1 AI follow-up question added",
+    );
+  });
+
+  it("renders +N with a plural label when count > 1", () => {
+    render(<AiFollowupCountBadge count={3} />);
+    const badge = screen.getByText("+3");
+    expect(badge).toHaveAttribute(
+      "title",
+      "3 AI follow-up questions added",
+    );
   });
 });

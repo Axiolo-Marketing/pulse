@@ -972,3 +972,214 @@ async def test_reactive_usage_non_superadmin_403(
 ) -> None:
     r = await admin_authed.get("/api/superadmin/reactive-usage")
     assert r.status_code == 403, r.text
+
+
+# ── `engagements` per-engagement drill-down ───────────────────────────────
+
+
+async def test_reactive_usage_engagements_breakdown(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Two engagements (different orgs) with mixed-status generations get
+    correct per-engagement sums; an engagement with zero generations in
+    the window is absent entirely from `engagements`."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_a = seed_admin_user["org_id"]
+    org_b = await _make_empty_org(db)
+
+    ctx_1 = await _seed_engagement_with_card(db, org_id=org_a, name="EngOne")
+    ctx_2 = await _seed_engagement_with_card(db, org_id=org_b, name="EngTwo")
+    ctx_zero = await _seed_engagement_with_card(db, org_id=org_a, name="EngZero")
+
+    await _seed_generation(
+        db, ctx=ctx_1, status="completed", trigger_hash="e1a",
+        input_tokens=100, output_tokens=40, cost_usd="0.010000",
+    )
+    await _seed_generation(
+        db, ctx=ctx_1, status="skipped", trigger_hash="e1b",
+        input_tokens=15, output_tokens=0,
+    )
+    await _seed_generation(
+        db, ctx=ctx_2, status="completed", trigger_hash="e2a",
+        input_tokens=200, output_tokens=90, cost_usd="0.020000",
+    )
+    # `ctx_zero` deliberately gets no `card_generations` row at all — it
+    # must not appear in the breakdown regardless of window size.
+    await db.flush()
+
+    r = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    by_eng = {row["engagement_id"]: row for row in body["engagements"]}
+    assert ctx_zero["engagement_id"] not in by_eng
+
+    row_1 = by_eng[ctx_1["engagement_id"]]
+    assert row_1["engagement_label"] == "EngOne"
+    assert row_1["org_id"] == org_a
+    assert row_1["generations"] == 2
+    assert row_1["input_tokens"] == 115
+    assert row_1["output_tokens"] == 40
+    assert row_1["cost_usd"] == pytest.approx(0.01)
+
+    row_2 = by_eng[ctx_2["engagement_id"]]
+    assert row_2["engagement_label"] == "EngTwo"
+    assert row_2["org_id"] == org_b
+    assert row_2["generations"] == 1
+    assert row_2["input_tokens"] == 200
+    assert row_2["output_tokens"] == 90
+    assert row_2["cost_usd"] == pytest.approx(0.02)
+
+
+async def test_reactive_usage_engagements_days_window_filters_by_created_at(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """A generation older than the requested window is excluded from the
+    per-engagement breakdown too — same `days` window as `orgs`."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_id = seed_admin_user["org_id"]
+    ctx = await _seed_engagement_with_card(db, org_id=org_id, name="WindowedEng")
+
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="recent-e",
+        input_tokens=10, output_tokens=5, cost_usd="0.001000", days_ago=1,
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="old-e",
+        input_tokens=999, output_tokens=999, cost_usd="9.990000", days_ago=40,
+    )
+    await db.flush()
+
+    r30 = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r30.status_code == 200, r30.text
+    row30 = next(
+        e for e in r30.json()["engagements"]
+        if e["engagement_id"] == ctx["engagement_id"]
+    )
+    assert row30["generations"] == 1
+    assert row30["input_tokens"] == 10
+
+    r90 = await admin_authed.get("/api/superadmin/reactive-usage?days=90")
+    assert r90.status_code == 200, r90.text
+    row90 = next(
+        e for e in r90.json()["engagements"]
+        if e["engagement_id"] == ctx["engagement_id"]
+    )
+    assert row90["generations"] == 2
+    assert row90["input_tokens"] == 1009
+
+
+# ── `monthly` per-org cost table (trailing 6 calendar months) ─────────────
+
+
+async def _shift_generation_to_month_offset(
+    db: AsyncSession, *, trigger_hash: str, months_ago: int, day_of_month: int = 3
+) -> None:
+    """Move a previously-seeded `card_generations` row's `created_at` to
+    `day_of_month` of the calendar month `months_ago` months before the
+    current one — precise calendar-month placement that `_seed_generation`'s
+    `days_ago` (a rolling N-day window) can't give us."""
+    await db.execute(
+        text(
+            "update public.card_generations "
+            "set created_at = date_trunc('month', now()) "
+            "  - make_interval(months => :months_ago) "
+            "  + make_interval(days => :day - 1) "
+            "where trigger_hash = :hash"
+        ),
+        {"months_ago": months_ago, "day": day_of_month, "hash": trigger_hash},
+    )
+
+
+async def _month_label(db: AsyncSession, months_ago: int) -> str:
+    """The `"YYYY-MM"` label `months_ago` calendar months before now —
+    computed with the SAME date arithmetic as
+    ``usage_report_monthly`` so the test doesn't re-derive calendar math
+    that could drift from the production query."""
+    row = (
+        await db.execute(
+            text(
+                "select to_char(date_trunc('month', now()) "
+                "  - make_interval(months => :m), 'YYYY-MM') as label"
+            ),
+            {"m": months_ago},
+        )
+    ).mappings().one()
+    return row["label"]
+
+
+async def test_reactive_usage_monthly_buckets_by_calendar_month(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Rows are bucketed by calendar month (`date_trunc('month', ...)`,
+    not a rolling N-day window), ordered most-recent-first, and bounded
+    to the trailing 6 calendar months — a row exactly 6 months back
+    (one month past the boundary) is excluded while one 5 months back
+    (the boundary itself) is included."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_id = seed_admin_user["org_id"]
+    ctx = await _seed_engagement_with_card(db, org_id=org_id, name="MonthlyEng")
+
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-current",
+        input_tokens=10, output_tokens=5, cost_usd="0.001000",
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-last",
+        input_tokens=20, output_tokens=10, cost_usd="0.002000",
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-boundary-in",
+        input_tokens=30, output_tokens=15, cost_usd="0.003000",
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-boundary-out",
+        input_tokens=999, output_tokens=999, cost_usd="9.990000",
+    )
+    await _shift_generation_to_month_offset(db, trigger_hash="m-last", months_ago=1)
+    await _shift_generation_to_month_offset(
+        db, trigger_hash="m-boundary-in", months_ago=5
+    )
+    await _shift_generation_to_month_offset(
+        db, trigger_hash="m-boundary-out", months_ago=6
+    )
+    await db.flush()
+
+    current_label = await _month_label(db, 0)
+    last_label = await _month_label(db, 1)
+    boundary_in_label = await _month_label(db, 5)
+    boundary_out_label = await _month_label(db, 6)
+
+    # `monthly` is independent of `days` — request a small window and
+    # confirm it doesn't affect the monthly table at all.
+    r = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r.status_code == 200, r.text
+    monthly = [row for row in r.json()["monthly"] if row["org_id"] == org_id]
+
+    by_month = {row["month"]: row for row in monthly}
+    assert boundary_out_label not in by_month
+    assert current_label in by_month
+    assert last_label in by_month
+    assert boundary_in_label in by_month
+
+    assert by_month[current_label]["generations"] == 1
+    assert by_month[current_label]["input_tokens"] == 10
+    assert by_month[current_label]["cost_usd"] == pytest.approx(0.001)
+
+    assert by_month[last_label]["generations"] == 1
+    assert by_month[last_label]["input_tokens"] == 20
+
+    assert by_month[boundary_in_label]["generations"] == 1
+    assert by_month[boundary_in_label]["input_tokens"] == 30
+
+    # Most-recent-first ordering across the whole `monthly` list (not
+    # just this org's rows) — string comparison works since the label is
+    # zero-padded `"YYYY-MM"`.
+    all_months = [row["month"] for row in r.json()["monthly"]]
+    assert all_months == sorted(all_months, reverse=True)

@@ -296,6 +296,114 @@ async def usage_report(session: AsyncSession, *, days: int) -> list[dict]:
     return [dict(r) for r in result.mappings().all()]
 
 
+async def usage_report_by_engagement(
+    session: AsyncSession, *, days: int
+) -> list[dict]:
+    """Per-engagement reactive-cards usage + cost aggregates over a
+    trailing window — the superadmin drill-down alongside the per-org
+    ``usage_report``.
+
+    One ``GROUP BY`` over ``card_generations`` joined to ``engagements``
+    (for the label + org attribution) and ``clients`` (the label
+    fallback), filtered to the trailing ``days``-day window the same way
+    ``usage_report`` is. An inner join throughout means engagements with
+    zero generations in the window are simply absent from the result —
+    no zero-rows to filter out in Python.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        days: Trailing window size in days (already validated/clamped
+            at the route layer).
+
+    Returns:
+        One dict per engagement that had at least one generation in the
+        window: ``{engagement_id, engagement_label, org_id, org_name,
+        generations, input_tokens, output_tokens, cost_usd}``.
+        ``engagement_label`` is ``engagement_name`` when set (non-blank),
+        else the owning client's name. ``cost_usd`` is a ``Decimal``
+        (``0`` when every generation in the window recorded no cost,
+        e.g. all dev-fake-mode calls).
+    """
+    result = await session.execute(
+        text(
+            """
+            select
+              e.id::text as engagement_id,
+              coalesce(nullif(trim(e.engagement_name), ''), cl.name)
+                as engagement_label,
+              org.id::text as org_id,
+              org.name as org_name,
+              count(*)::int as generations,
+              coalesce(sum(cg.input_tokens), 0)::bigint as input_tokens,
+              coalesce(sum(cg.output_tokens), 0)::bigint as output_tokens,
+              coalesce(sum(cg.cost_usd), 0) as cost_usd
+            from public.card_generations cg
+            join public.engagements e on e.id = cg.engagement_id
+            join public.clients cl on cl.id = e.client_id
+            join public.organizations org on org.id = cg.org_id
+            where cg.created_at >= now() - make_interval(days => :days)
+            group by e.id, e.engagement_name, cl.name, org.id, org.name
+            order by generations desc, engagement_label
+            """
+        ),
+        {"days": int(days)},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def usage_report_monthly(
+    session: AsyncSession, *, months: int = 6
+) -> list[dict]:
+    """Monthly per-org reactive-cards usage + cost aggregates, independent
+    of the 30/90-day window selector — the superadmin's month-over-month
+    cost trend.
+
+    One ``GROUP BY`` over ``card_generations`` joined to
+    ``organizations``, bucketed by ``date_trunc('month', created_at)`` and
+    windowed to the trailing ``months`` CALENDAR months (the current
+    month plus ``months - 1`` prior full months) — served by the
+    ``(org_id, created_at)`` index from migration 0017, same as
+    ``usage_report``.
+
+    Args:
+        session: ``pulse_admin`` session (BYPASSRLS).
+        months: Number of trailing calendar months to include (default
+            6). Not caller-configurable at the route layer — this report
+            is a fixed "last 6 months" view.
+
+    Returns:
+        One dict per ``(month, org)`` pair that had at least one
+        generation: ``{month, org_id, org_name, generations,
+        input_tokens, output_tokens, cost_usd}``, most recent month
+        first (ties broken by org name). ``month`` is a ``"YYYY-MM"``
+        text label. ``cost_usd`` is a ``Decimal`` (``0`` when every
+        generation in that month recorded no cost).
+    """
+    result = await session.execute(
+        text(
+            """
+            select
+              to_char(date_trunc('month', cg.created_at), 'YYYY-MM')
+                as month,
+              org.id::text as org_id,
+              org.name as org_name,
+              count(*)::int as generations,
+              coalesce(sum(cg.input_tokens), 0)::bigint as input_tokens,
+              coalesce(sum(cg.output_tokens), 0)::bigint as output_tokens,
+              coalesce(sum(cg.cost_usd), 0) as cost_usd
+            from public.card_generations cg
+            join public.organizations org on org.id = cg.org_id
+            where cg.created_at >= date_trunc('month', now())
+              - make_interval(months => cast(:months as integer) - 1)
+            group by date_trunc('month', cg.created_at), org.id, org.name
+            order by date_trunc('month', cg.created_at) desc, org.name
+            """
+        ),
+        {"months": int(months)},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def list_for_my_recipient(
     session: AsyncSession, response_id: str | None = None
 ) -> list[dict]:

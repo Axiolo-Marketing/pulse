@@ -152,6 +152,13 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
     ``answered``) so the list can show each respondent with their own
     answered-of-``total_cards`` badge, ordered by when they were added.
 
+    ``ai_cards_count`` is how many of the engagement's cards were
+    LLM-generated (``cards.source = 'ai'`` — migration 0017's reactive
+    follow-ups), across every recipient. The list uses this to show a
+    "+N" badge next to the progress counter as a visual cue that
+    reactive follow-ups were added; it's 0 for engagements that never
+    triggered generation.
+
     JOINs ``clients`` for the owning client and carries the raw
     ``created_by`` id; the owner's display name/email is enriched in a
     SECOND pass at the route layer (``users`` isn't granted to
@@ -168,6 +175,9 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               c.reminders_enabled, c.reactive_cards_enabled, c.created_at,
               (select count(*) from public.cards cd
                  where cd.engagement_id = c.id)::int             as total_cards,
+              (select count(*) from public.cards cda
+                 where cda.engagement_id = c.id
+                   and cda.source = 'ai')::int                  as ai_cards_count,
               (select count(*) from public.recipients rc
                  where rc.engagement_id = c.id)::int             as recipients_count,
               (select max(rc.last_active_at) from public.recipients rc

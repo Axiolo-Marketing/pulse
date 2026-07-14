@@ -37,6 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { AiFollowupCountBadge } from "./detail/parts";
 import { AdminError, AdminLoading } from "./states";
 import { NewEngagementDialog } from "./NewEngagementDialog";
 
@@ -330,14 +331,17 @@ export function EngagementList(): React.ReactElement {
                             {fmtDate(s.last_active_at)}
                           </div>
                         </div>
-                        <span
-                          className={cn(
-                            "shrink-0 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold",
-                            STATUS_BADGE[st],
-                          )}
-                        >
-                          {STATUS_LABELS[st]}
-                        </span>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <AiFollowupCountBadge count={s.ai_cards_count} />
+                          <span
+                            className={cn(
+                              "whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold",
+                              STATUS_BADGE[st],
+                            )}
+                          >
+                            {STATUS_LABELS[st]}
+                          </span>
+                        </div>
                       </div>
 
                       {s.total_cards === 0 ? (

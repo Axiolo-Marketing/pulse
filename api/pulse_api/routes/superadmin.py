@@ -66,6 +66,10 @@ _USAGE_DAYS_DEFAULT = 30
 _USAGE_DAYS_MIN = 1
 _USAGE_DAYS_MAX = 365
 
+# Monthly usage table is always a fixed trailing window — not
+# caller-configurable — so it stays independent of the days selector.
+_USAGE_MONTHLY_MONTHS = 6
+
 
 # ── Request / response models ─────────────────────────────────────────────
 
@@ -193,12 +197,47 @@ class ReactiveUsageTotals(BaseModel):
     cost_usd: float
 
 
+class ReactiveUsageEngagementRow(BaseModel):
+    """One engagement's row in the per-engagement usage/cost drill-down
+    (same ``days`` window as ``orgs``). Only engagements with at least
+    one generation in the window appear."""
+
+    engagement_id: str
+    engagement_label: str
+    org_id: str
+    org_name: str
+    generations: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
+class ReactiveUsageMonthlyRow(BaseModel):
+    """One ``(month, org)`` row in the trailing-6-calendar-month cost
+    table. Independent of the ``days`` window selector — always the
+    last 6 calendar months. ``month`` is a ``"YYYY-MM"`` label."""
+
+    month: str
+    org_id: str
+    org_name: str
+    generations: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
 class ReactiveUsageResponse(BaseModel):
-    """``GET /api/superadmin/reactive-usage`` body."""
+    """``GET /api/superadmin/reactive-usage`` body.
+
+    ``orgs``/``totals`` and ``engagements`` share the same ``days``
+    window; ``monthly`` is always the trailing 6 calendar months
+    regardless of ``days``."""
 
     days: int
     orgs: list[ReactiveUsageOrgRow]
     totals: ReactiveUsageTotals
+    engagements: list[ReactiveUsageEngagementRow]
+    monthly: list[ReactiveUsageMonthlyRow]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -596,19 +635,27 @@ async def reactive_usage(
 
     Operating-cost monitoring for the reactive-cards LLM feature — NOT a
     billing surface (no per-customer invoicing hooks off this; see the
-    plan's "monitoring/reporting only" note). One ``GROUP BY`` over
-    ``card_generations`` joined to ``organizations``
-    (``card_generations_repo.usage_report``), served by the
-    ``(org_id, created_at)`` index from migration 0017, over the
-    trailing ``days``-day window (clamped to
-    ``[1, 365]``; default 30). The ``totals`` row sums the per-org rows
-    in Python rather than a second query.
+    plan's "monitoring/reporting only" note). Three complementary views,
+    all served by the ``(org_id, created_at)`` index from migration 0017:
+
+    - ``orgs`` / ``totals`` — per-org aggregates over the trailing
+      ``days``-day window (clamped to ``[1, 365]``; default 30). The
+      ``totals`` row sums the per-org rows in Python rather than a
+      second query.
+    - ``engagements`` — per-engagement drill-down over the SAME ``days``
+      window (``card_generations_repo.usage_report_by_engagement``).
+      Only engagements with at least one generation in the window
+      appear.
+    - ``monthly`` — per-``(month, org)`` cost trend across the trailing
+      6 CALENDAR months (``card_generations_repo.usage_report_monthly``),
+      independent of ``days``.
 
     Superadmin-only — 403 for any other caller via
     ``get_current_superadmin``.
 
     Args:
-        days: Trailing window size in days. Clamped to ``[1, 365]``.
+        days: Trailing window size in days, applied to ``orgs``/
+            ``totals``/``engagements``. Clamped to ``[1, 365]``.
     """
     bounded_days = max(_USAGE_DAYS_MIN, min(int(days), _USAGE_DAYS_MAX))
     rows = await card_generations_repo.usage_report(session, days=bounded_days)
@@ -636,4 +683,44 @@ async def reactive_usage(
         output_tokens=sum(r.output_tokens for r in org_rows),
         cost_usd=sum(r.cost_usd for r in org_rows),
     )
-    return ReactiveUsageResponse(days=bounded_days, orgs=org_rows, totals=totals)
+
+    engagement_rows_raw = await card_generations_repo.usage_report_by_engagement(
+        session, days=bounded_days
+    )
+    engagement_rows = [
+        ReactiveUsageEngagementRow(
+            engagement_id=str(r["engagement_id"]),
+            engagement_label=str(r["engagement_label"]),
+            org_id=str(r["org_id"]),
+            org_name=str(r["org_name"]),
+            generations=int(r["generations"]),
+            input_tokens=int(r["input_tokens"]),
+            output_tokens=int(r["output_tokens"]),
+            cost_usd=float(r["cost_usd"]),
+        )
+        for r in engagement_rows_raw
+    ]
+
+    monthly_rows_raw = await card_generations_repo.usage_report_monthly(
+        session, months=_USAGE_MONTHLY_MONTHS
+    )
+    monthly_rows = [
+        ReactiveUsageMonthlyRow(
+            month=str(r["month"]),
+            org_id=str(r["org_id"]),
+            org_name=str(r["org_name"]),
+            generations=int(r["generations"]),
+            input_tokens=int(r["input_tokens"]),
+            output_tokens=int(r["output_tokens"]),
+            cost_usd=float(r["cost_usd"]),
+        )
+        for r in monthly_rows_raw
+    ]
+
+    return ReactiveUsageResponse(
+        days=bounded_days,
+        orgs=org_rows,
+        totals=totals,
+        engagements=engagement_rows,
+        monthly=monthly_rows,
+    )

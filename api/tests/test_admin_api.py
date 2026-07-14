@@ -404,6 +404,58 @@ async def test_list_engagements_includes_reactive_cards_enabled(
     assert row["reactive_cards_enabled"] is False
 
 
+# ── ai_cards_count ("+N" badge, reactive-cards Phase 4) ──────────────────────
+
+
+async def test_list_engagements_ai_cards_count_zero_for_plain_engagement(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+) -> None:
+    """`seed_cards` inserts only operator-authored cards (`source`
+    defaults to `'operator'`) — `ai_cards_count` is 0 until a reactive
+    follow-up actually lands."""
+    r = await admin_authed.get("/api/admin/engagements")
+    assert r.status_code == 200
+    row = next(c for c in r.json() if c["id"] == seed_client["id"])
+    assert row["ai_cards_count"] == 0
+
+
+async def test_list_engagements_ai_cards_count_counts_source_ai_cards(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    axiolo_org: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Seed two `source='ai'` cards alongside the shared/operator cards
+    from `seed_cards` — the count reflects only the AI-sourced ones."""
+    for i in range(2):
+        await db.execute(
+            text(
+                "insert into public.cards "
+                "(engagement_id, order_index, category, title, context, "
+                " question, response_type, org_id, source) "
+                "values (cast(:e as uuid), :idx, 'AI', :t, 'ctx', 'q?', "
+                "'short-text', cast(:o as uuid), 'ai')"
+            ),
+            {
+                "e": seed_client["id"],
+                "idx": 100 + i,
+                "t": f"AI Card {i}",
+                "o": axiolo_org["id"],
+            },
+        )
+
+    r = await admin_authed.get("/api/admin/engagements")
+    assert r.status_code == 200
+    row = next(c for c in r.json() if c["id"] == seed_client["id"])
+    assert row["ai_cards_count"] == 2
+    # The shared/operator cards from `seed_cards` don't count toward it,
+    # even though they DO count toward the overall `total_cards`.
+    assert row["total_cards"] == len(seed_cards) + 2
+
+
 async def test_patch_engagement_reactive_cards_enabled_true_403_when_org_disallowed(
     admin_authed: AsyncClient, seed_client: dict[str, str], db: AsyncSession
 ) -> None:

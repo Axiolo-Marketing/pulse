@@ -18,6 +18,26 @@ export function recipientLabel(r: Recipient): string {
   return r.email || r.name || "Respondent";
 }
 
+/** "+N" badge for the engagement list: a visual cue that an engagement
+ * has LLM-generated reactive-cards follow-ups (`ai_cards_count > 0`).
+ * Same soft-secondary + `Sparkles` language as {@link AiFollowupBadge},
+ * just without the per-card recipient/parent-card provenance lookup —
+ * the list only has the aggregate count, not the individual cards.
+ * Renders nothing at `count === 0`. */
+export function AiFollowupCountBadge({
+  count,
+}: {
+  count: number;
+}): React.ReactElement | null {
+  if (count <= 0) return null;
+  const label = `${count} AI follow-up question${count === 1 ? "" : "s"} added`;
+  return (
+    <Badge variant="secondary" className="gap-1" title={label} aria-label={label}>
+      <Sparkles />+{count}
+    </Badge>
+  );
+}
+
 /** Provenance badge for a reactive-cards follow-up (`card.source ===
  * "ai"`) — which recipient it's scoped to, and (if cheaply resolvable)
  * the question whose correction triggered it, as a tooltip. Renders

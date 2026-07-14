@@ -519,6 +519,12 @@ export interface EngagementSummary {
    * (default `false`). Operators flip it from the engagement edit form. */
   reminders_enabled: boolean;
   total_cards: number;
+  /** How many of `total_cards` are LLM-generated reactive-cards
+   * follow-ups (`cards.source === "ai"`), across every recipient. The
+   * list shows a "+N" badge next to the progress counter when this is
+   * > 0 as a visual cue that reactive follow-ups were added; hidden at
+   * 0. */
+  ai_cards_count: number;
   /** Number of recipients (own magic links) on this engagement. The list
    * progress pill reads `completed_recipients / recipients_count`. */
   recipients_count: number;
@@ -949,10 +955,44 @@ export interface ReactiveUsageTotals {
   cost_usd: number;
 }
 
+/** One engagement's row in the per-engagement usage/cost drill-down
+ * (same `days` window as `orgs`). Only engagements with at least one
+ * generation in the window appear. */
+export interface ReactiveUsageEngagementRow {
+  engagement_id: string;
+  /** `engagement_name` when set (non-blank), else the owning client's
+   * name. */
+  engagement_label: string;
+  org_id: string;
+  org_name: string;
+  generations: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+/** One `(month, org)` row in the trailing-6-calendar-month cost table.
+ * Independent of the `days` window selector. */
+export interface ReactiveUsageMonthlyRow {
+  /** `"YYYY-MM"` label, most recent month first. */
+  month: string;
+  org_id: string;
+  org_name: string;
+  generations: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
 export interface ReactiveUsageResponse {
   days: number;
   orgs: ReactiveUsageOrgRow[];
   totals: ReactiveUsageTotals;
+  /** Per-engagement drill-down, same `days` window as `orgs`. */
+  engagements: ReactiveUsageEngagementRow[];
+  /** Per-org monthly cost trend, always the trailing 6 calendar months
+   * regardless of `days`. */
+  monthly: ReactiveUsageMonthlyRow[];
 }
 
 export interface SuperadminInviteSummary {

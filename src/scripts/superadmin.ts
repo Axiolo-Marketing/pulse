@@ -14,6 +14,8 @@ import {
   ApiError,
   superadminApi,
   type AuthUser,
+  type ReactiveUsageEngagementRow,
+  type ReactiveUsageMonthlyRow,
   type ReactiveUsageOrgRow,
   type ReactiveUsageResponse,
   type SuperadminMemberRow,
@@ -145,6 +147,22 @@ function renderShell(): string {
           ).join("")}
         </div>
         <div id="superadmin-usage-slot" class="superadmin-list-slot"></div>
+
+        <h4 class="settings-section-h superadmin-usage-subhead" id="superadmin-usage-engagement-h">
+          By engagement
+        </h4>
+        <p class="settings-section-p">
+          Same window as above, broken down per engagement — only engagements with at least one generation appear.
+        </p>
+        <div id="superadmin-usage-engagement-slot" class="superadmin-list-slot"></div>
+      </section>
+
+      <section class="settings-section" aria-labelledby="superadmin-usage-monthly-h">
+        <h3 class="settings-section-h" id="superadmin-usage-monthly-h">Monthly cost by org</h3>
+        <p class="settings-section-p">
+          Trailing 6 calendar months, most recent first — independent of the window above.
+        </p>
+        <div id="superadmin-usage-monthly-slot" class="superadmin-list-slot"></div>
       </section>
     </section>
   `;
@@ -321,14 +339,42 @@ async function refreshUsage(
   days: number,
 ): Promise<void> {
   const slot = container.querySelector<HTMLElement>("#superadmin-usage-slot");
+  const engagementSlot = container.querySelector<HTMLElement>(
+    "#superadmin-usage-engagement-slot",
+  );
+  const monthlySlot = container.querySelector<HTMLElement>(
+    "#superadmin-usage-monthly-slot",
+  );
   if (!slot) return;
   slot.innerHTML = `<p class="superadmin-loading">Loading usage…</p>`;
+  if (engagementSlot) {
+    engagementSlot.innerHTML = `<p class="superadmin-loading">Loading usage…</p>`;
+  }
+  if (monthlySlot) {
+    monthlySlot.innerHTML = `<p class="superadmin-loading">Loading usage…</p>`;
+  }
   try {
+    // One fetch backs all three tables: `orgs`/`totals` and `engagements`
+    // share this `days` window, while `monthly` is always the trailing 6
+    // calendar months regardless of `days` — so it doesn't need its own
+    // fetch or its own window control.
     const report = await superadminApi.reactiveUsage({ days });
     slot.innerHTML = renderUsageTable(report);
+    if (engagementSlot) {
+      engagementSlot.innerHTML = renderEngagementUsageTable(report);
+    }
+    if (monthlySlot) {
+      monthlySlot.innerHTML = renderMonthlyUsageTable(report);
+    }
   } catch (err) {
     const detail = err instanceof ApiError ? err.detail : "Could not load";
     slot.innerHTML = `<p class="superadmin-error">${escape(detail)}</p>`;
+    if (engagementSlot) {
+      engagementSlot.innerHTML = `<p class="superadmin-error">${escape(detail)}</p>`;
+    }
+    if (monthlySlot) {
+      monthlySlot.innerHTML = `<p class="superadmin-error">${escape(detail)}</p>`;
+    }
   }
 }
 
@@ -382,6 +428,94 @@ function renderUsageTable(report: ReactiveUsageResponse): string {
         <tbody>
           ${report.orgs.map(usageRowMarkup).join("")}
           ${totalsRow}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function engagementUsageRowMarkup(row: ReactiveUsageEngagementRow): string {
+  return `
+    <tr>
+      <th scope="row">
+        ${escape(row.engagement_label)}
+        <span class="superadmin-usage-org-name">${escape(row.org_name)}</span>
+      </th>
+      <td class="num">${row.generations}</td>
+      <td class="num">${formatTokenCount(row.input_tokens)} / ${formatTokenCount(row.output_tokens)}</td>
+      <td class="num">${formatCostUsd(row.cost_usd)}</td>
+    </tr>
+  `;
+}
+
+/** Per-engagement usage/cost drill-down for the same `days` window as
+ * `renderUsageTable`. Only engagements with at least one generation in
+ * the window are present in `report.engagements` (the backend already
+ * filters via an inner join), so an empty array just means no activity. */
+function renderEngagementUsageTable(report: ReactiveUsageResponse): string {
+  if (report.engagements.length === 0) {
+    return `
+      <p class="superadmin-empty-list">
+        No engagements with reactive-cards activity in the last ${report.days} days.
+      </p>
+    `;
+  }
+  return `
+    <div class="superadmin-usage-table-wrap" role="region" aria-label="Reactive cards usage by engagement">
+      <table class="superadmin-table">
+        <thead>
+          <tr>
+            <th scope="col">Engagement</th>
+            <th scope="col" class="num">Calls</th>
+            <th scope="col" class="num">Tokens (in / out)</th>
+            <th scope="col" class="num">Est. cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${report.engagements.map(engagementUsageRowMarkup).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function monthlyUsageRowMarkup(row: ReactiveUsageMonthlyRow): string {
+  return `
+    <tr>
+      <th scope="row">${escape(row.month)}</th>
+      <td>${escape(row.org_name)}</td>
+      <td class="num">${row.generations}</td>
+      <td class="num">${formatTokenCount(row.input_tokens)} / ${formatTokenCount(row.output_tokens)}</td>
+      <td class="num">${formatCostUsd(row.cost_usd)}</td>
+    </tr>
+  `;
+}
+
+/** Monthly per-org cost trend, trailing 6 calendar months, most recent
+ * first — always present in `report.monthly` regardless of the `days`
+ * window selector, so this renders from the same fetch. */
+function renderMonthlyUsageTable(report: ReactiveUsageResponse): string {
+  if (report.monthly.length === 0) {
+    return `
+      <p class="superadmin-empty-list">
+        No reactive-cards activity in the last 6 months.
+      </p>
+    `;
+  }
+  return `
+    <div class="superadmin-usage-table-wrap" role="region" aria-label="Monthly reactive cards cost by org">
+      <table class="superadmin-table">
+        <thead>
+          <tr>
+            <th scope="col">Month</th>
+            <th scope="col">Organization</th>
+            <th scope="col" class="num">Calls</th>
+            <th scope="col" class="num">Tokens (in / out)</th>
+            <th scope="col" class="num">Est. cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${report.monthly.map(monthlyUsageRowMarkup).join("")}
         </tbody>
       </table>
     </div>

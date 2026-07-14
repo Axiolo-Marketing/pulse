@@ -864,6 +864,14 @@ function engagementRowHtml(s: EngagementSummary): string {
   // `title` (hover + assistive tech) so it isn't a colour-only signal.
   const statusMod = status.replace("_", "-"); // in_progress → in-progress
   const pillTitle = `${STATUS_LABELS[status]} · ${completedRecipients} of ${recipientsCount} respondent${recipientsCount === 1 ? "" : "s"} complete`;
+  // "+N" badge: a visual cue that reactive-cards follow-ups were added to
+  // this engagement's deck. Hidden entirely when there are none.
+  const aiCardsCount = s.ai_cards_count;
+  const aiBadgeTitle = `${aiCardsCount} AI follow-up question${aiCardsCount === 1 ? "" : "s"} added`;
+  const aiBadgeHtml =
+    aiCardsCount > 0
+      ? `<span class="ai-badge ai-count-badge" title="${escape(aiBadgeTitle)}" aria-label="${escape(aiBadgeTitle)}">+${aiCardsCount}</span>`
+      : "";
   return `
     <div class="engagement-row" data-engagement-id="${escape(s.id)}">
       <div class="er-name">
@@ -871,6 +879,7 @@ function engagementRowHtml(s: EngagementSummary): string {
       </div>
       <div class="er-count">
         <span class="progress-pill progress-pill--${statusMod}" title="${escape(pillTitle)}">${completedRecipients} / ${recipientsCount}</span>
+        ${aiBadgeHtml}
       </div>
       <div class="er-owner">${escape(owner)}</div>
       <div class="er-last-active">${escape(formatTimestamp(s.last_active_at))}</div>
