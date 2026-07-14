@@ -132,9 +132,10 @@ async def _admin_session() -> AsyncIterator[AsyncSession]:
     """Open a short-lived ``pulse_admin`` (BYPASSRLS) session.
 
     `run_generation` runs outside FastAPI DI — it's scheduled via
-    `BackgroundTasks` and executes after the request that triggered it
-    has already returned — so it owns its own session lifecycle exactly
-    like the MCP OAuth provider (`mcp/oauth/provider.py::_admin_session`).
+    `schedule_generation` (`asyncio.create_task`) and executes after the
+    request that triggered it has already returned — so it owns its own
+    session lifecycle exactly like the MCP OAuth provider
+    (`mcp/oauth/provider.py::_admin_session`).
     Factored out as its own function (rather than constructing
     `AsyncSession(admin_engine, ...)` inline) purely so tests can
     monkeypatch this one seam to bind through the rolled-back test
@@ -189,11 +190,11 @@ def trigger_hash(normalized_text: str) -> str:
 
 def is_candidate(*, card_source: str) -> bool:
     """Cheap, DB-free pre-check run inline in `routes/client_api.py::save_response`
-    to decide whether to schedule `run_generation` as a background task at
-    all. This is a heuristic, not authoritative — `run_generation` re-reads
-    every gate (org/engagement flags, per-recipient cap, dedup) fresh
-    before doing any real work, since flags can flip between this check
-    and the background task actually running.
+    to decide whether to call `reactive.schedule_generation` at all. This
+    is a heuristic, not authoritative — `run_generation` re-reads every
+    gate (org/engagement flags, per-recipient cap, dedup) fresh before
+    doing any real work, since flags can flip between this check and the
+    scheduled task actually running.
 
     Checks only the deployment gate (env key or fake mode, + the global
     enabled flag) and that the card being corrected wasn't itself
@@ -664,6 +665,83 @@ async def _load_generation_context(
     return dict(row) if row else None
 
 
+_pending_tasks: set[asyncio.Task] = set()
+
+
+def schedule_generation(**kwargs: Any) -> None:
+    """Schedule `run_generation` as a fire-and-forget `asyncio.Task`,
+    NOT a FastAPI `BackgroundTasks` job — deliberately, to fix a circular
+    wait that was proven live twice.
+
+    `save_response` runs on a `pulse_anon` session from `get_anon_session`,
+    which wraps the whole request in an outer, connection-level
+    transaction (needed so the per-request `SET LOCAL pulse.token/org_id`
+    GUCs apply). The route's own `await session.commit()` only ends the
+    INNER SQLAlchemy transaction — the real Postgres COMMIT doesn't
+    happen until `get_anon_session`'s teardown runs, and on this stack
+    (fastapi/starlette) `BackgroundTasks` run BEFORE that dependency
+    teardown, i.e. before the response row is actually committed.
+
+    For a DIRECT answer save (no prior `POST /api/responses/view`, so the
+    `responses` row doesn't already exist), `run_generation`'s own
+    context-load retry loop (`_load_generation_context`, see its
+    docstring) then waits up to `_CONTEXT_LOAD_MAX_ATTEMPTS *
+    _CONTEXT_LOAD_RETRY_SECONDS` (~3s) for that same row to become
+    visible — but the commit that would make it visible cannot land until
+    the `BackgroundTasks` runner (running the retry loop) finishes. That's
+    a circular wait: the retry always exhausts, `run_generation` gives up
+    silently, and only THEN does the real commit happen. View-then-answer
+    flows happened to work only because the row already existed
+    (committed by the earlier `/responses/view` request), so the retry
+    had nothing to wait on.
+
+    `asyncio.create_task` sidesteps this: the coroutine is handed to the
+    event loop and the route returns immediately, letting
+    `get_anon_session`'s teardown run (and COMMIT) while the task's own
+    retry loop is still in flight, genuinely covering the commit-latency
+    window instead of racing it. The module-level `_pending_tasks` set
+    holds a strong reference to each scheduled task — asyncio only keeps a
+    weak reference internally, so an unreferenced task can be
+    garbage-collected mid-run; the `add_done_callback` discards it once
+    finished so the set doesn't grow unbounded.
+
+    `run_generation` already swallows every exception it can raise
+    internally (see its docstring — anything past the claim phase is
+    caught and turned into a `failed` row via `_record_failure`), so
+    there's nothing for a done-callback to *fix* here. The done-callback
+    below only logs the belt-and-suspenders case of a truly unexpected
+    escape (or a `CancelledError` if the process is shutting down) so it
+    isn't silently swallowed by asyncio itself.
+    """
+    task = asyncio.create_task(run_generation(**kwargs))
+    _pending_tasks.add(task)
+
+    def _log_if_failed(t: asyncio.Task) -> None:
+        _pending_tasks.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logger.error("reactive: schedule_generation task escaped unexpectedly", exc_info=exc)
+
+    task.add_done_callback(_log_if_failed)
+
+
+async def wait_for_pending_generations() -> None:
+    """Test-only helper: block until every currently-scheduled
+    `run_generation` task (see `schedule_generation`) has finished.
+
+    Needed because `schedule_generation` uses `asyncio.create_task`
+    instead of FastAPI `BackgroundTasks` — a route's response can now
+    return to the test's HTTP client before the task completes, whereas
+    the old `BackgroundTasks` approach ran to completion inside the same
+    ASGI call. Loops rather than snapshotting the set once, since a
+    generation task could (in principle) schedule another.
+    """
+    while _pending_tasks:
+        await asyncio.gather(*list(_pending_tasks), return_exceptions=True)
+
+
 async def _record_failure(generation_id: str, *, error: str) -> None:
     """Best-effort: mark a generation `failed` on a brand-new, short-lived
     admin session. Used from `run_generation`'s phase 2/3/4 failure paths
@@ -691,12 +769,14 @@ async def run_generation(
     card_id: str,
     trigger_text: str,
 ) -> None:
-    """Background-task entry point, scheduled from
-    `routes/client_api.py::save_response` via FastAPI `BackgroundTasks`
-    after the triggering response is already committed and the request
-    has returned. Runs entirely on its own `_admin_session()` (BYPASSRLS) —
-    the request's own anon connection may already be closed by the time
-    this executes.
+    """Entry point for a reactive generation, scheduled from
+    `routes/client_api.py::save_response` via `schedule_generation`
+    (`asyncio.create_task`, NOT FastAPI `BackgroundTasks` — see that
+    function's docstring for why the distinction matters) after the
+    triggering response is already saved and the request has returned.
+    Runs entirely on its own `_admin_session()` (BYPASSRLS) — the
+    request's own anon connection may already be closed by the time this
+    executes.
 
     `trigger_text` is the normalized correction text, extracted by the
     ROUTE (`extract_trigger_text`, from the request body it already
@@ -707,14 +787,13 @@ async def run_generation(
     pulse.token/org_id` GUCs apply for the request), and the route's own
     `await session.commit()` only ends the INNER SQLAlchemy transaction —
     the real Postgres COMMIT doesn't happen until that dependency's
-    teardown runs, which (on this stack: fastapi 0.136.1 / starlette
-    1.0.0) happens AFTER `BackgroundTasks` run. So a `run_generation` that
-    read `response_value` off a fresh connection here could see the
-    pre-save snapshot (in the view-then-answer flow, `NULL` — the row
-    already existed from the `viewed` mark) and silently never trigger.
-    Trusting the caller's already-extracted text sidesteps that read
-    entirely. See `_load_generation_context`'s docstring for the
-    complementary fix on the context-load side.
+    teardown runs. So a `run_generation` that read `response_value` off a
+    fresh connection here could see the pre-save snapshot (in the
+    view-then-answer flow, `NULL` — the row already existed from the
+    `viewed` mark) and silently never trigger. Trusting the caller's
+    already-extracted text sidesteps that read entirely. See
+    `_load_generation_context`'s docstring for the complementary fix on
+    the context-load side.
 
     Full gate chain, every check re-read fresh (never trusting the
     route's cheap `is_candidate` heuristic): deployment flag + key/fake
@@ -752,19 +831,24 @@ async def run_generation(
 
     async with _admin_session() as session:
         try:
-            # Bounded retry for commit-visibility latency: the same
-            # outer-transaction/background-task ordering described above
-            # means the FIRST read here can race a COMMIT that hasn't
+            # Bounded retry for commit-visibility latency: the outer-
+            # transaction/teardown-commit ordering described above means
+            # the FIRST read here can still race a COMMIT that hasn't
             # happened yet — not just for `response_value` (no longer
             # read at all) but for the response ROW's very existence on
             # this fresh `pulse_admin` connection. This matters most on
             # the direct-save path (no prior `viewed` mark): the dedup
             # claim below has an FK on `response_id`, so the row must be
-            # visible before we can even attempt the claim. Retry instead
-            # of reading once and giving up, bounded to ~3s (12 attempts
-            # * 0.25s) so a genuinely-missing row (bad ids, or the
-            # engagement/card deleted between the save and this task
-            # running) doesn't hang the background task indefinitely.
+            # visible before we can even attempt the claim. Now that
+            # `schedule_generation` runs this via `asyncio.create_task`
+            # rather than `BackgroundTasks`, this retry genuinely covers
+            # that window — the request's dependency teardown (and its
+            # COMMIT) can proceed concurrently with this loop instead of
+            # being blocked behind it, so in practice the row becomes
+            # visible within one attempt. Still bounded to ~3s (12
+            # attempts * 0.25s) so a genuinely-missing row (bad ids, or
+            # the engagement/card deleted between the save and this task
+            # running) doesn't hang the task indefinitely.
             for attempt in range(_CONTEXT_LOAD_MAX_ATTEMPTS):
                 context = await _load_generation_context(
                     session,

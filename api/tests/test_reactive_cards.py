@@ -4,7 +4,7 @@ Covers `pulse_api.reactive` end to end: the full gate chain (deployment
 key/flag, org flag, engagement flag, depth-1 loop guard, per-recipient
 cap, dedup claim), the Anthropic call + server-side output validation,
 cost/usage recording, and the client-facing wiring (`POST /api/responses`
-scheduling the background task, `GET /api/generations` poll surface,
+scheduling the generation task, `GET /api/generations` poll surface,
 `GET /api/cards` recipient scoping for a generated card).
 
 The Anthropic HTTP call is mocked via `respx` at
@@ -16,8 +16,10 @@ in this file sets `settings.reactive_max_retries = 0` (via
 paying the SDK's real exponential-backoff sleeps.
 
 `run_generation` opens its own BYPASSRLS `admin_engine` session outside
-FastAPI's DI graph (it's scheduled via `BackgroundTasks` and runs after
-the triggering request has already returned) via the `_admin_session()`
+FastAPI's DI graph (it's scheduled via `reactive.schedule_generation`,
+an `asyncio.create_task` — NOT FastAPI `BackgroundTasks`, see that
+function's docstring for why — and runs concurrently with, not
+sequentially inside, the triggering request) via the `_admin_session()`
 seam in `reactive.py`. Production's `admin_engine` is a real connection
 pool built at import time from `settings.admin_database_url` /
 `settings.database_url` — NOT the test database — so left unpatched,
@@ -27,6 +29,16 @@ The `_reactive_admin_session_via_db_conn` autouse fixture below
 monkeypatches that seam to bind through `db_conn` instead, mirroring
 `test_oauth_provider.py`'s `patched_oauth_sessions` fixture for the
 identically-shaped OAuth provider seam.
+
+Because `schedule_generation` no longer runs to completion inside the
+triggering request/response cycle (that was the whole point of the
+fix — see `reactive.schedule_generation`'s docstring for the circular-
+wait bug this replaced), any test that needs to observe the outcome of a
+scheduled generation calls `await reactive.wait_for_pending_generations()`
+after the `POST /api/responses` that (might) have scheduled one, before
+reading `card_generations` rows, checking `respx_mock.calls`/route call
+counts, or issuing a follow-up request that depends on the first one's
+generation having already claimed its dedup key.
 """
 from __future__ import annotations
 
@@ -385,6 +397,7 @@ async def test_happy_path_generates_scoped_ai_card_and_records_ledger(
     assert "card" not in r.json(), "internal 'card' metadata must not leak to the client"
     response_id = r.json()["id"]
 
+    await reactive.wait_for_pending_generations()
     assert route.call_count == 1
 
     gens = await _generation_rows_for_response(db, response_id)
@@ -547,12 +560,80 @@ async def test_view_then_answer_sequence_generates_via_route(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
     assert route.call_count == 1
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
     assert gens[0]["status"] == "completed"
     assert len(gens[0]["created_card_ids"]) == 1
+
+
+async def test_direct_answer_without_prior_view_generates(
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for the circular-wait bug `schedule_generation`
+    fixes (see its docstring in `reactive.py`).
+
+    A DIRECT answer save — no prior `POST /api/responses/view` — means
+    the `responses` row does not exist before this single `POST
+    /api/responses` call creates it. Under the old `BackgroundTasks`
+    scheduling, `run_generation`'s context-load retry loop ran INSIDE the
+    request, before `get_anon_session`'s teardown performed the real
+    Postgres COMMIT of that same row — a circular wait the retry loop
+    could never win, so the task always gave up silently and no
+    generation was ever produced for a direct save in production.
+    `schedule_generation`'s `asyncio.create_task` fixes this by letting
+    the dependency teardown commit concurrently with the task's retry
+    loop instead of being serialized behind it.
+
+    Note: this test's harness commits the response row synchronously
+    (`session.commit()` in the route, on the SAME connection the test's
+    `db` fixture also sees inside one rolled-back outer transaction) —
+    it does not reproduce production's real teardown-commit-after-
+    background-task timing, since there's nothing here to race against.
+    The point of this test is to lock in the ROUTE WIRING (`save_response`
+    calls `schedule_generation`, not `background_tasks.add_task`) and
+    prove the direct-save path still produces a generation end to end;
+    the live circular-wait fix itself was verified manually against
+    production, per this task's diagnosis.
+    """
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+    card_id = _confirm_edit_card_id(seed_cards)
+    route = _stub_anthropic_success(
+        respx_mock, needs_followup=True, cards=[_followup_card_payload()]
+    )
+
+    # No `POST /api/responses/view` first — this is the direct-save path.
+    r = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    assert r.status_code == 200
+    response_id = r.json()["id"]
+
+    await reactive.wait_for_pending_generations()
+    assert route.call_count == 1
+
+    gens = await _generation_rows_for_response(db, response_id)
+    assert len(gens) == 1
+    assert gens[0]["status"] == "completed"
+    assert len(gens[0]["created_card_ids"]) == 1
+
+    ai_cards = await _ai_cards_for_recipient(db, seed_client["recipient_id"])
+    assert len(ai_cards) == 1
+    assert ai_cards[0]["generated_from_response_id"] == response_id
 
 
 # ── needs_followup: false ────────────────────────────────────────────────────
@@ -581,6 +662,7 @@ async def test_needs_followup_false_marks_skipped_with_zero_cards(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
@@ -616,6 +698,7 @@ async def test_api_500_marks_failed_and_response_row_intact(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
@@ -651,6 +734,7 @@ async def test_api_timeout_marks_failed_and_response_row_intact(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
@@ -683,6 +767,7 @@ async def test_stop_reason_refusal_marks_skipped(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
@@ -719,6 +804,7 @@ async def test_stop_reason_max_tokens_marks_failed(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
@@ -758,6 +844,7 @@ async def test_asyncio_wait_for_timeout_guard_marks_failed(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1
@@ -793,6 +880,7 @@ async def test_gate_off_missing_api_key_no_generation(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert await _generation_rows_for_response(db, response_id) == []
     assert await _ai_cards_for_recipient(db, seed_client["recipient_id"]) == []
@@ -822,6 +910,7 @@ async def test_gate_off_global_flag_no_generation(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert await _generation_rows_for_response(db, response_id) == []
     assert len(respx_mock.calls) == 0
@@ -856,6 +945,7 @@ async def test_gate_off_org_not_allowed_no_generation(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     # is_candidate (the cheap route check) doesn't know about org flags, so
     # this exercises run_generation's own fresh gate re-check.
@@ -892,6 +982,7 @@ async def test_gate_off_engagement_not_enabled_no_generation(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert await _generation_rows_for_response(db, response_id) == []
     assert len(respx_mock.calls) == 0
@@ -928,6 +1019,7 @@ async def test_run_generation_direct_call_re_checks_gates_bypassing_is_candidate
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
     assert await _generation_rows_for_response(db, response_id) == []
 
     run_kwargs = dict(
@@ -1015,6 +1107,7 @@ async def test_context_load_retries_then_succeeds(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert calls["n"] == 3
     assert sleeps == [reactive._CONTEXT_LOAD_RETRY_SECONDS] * 2
@@ -1064,6 +1157,7 @@ async def test_context_load_gives_up_silently_after_max_attempts(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert calls["n"] == reactive._CONTEXT_LOAD_MAX_ATTEMPTS
     assert await _generation_rows_for_response(db, response_id) == []
@@ -1111,6 +1205,7 @@ async def test_answering_ai_generated_card_never_triggers_generation(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert await _generation_rows_for_response(db, response_id) == []
     # Still exactly the one (pre-existing) AI card — no second-generation card.
@@ -1191,6 +1286,7 @@ async def test_per_recipient_cap_blocks_further_generation(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     assert await _generation_rows_for_response(db, response_id) == []
     ai_cards = await _ai_cards_for_recipient(db, seed_client["recipient_id"])
@@ -1257,6 +1353,7 @@ async def test_per_recipient_cap_counts_skipped_attempts_not_just_created_cards(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     # Blocked by the cap: no new generation row, no LLM call, no card —
     # even though this recipient has zero AI cards to their name.
@@ -1321,6 +1418,7 @@ async def test_llm_call_holds_no_admin_session_open(
         },
     )
     assert r.status_code == 200
+    await reactive.wait_for_pending_generations()
 
     assert observed["depth_during_call"] == 0
 
@@ -1354,6 +1452,12 @@ async def test_dedup_identical_normalized_correction_creates_one_generation(
     )
     assert r1.status_code == 200
     response_id = r1.json()["id"]
+    # Wait for the first save's task to fully claim + complete before the
+    # second save fires — otherwise the two tasks could race the
+    # (response_id, trigger_hash) claim in `run_generation`'s gate/claim
+    # phase, since both are now independently-scheduled asyncio tasks
+    # rather than one running to completion inside the first request.
+    await reactive.wait_for_pending_generations()
     assert route.call_count == 1
 
     # Re-save with only whitespace differences — normalizes to the same
@@ -1372,6 +1476,7 @@ async def test_dedup_identical_normalized_correction_creates_one_generation(
     )
     assert r2.status_code == 200
     assert r2.json()["id"] == response_id  # same response row (upsert)
+    await reactive.wait_for_pending_generations()
     assert route.call_count == 1, "identical correction must not re-trigger the LLM"
 
     gens = await _generation_rows_for_response(db, response_id)
@@ -1403,6 +1508,7 @@ async def test_dedup_changed_correction_creates_second_generation(
         },
     )
     response_id = r1.json()["id"]
+    await reactive.wait_for_pending_generations()
     assert route.call_count == 1
 
     r2 = await client_authed.post(
@@ -1415,6 +1521,7 @@ async def test_dedup_changed_correction_creates_second_generation(
     )
     assert r2.status_code == 200
     assert r2.json()["id"] == response_id
+    await reactive.wait_for_pending_generations()
     assert route.call_count == 2, "a materially different correction must re-trigger"
 
     gens = await _generation_rows_for_response(db, response_id)
@@ -1456,6 +1563,7 @@ async def test_get_generations_scoped_to_owning_recipient_not_sibling(
         },
     )
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     # Owning recipient sees the row.
     own = await client_authed.get("/api/generations", params={"response_id": response_id})
@@ -1513,6 +1621,7 @@ async def test_get_cards_returns_generated_card_only_for_owning_recipient(
             "response_value": {"confirmed": False, "correction": _CORRECTION_A},
         },
     )
+    await reactive.wait_for_pending_generations()
 
     own_cards = await client_authed.get("/api/cards")
     own_titles = {c["title"] for c in own_cards.json()}
@@ -1556,6 +1665,7 @@ async def test_fake_mode_generates_cards_with_no_outbound_http(
     )
     assert r.status_code == 200
     response_id = r.json()["id"]
+    await reactive.wait_for_pending_generations()
 
     gens = await _generation_rows_for_response(db, response_id)
     assert len(gens) == 1

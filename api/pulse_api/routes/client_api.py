@@ -14,7 +14,7 @@ can't forge the engagement_id field on a write.
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -195,7 +195,6 @@ async def mark_viewed(
 @router.post("/responses")
 async def save_response(
     req: SaveResponseRequest,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_anon_session),
 ) -> dict:
     _reject_unsafe_response_url(req.response_value)
@@ -215,18 +214,23 @@ async def save_response(
     # through to `run_generation` rather than letting it re-derive the
     # trigger from a `responses` row read after the fact. That read used
     # to race this request's own commit (the outer connection-level
-    # transaction in `get_anon_session` doesn't COMMIT until after
-    # BackgroundTasks run on this stack) and could observe a stale
-    # pre-save snapshot — see `reactive.run_generation`'s docstring.
-    # `is_candidate` still gates on the cheap deployment/source checks;
-    # `run_generation` re-checks everything with fresh reads once it
-    # actually runs.
+    # transaction in `get_anon_session` doesn't COMMIT until after this
+    # dependency's teardown runs) and could observe a stale pre-save
+    # snapshot — see `reactive.run_generation`'s docstring. `is_candidate`
+    # still gates on the cheap deployment/source checks; `run_generation`
+    # re-checks everything with fresh reads once it actually runs.
+    #
+    # Scheduled via `reactive.schedule_generation` (an `asyncio.create_task`,
+    # not FastAPI `BackgroundTasks`) — see that function's docstring for
+    # why: `BackgroundTasks` run BEFORE `get_anon_session`'s teardown
+    # commits this response row, which for a direct save (no prior
+    # `/responses/view`) created a circular wait against
+    # `run_generation`'s own commit-visibility retry loop.
     trigger = reactive.extract_trigger_text(
         card_meta["response_type"], req.state, req.response_value
     )
     if trigger is not None and reactive.is_candidate(card_source=card_meta["source"]):
-        background_tasks.add_task(
-            reactive.run_generation,
+        reactive.schedule_generation(
             response_id=row["id"],
             recipient_id=row["recipient_id"],
             engagement_id=row["engagement_id"],
