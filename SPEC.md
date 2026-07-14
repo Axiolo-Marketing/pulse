@@ -1015,14 +1015,29 @@ org stops generating immediately.
 
 ### 15.3 Respondent experience
 
-Saving a qualifying correction advances the deck as normal and shows a muted
-"Checking if we need a quick follow-up…" status line. The deck polls
-`GET /api/generations?response_id=…` on a ~40s backoff schedule; when the
-generation completes, new cards splice in directly after the corrected card
-(or after the current position if the respondent moved past it) and the
-progress count grows. If the respondent already reached the completion
-screen, the deck pulls them back to the first follow-up. Generation failures
-are invisible — the deck just stops polling. On a later visit, AI cards
+Saving a qualifying correction does **not** advance the deck. The respondent
+stays on the corrected card with a quiet "One moment — reviewing your
+correction…" status (inputs/buttons not rendered at all, so there's nothing
+to double-submit) while the deck polls `GET /api/generations?response_id=…`
+on a tight ~8s budget — real generations typically resolve in 3.5–4s. If a
+follow-up completes inside that budget, the new card(s) splice in directly
+after the corrected card and the deck navigates straight into the first
+one — it becomes the very next screen the respondent sees. If the
+generation instead resolves skipped or failed, or the budget runs out first,
+the deck advances normally, exactly as if nothing had triggered. Only on a
+budget expiry does a background poll keep checking afterward, on the
+original, longer (~40s) schedule, so a late completion still splices in
+behind the respondent rather than being lost. If the respondent navigates
+away (back/forward, jump picker) while waiting, the wait is cancelled
+immediately and their navigation is honored. Non-triggering saves — every
+answer except a qualifying correction — keep the deck's ordinary instant
+advance.
+
+A respondent who edits the same card's correction again before answering
+(or skipping) its earlier follow-up does not spawn a second one: the engine
+skips generation outright while that follow-up is still outstanding (see
+§15.4). Generation failures are otherwise invisible to the respondent — the
+deck just advances or stops polling as usual. On a later visit, AI cards
 render in-place after their parent card. Follow-ups are always skippable
 (`skip_allowed` is forced true).
 
@@ -1036,16 +1051,23 @@ The engine, on the BYPASSRLS admin engine:
 1. Re-checks every gate with fresh reads; enforces the per-recipient
    lifetime cap (counts generation **attempts**, not created cards, so
    failed/skipped calls still bound API spend).
-2. Claims `(response_id, trigger_hash)` in `card_generations` — committed
+2. Duplicate-follow-up guard: if this recipient already has an
+   `source='ai'` card generated from THIS `response_id` that's still
+   unanswered, skips generation outright — no claim, no LLM call. Because
+   `responses` upserts on `(card_id, recipient_id)`, re-editing the same
+   card's correction reuses the same `response_id`, so the
+   `(response_id, trigger_hash)` claim below (keyed on the changed text)
+   would not otherwise catch it — see §15.3.
+3. Claims `(response_id, trigger_hash)` in `card_generations` — committed
    **before** the LLM call, so concurrent duplicates lose on the unique
    constraint and an identical re-save never bills twice.
-3. Calls the Anthropic Messages API (structured output against a strict
+4. Calls the Anthropic Messages API (structured output against a strict
    JSON schema; no DB session held open across the network call).
-4. Server-side validation — the real trust boundary: response types limited
+5. Server-side validation — the real trust boundary: response types limited
    to `single-select` / `multi-select` / `short-text` / `long-text`; length
    clamps matching operator card creation; `attachment_path` and
    `default_value` forced NULL; at most `REACTIVE_MAX_CARDS_PER_GENERATION`.
-5. Inserts the cards recipient-scoped (`source='ai'`, back-linked to the
+6. Inserts the cards recipient-scoped (`source='ai'`, back-linked to the
    triggering response), records token usage + `cost_usd` on the generation
    row, and writes a `card.reactive_generate` audit entry (system action,
    no user_id).

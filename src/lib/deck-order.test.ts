@@ -7,6 +7,7 @@ import {
   pollSchedule,
   runPoll,
   spliceIndexFor,
+  waitSchedule,
 } from "./deck-order";
 
 function card(over: Partial<Card> = {}): Card {
@@ -364,5 +365,107 @@ describe("runPoll", () => {
 
     await expect(promise).resolves.toBeNull();
     expect(fetchFn).toHaveBeenCalledTimes(pollSchedule.length);
+  });
+});
+
+describe("waitSchedule", () => {
+  it("is a tight ~8s budget, front-loaded like pollSchedule but much shorter", () => {
+    expect(waitSchedule).toEqual([1200, 1500, 1500, 1800, 2000]);
+    expect(waitSchedule.reduce((sum, ms) => sum + ms, 0)).toBe(8000);
+  });
+});
+
+describe("runPoll with an explicit schedule (waitSchedule)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("honors the passed-in schedule's cadence instead of defaulting to pollSchedule", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue([generation({ status: "pending" })]);
+    const controller = new AbortController();
+    const promise = runPoll(fetchFn, "r1", controller.signal, waitSchedule);
+
+    // waitSchedule's first delay (1200ms) is shorter than pollSchedule's
+    // (1500ms) — a single tick at exactly 1200ms only fires a fetch if
+    // `schedule` genuinely overrode the default.
+    await vi.advanceTimersByTimeAsync(waitSchedule[0]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+
+    for (const ms of waitSchedule.slice(1)) {
+      await vi.advanceTimersByTimeAsync(ms);
+    }
+
+    await expect(promise).resolves.toBeNull();
+    expect(fetchFn).toHaveBeenCalledTimes(waitSchedule.length);
+  });
+
+  it("resolves completed with card_ids well inside the ~8s wait budget", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce([generation({ status: "pending" })])
+      .mockResolvedValueOnce([
+        generation({ status: "completed", card_ids: ["new1", "new2"] }),
+      ]);
+    const controller = new AbortController();
+    const promise = runPoll(fetchFn, "r1", controller.signal, waitSchedule);
+
+    await vi.advanceTimersByTimeAsync(waitSchedule[0]);
+    await vi.advanceTimersByTimeAsync(waitSchedule[1]);
+
+    await expect(promise).resolves.toEqual({
+      status: "completed",
+      cardIds: ["new1", "new2"],
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves skipped inside the wait budget (caller then advances normally)", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce([generation({ status: "skipped", card_ids: [] })]);
+    const controller = new AbortController();
+    const promise = runPoll(fetchFn, "r1", controller.signal, waitSchedule);
+
+    await vi.advanceTimersByTimeAsync(waitSchedule[0]);
+
+    await expect(promise).resolves.toEqual({ status: "skipped", cardIds: [] });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves null on budget expiry, handing off to the caller's background pollSchedule fallback", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue([generation({ status: "pending" })]);
+    const controller = new AbortController();
+    const promise = runPoll(fetchFn, "r1", controller.signal, waitSchedule);
+
+    for (const ms of waitSchedule) {
+      await vi.advanceTimersByTimeAsync(ms);
+    }
+
+    await expect(promise).resolves.toBeNull();
+    expect(fetchFn).toHaveBeenCalledTimes(waitSchedule.length);
+  });
+
+  it("cancels immediately when aborted mid-wait, without waiting out the rest of the schedule", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue([generation({ status: "pending" })]);
+    const controller = new AbortController();
+    const promise = runPoll(fetchFn, "r1", controller.signal, waitSchedule);
+
+    await vi.advanceTimersByTimeAsync(waitSchedule[0]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(waitSchedule[1]);
+
+    await expect(promise).resolves.toBeNull();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 });

@@ -86,7 +86,12 @@ function firstName(full: string): string {
   return full.split(" ")[0] ?? full;
 }
 
-export type CardMode = "view" | "edit" | "saving";
+/** `"waiting"`: reactive cards, right after a qualifying correction save —
+ * the deck stays parked on the corrected card instead of advancing, showing
+ * a quiet "reviewing your correction…" status while it waits (briefly) to
+ * see if a follow-up lands. No inputs/buttons render in this mode at all
+ * (see `renderWaitingBody`), so there's nothing to disable. */
+export type CardMode = "view" | "edit" | "saving" | "waiting";
 
 export interface PendingUpload {
   tempId: string;
@@ -225,6 +230,8 @@ export function renderCard(mount: HTMLElement, args: RenderCardArgs): void {
   const body =
     mode === "edit" && card.response_type === "confirm-edit"
       ? renderEditBody(card)
+      : mode === "waiting"
+      ? renderWaitingBody(card, args.existingResponse)
       : renderViewBody(card, mode, args);
 
   const attachmentBtn = card.attachment_path
@@ -786,6 +793,26 @@ function renderEditBody(card: Card): string {
     <div class="actions">
       <button class="btn btn-primary" type="button" data-action="edit-submit">Save changes</button>
       <button class="btn btn-tertiary" type="button" data-action="edit-cancel">Cancel</button>
+    </div>
+  `;
+}
+
+// Reactive cards: shown in place of the normal answer body right after a
+// qualifying correction save, while app.ts waits (briefly) to see if the
+// correction kicked off a follow-up — see `startFollowUpPoll`/
+// `beginAwaitFollowUp` in app.ts. No actions render at all here (nothing to
+// disable, nothing to double-submit); navigation (back/forward/picker) stays
+// live in the header and cancels the wait if the respondent uses it.
+function renderWaitingBody(
+  card: Card,
+  prior: ClientResponse | undefined
+): string {
+  return `
+    <p class="question">${escape(card.question)}</p>
+    ${renderPriorHint(card, prior)}
+    <div class="waiting-status" role="status">
+      <span class="waiting-dot" aria-hidden="true"></span>
+      One moment — reviewing your correction…
     </div>
   `;
 }

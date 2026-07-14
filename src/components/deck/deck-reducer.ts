@@ -6,7 +6,12 @@
 // Server data (responses/uploads) and the async save/retry orchestration live
 // in the DeckRunner component — this reducer only owns navigation + UI flags.
 
-export type DeckMode = "view" | "edit" | "saving";
+/** `"waiting"`: reactive cards, right after a qualifying correction save —
+ * the deck stays parked on the corrected card instead of advancing, showing
+ * a quiet "reviewing your correction…" status while it waits (briefly) to
+ * see if a follow-up lands. `CardView` renders no inputs/actions at all in
+ * this mode (nothing to disable, nothing to double-submit). */
+export type DeckMode = "view" | "edit" | "saving" | "waiting";
 
 export interface DeckUiState {
   index: number;
@@ -33,6 +38,11 @@ export type DeckAction =
   | { type: "closeModal" }
   | { type: "openPicker" }
   | { type: "closePicker" }
+  /** Reactive cards: a qualifying correction was just saved and the deck is
+   * waiting in place (not advancing) to see if it kicks off a follow-up —
+   * see `awaitFollowUp`/`pullInFollowUpAndNavigate` in DeckApp.tsx. Leaves
+   * `index` untouched (still the corrected card); only `mode` changes. */
+  | { type: "awaitFollowUp" }
   /** Reactive cards: `count` cards were just spliced into the live deck
    * array (by the caller, alongside a matching `setCards`) starting at
    * `insertAt`. Grows `total` to match. If the respondent was on the
@@ -40,8 +50,17 @@ export type DeckAction =
    * landed, jumps them straight to the new follow-up with per-card UI
    * state reset — otherwise `index` is left untouched, since
    * `insertAt` never lands at or before the respondent's current
-   * position (see `spliceIndexFor` in `src/lib/deck-order.ts`). */
-  | { type: "cardsInserted"; insertAt: number; count: number };
+   * position (see `spliceIndexFor` in `src/lib/deck-order.ts`). Used only
+   * by the BACKGROUND poll fallback (`pollForFollowUp`) — the in-place wait
+   * uses `followUpReady` below instead, which always navigates in. */
+  | { type: "cardsInserted"; insertAt: number; count: number }
+  /** Reactive cards: the in-place wait (`awaitFollowUp`) resolved with a
+   * follow-up ready inside its budget. Unlike `cardsInserted`, this always
+   * navigates straight to `insertAt` with a full per-card UI state reset —
+   * the respondent was still parked on the waiting card by construction
+   * (the caller checked before dispatching), so there's no "leave index
+   * untouched" case to consider here. */
+  | { type: "followUpReady"; insertAt: number; count: number };
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
@@ -101,6 +120,21 @@ export function deckReducer(
       return { ...state, pickerOpen: true };
     case "closePicker":
       return { ...state, pickerOpen: false };
+    case "awaitFollowUp":
+      return { ...state, mode: "waiting", saveError: null };
+    case "followUpReady": {
+      const total = state.total + action.count;
+      return {
+        ...state,
+        total,
+        index: action.insertAt,
+        mode: "view",
+        saveError: null,
+        modalOpen: false,
+        pickerOpen: false,
+        showResume: false,
+      };
+    }
     case "cardsInserted": {
       const wasComplete = state.index === state.total;
       const total = state.total + action.count;

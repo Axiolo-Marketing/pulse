@@ -42,6 +42,7 @@ generation having already claimed its dedup key.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 from collections.abc import AsyncIterator
@@ -71,21 +72,35 @@ ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 
 @pytest.fixture(autouse=True)
 def _reactive_admin_session_via_db_conn(
-    db_conn: AsyncConnection, monkeypatch: pytest.MonkeyPatch
+    db_conn: AsyncConnection,
+    db_conn_lock: asyncio.Lock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     @asynccontextmanager
     async def _override() -> AsyncIterator[AsyncSession]:
-        # Whatever role a prior request in this test left the shared
-        # connection in (pulse_anon, from `_override_anon_session`) —
-        # reset to the owner role first, which bypasses RLS by
-        # ownership, exactly like production's pulse_admin BYPASSRLS
-        # session.
-        await db_conn.execute(text("reset role"))
-        factory = async_sessionmaker(
-            bind=db_conn, expire_on_commit=False, class_=AsyncSession
-        )
-        async with factory() as session:
-            yield session
+        # `run_generation` is scheduled via a detached `asyncio.create_task`
+        # (see the module docstring + `reactive.schedule_generation`) and so
+        # genuinely races the triggering request's own dependency teardown
+        # for use of this shared `db_conn` — production doesn't have this
+        # hazard (each gets its own pooled connection), but here they're the
+        # SAME physical connection/transaction, and `AsyncConnection` isn't
+        # safe for concurrent use by more than one coroutine at a time. This
+        # surfaced as a real, intermittent hang (`wait_for_pending_
+        # generations` never returning) before `db_conn_lock` existed — see
+        # its docstring in conftest.py. Held for this session's whole
+        # lifetime, matching every other `db_conn` touch point.
+        async with db_conn_lock:
+            # Whatever role a prior request in this test left the shared
+            # connection in (pulse_anon, from `_override_anon_session`) —
+            # reset to the owner role first, which bypasses RLS by
+            # ownership, exactly like production's pulse_admin BYPASSRLS
+            # session.
+            await db_conn.execute(text("reset role"))
+            factory = async_sessionmaker(
+                bind=db_conn, expire_on_commit=False, class_=AsyncSession
+            )
+            async with factory() as session:
+                yield session
 
     monkeypatch.setattr(reactive, "_admin_session", _override)
 
@@ -253,16 +268,20 @@ async def _seed_answered_response(
     engagement_id: str,
     recipient_id: str,
     org_id: str,
-    response_value: dict,
+    response_value: dict | None = None,
+    state: str = "answered",
 ) -> str:
-    """Directly seed an `answered` `responses` row via raw SQL (owner
-    role) — used instead of a real `client_authed.post` round trip when a
-    test just needs a valid `response_id` to hang a seeded
-    `card_generations` row off of. Going through the HTTP client here
-    would flip `db_conn`'s effective role to `pulse_anon` for the rest of
-    the test (SET LOCAL ROLE persists until the next explicit change),
-    which would then break a subsequent direct write like
-    `_seed_generation_row` (`pulse_anon` has no INSERT grant on
+    """Directly seed a `responses` row (default state `answered`) via raw
+    SQL (owner role) — used instead of a real `client_authed.post` round
+    trip when a test just needs a valid `response_id` to hang a seeded
+    `card_generations` row off of, or to mark some OTHER card's response
+    `answered`/`skipped` without paying for a second HTTP round trip (e.g.
+    the duplicate-follow-up guard tests, which need to flip an AI card's
+    own response to `skipped` to prove the guard clears). Going through
+    the HTTP client here would flip `db_conn`'s effective role to
+    `pulse_anon` for the rest of the test (SET LOCAL ROLE persists until
+    the next explicit change), which would then break a subsequent direct
+    write like `_seed_generation_row` (`pulse_anon` has no INSERT grant on
     `card_generations`). Returns the new response's id."""
     row = (
         await db.execute(
@@ -270,7 +289,7 @@ async def _seed_answered_response(
                 "insert into public.responses "
                 "(card_id, engagement_id, recipient_id, org_id, state, response_value) "
                 "values (cast(:card as uuid), cast(:eng as uuid), cast(:rid as uuid), "
-                "        cast(:org as uuid), 'answered', cast(:rv as jsonb)) "
+                "        cast(:org as uuid), :state, cast(:rv as jsonb)) "
                 "returning id::text"
             ),
             {
@@ -278,6 +297,7 @@ async def _seed_answered_response(
                 "eng": engagement_id,
                 "rid": recipient_id,
                 "org": org_id,
+                "state": state,
                 "rv": json.dumps(response_value),
             },
         )
@@ -1483,7 +1503,150 @@ async def test_dedup_identical_normalized_correction_creates_one_generation(
     assert len(gens) == 1
 
 
-async def test_dedup_changed_correction_creates_second_generation(
+# ── duplicate-follow-up guard (has_unanswered_ai_followup) ──────────────────
+#
+# Pre-guard, `test_dedup_changed_correction_creates_second_generation` (now
+# removed) asserted that a materially different re-edit of the same card's
+# correction ALWAYS re-triggered a second generation. That was the actual
+# production bug: re-editing the same card while its earlier AI follow-up
+# was still sitting unanswered produced two near-duplicate follow-ups,
+# because the (response_id, trigger_hash) dedup claim is keyed on the
+# CHANGED text and so never catches a re-edit. The tests below replace it —
+# see `cards_repo.has_unanswered_ai_followup` for the guard's own docstring.
+
+
+async def test_has_unanswered_ai_followup_repo_helper(
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+) -> None:
+    """Direct coverage of `cards_repo.has_unanswered_ai_followup`, independent
+    of the LLM/HTTP plumbing `run_generation` wraps it in: unanswered ->
+    True; answered/skipped -> False; scoped to the exact `response_id` (not
+    "any AI card this recipient has"); scoped to the exact `recipient_id`
+    (not "any AI card generated from this response", which can't actually
+    happen cross-recipient, but the SQL cross-checks it anyway — see the
+    guard's docstring)."""
+    card_id = _confirm_edit_card_id(seed_cards)
+    recipient_id = seed_client["recipient_id"]
+
+    response_id = await _seed_answered_response(
+        db,
+        card_id=card_id,
+        engagement_id=seed_client["id"],
+        recipient_id=recipient_id,
+        org_id=seed_client["org_id"],
+        response_value={"confirmed": False, "correction": _CORRECTION_A},
+    )
+
+    # No AI follow-up generated from this response yet at all.
+    assert not await cards_repo.has_unanswered_ai_followup(
+        db, response_id=response_id, recipient_id=recipient_id
+    )
+
+    ai_card = await cards_repo.create_card(
+        db,
+        engagement_id=seed_client["id"],
+        category="Clarification",
+        title="Follow-up",
+        context="ctx",
+        question="q?",
+        response_type="short-text",
+        options=None,
+        default_value=None,
+        skip_allowed=True,
+        attachment_path=None,
+        org_id=seed_client["org_id"],
+        recipient_id=recipient_id,
+        source="ai",
+        generated_from_response_id=response_id,
+    )
+    assert ai_card is not None
+
+    # An unanswered AI follow-up -> True.
+    assert await cards_repo.has_unanswered_ai_followup(
+        db, response_id=response_id, recipient_id=recipient_id
+    )
+
+    # A different response_id (nothing was ever generated from it) -> False.
+    other_card_id = next(
+        c["id"] for c in seed_cards if c["response_type"] == "short-text"
+    )
+    other_response_id = await _seed_answered_response(
+        db,
+        card_id=other_card_id,
+        engagement_id=seed_client["id"],
+        recipient_id=recipient_id,
+        org_id=seed_client["org_id"],
+        response_value={"text": "unrelated"},
+    )
+    assert not await cards_repo.has_unanswered_ai_followup(
+        db, response_id=other_response_id, recipient_id=recipient_id
+    )
+
+    # A different recipient querying the SAME response_id -> False: the
+    # guard cross-checks recipient_id on both the card and the response.
+    sibling = await _add_recipient(
+        db,
+        engagement_id=seed_client["id"],
+        org_id=seed_client["org_id"],
+        email="guard-repo-sibling@example.com",
+    )
+    assert not await cards_repo.has_unanswered_ai_followup(
+        db, response_id=response_id, recipient_id=sibling["id"]
+    )
+
+    # Once the follow-up is ANSWERED -> False again.
+    await _seed_answered_response(
+        db,
+        card_id=ai_card["id"],
+        engagement_id=seed_client["id"],
+        recipient_id=recipient_id,
+        org_id=seed_client["org_id"],
+        response_value={"text": "answered the followup"},
+        state="answered",
+    )
+    assert not await cards_repo.has_unanswered_ai_followup(
+        db, response_id=response_id, recipient_id=recipient_id
+    )
+
+    # A second follow-up from the SAME response, this time SKIPPED rather
+    # than answered -> also clears back to False.
+    ai_card_2 = await cards_repo.create_card(
+        db,
+        engagement_id=seed_client["id"],
+        category="Clarification",
+        title="Follow-up 2",
+        context="ctx",
+        question="q?",
+        response_type="short-text",
+        options=None,
+        default_value=None,
+        skip_allowed=True,
+        attachment_path=None,
+        org_id=seed_client["org_id"],
+        recipient_id=recipient_id,
+        source="ai",
+        generated_from_response_id=response_id,
+    )
+    assert await cards_repo.has_unanswered_ai_followup(
+        db, response_id=response_id, recipient_id=recipient_id
+    )
+    await _seed_answered_response(
+        db,
+        card_id=ai_card_2["id"],
+        engagement_id=seed_client["id"],
+        recipient_id=recipient_id,
+        org_id=seed_client["org_id"],
+        response_value=None,
+        state="skipped",
+    )
+    assert not await cards_repo.has_unanswered_ai_followup(
+        db, response_id=response_id, recipient_id=recipient_id
+    )
+
+
+async def test_duplicate_guard_blocks_second_generation_while_followup_unanswered(
     client_authed: AsyncClient,
     db: AsyncSession,
     seed_client: dict[str, str],
@@ -1491,6 +1654,10 @@ async def test_dedup_changed_correction_creates_second_generation(
     respx_mock: respx.Router,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """End-to-end regression test for the near-duplicate-follow-up bug:
+    re-editing the same card's correction while its earlier follow-up is
+    still unanswered must skip generation entirely — no LLM call, no new
+    `card_generations` row."""
     await _enable_all_gates(
         db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
     )
@@ -1510,6 +1677,78 @@ async def test_dedup_changed_correction_creates_second_generation(
     response_id = r1.json()["id"]
     await reactive.wait_for_pending_generations()
     assert route.call_count == 1
+    assert len(await _generation_rows_for_response(db, response_id)) == 1
+    assert len(await _ai_cards_for_recipient(db, seed_client["recipient_id"])) == 1
+
+    # Re-edit the SAME card's correction (materially different text) while
+    # the first follow-up is still sitting unanswered in the deck.
+    r2 = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_B},
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["id"] == response_id  # same response row (upsert)
+    await reactive.wait_for_pending_generations()
+
+    assert route.call_count == 1, (
+        "the duplicate guard must skip generation before any LLM call"
+    )
+    assert len(await _generation_rows_for_response(db, response_id)) == 1, (
+        "no new card_generations row while the earlier follow-up is outstanding"
+    )
+    assert len(await _ai_cards_for_recipient(db, seed_client["recipient_id"])) == 1
+
+
+async def test_duplicate_guard_allows_second_generation_after_followup_answered(
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the recipient answers (or skips) the earlier follow-up, a fresh
+    correction on the same parent card is free to generate again — this is
+    the counterpart the old, now-removed
+    `test_dedup_changed_correction_creates_second_generation` asserted
+    unconditionally."""
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+    route = _stub_anthropic_success(
+        respx_mock, needs_followup=True, cards=[_followup_card_payload()]
+    )
+    card_id = _confirm_edit_card_id(seed_cards)
+
+    r1 = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    response_id = r1.json()["id"]
+    await reactive.wait_for_pending_generations()
+    assert route.call_count == 1
+    gens = await _generation_rows_for_response(db, response_id)
+    assert len(gens) == 1
+    followup_card_id = gens[0]["created_card_ids"][0]
+
+    # Answer the AI follow-up itself — it's no longer outstanding.
+    answer = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": followup_card_id,
+            "state": "answered",
+            "response_value": {"text": "here's my answer to the follow-up"},
+        },
+    )
+    assert answer.status_code == 200
 
     r2 = await client_authed.post(
         "/api/responses",
@@ -1522,12 +1761,108 @@ async def test_dedup_changed_correction_creates_second_generation(
     assert r2.status_code == 200
     assert r2.json()["id"] == response_id
     await reactive.wait_for_pending_generations()
-    assert route.call_count == 2, "a materially different correction must re-trigger"
 
-    gens = await _generation_rows_for_response(db, response_id)
-    assert len(gens) == 2
-    assert {g["status"] for g in gens} == {"completed"}
-    assert gens[0]["trigger_hash"] != gens[1]["trigger_hash"]
+    assert route.call_count == 2, (
+        "a fresh correction must generate again once the earlier follow-up "
+        "is answered"
+    )
+    gens2 = await _generation_rows_for_response(db, response_id)
+    assert len(gens2) == 2
+    assert {g["status"] for g in gens2} == {"completed"}
+    assert gens2[0]["trigger_hash"] != gens2[1]["trigger_hash"]
+    assert len(await _ai_cards_for_recipient(db, seed_client["recipient_id"])) == 2
+
+
+async def test_duplicate_guard_scoped_per_response_not_recipient_wide(
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard keys off `generated_from_response_id` (this exact
+    response), not "this recipient has ANY unanswered AI card" — an
+    outstanding follow-up from correcting one card must not block a fresh
+    generation from correcting a DIFFERENT card, and must not block a
+    sibling recipient independently correcting the SAME shared card."""
+    await _enable_all_gates(
+        db, monkeypatch, org_id=seed_client["org_id"], engagement_id=seed_client["id"]
+    )
+    route = _stub_anthropic_success(
+        respx_mock, needs_followup=True, cards=[_followup_card_payload()]
+    )
+    card_id = _confirm_edit_card_id(seed_cards)
+
+    r1 = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    assert r1.status_code == 200
+    await reactive.wait_for_pending_generations()
+    assert route.call_count == 1
+    # This recipient now has an outstanding (unanswered) follow-up from
+    # correcting `card_id`.
+
+    # A SECOND, unrelated confirm-edit card on the same shared deck.
+    second_confirm_edit = await cards_repo.create_card(
+        db,
+        engagement_id=seed_client["id"],
+        category="Other",
+        title="Second confirm-edit",
+        context="ctx",
+        question="q?",
+        response_type="confirm-edit",
+        options=None,
+        default_value="original statement",
+        skip_allowed=True,
+        attachment_path=None,
+        org_id=seed_client["org_id"],
+    )
+    assert second_confirm_edit is not None
+
+    r2 = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": second_confirm_edit["id"],
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_B},
+        },
+    )
+    assert r2.status_code == 200
+    await reactive.wait_for_pending_generations()
+    assert route.call_count == 2, (
+        "an unrelated card's own trigger must not be blocked by another "
+        "card's outstanding follow-up"
+    )
+
+    # A sibling recipient independently correcting the SAME original card
+    # generates too — the guard is per-recipient, not engagement-wide.
+    sibling = await _add_recipient(
+        db,
+        engagement_id=seed_client["id"],
+        org_id=seed_client["org_id"],
+        email="guard-scope-sibling@example.com",
+    )
+    client_authed.headers["X-Pulse-Token"] = sibling["token"]
+    r3 = await client_authed.post(
+        "/api/responses",
+        json={
+            "card_id": card_id,
+            "state": "answered",
+            "response_value": {"confirmed": False, "correction": _CORRECTION_A},
+        },
+    )
+    assert r3.status_code == 200
+    await reactive.wait_for_pending_generations()
+    assert route.call_count == 3, (
+        "a sibling recipient's own correction must not be blocked by this "
+        "recipient's outstanding follow-up"
+    )
 
 
 # ── GET /api/generations recipient isolation ────────────────────────────────

@@ -13,6 +13,7 @@ import {
   orderDeckCards,
   runPoll,
   spliceIndexFor,
+  waitSchedule,
 } from "../lib/deck-order";
 import { Recorder, RecorderError, extForMime } from "../lib/recorder";
 import {
@@ -185,11 +186,10 @@ function runApp(ctx: RunCtx): void {
   }
 
   // ── Reactive cards: follow-up poll state ────────────────────────────────
-  // At most one poll in flight at a time. Started after a save whose
-  // response_value looks like a confirm-edit correction (see
-  // hasTriggerPotential in src/lib/deck-order.ts); cancelled when a *new*
-  // triggering save supersedes it (startFollowUpPoll cancels the old one
-  // before starting the new one) or the page unloading. A non-triggering
+  // At most one BACKGROUND poll in flight at a time (mode stays "view",
+  // deck already advanced) — this is the budget-expiry fallback path.
+  // Started only from startFollowUpPoll below; cancelled when a *new*
+  // triggering save supersedes it or the page unloads. A non-triggering
   // save does NOT cancel it — see performSave.
   let pollController: AbortController | undefined;
   let pollActive = false; // drives the "Checking..." hint under the progress area
@@ -202,6 +202,24 @@ function runApp(ctx: RunCtx): void {
 
   if (typeof window !== "undefined") {
     window.addEventListener("pagehide", cancelPoll);
+  }
+
+  // ── Reactive cards: in-place "waiting" state ────────────────────────────
+  // A DIFFERENT, second poll: the tight, in-place wait right after a
+  // qualifying correction save (mode = "waiting", deck has NOT advanced —
+  // see beginAwaitFollowUp). Distinct from pollController above, which only
+  // ever starts once this wait's budget expires. Cancelled by navigateTo
+  // (the respondent moving off the waiting card honors their navigation and
+  // drops the wait) or the page unloading.
+  let awaitController: AbortController | undefined;
+
+  const cancelAwait = (): void => {
+    awaitController?.abort();
+    awaitController = undefined;
+  };
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", cancelAwait);
   }
 
   const clearVoiceTimer = (): void => {
@@ -383,6 +401,11 @@ function runApp(ctx: RunCtx): void {
     if (newIndex === index && !pickerOpen) return;
     clearRetryTimer();
     resetVoiceForCardChange();
+    // Reactive cards: any user-driven navigation (nav-back/forward, picker
+    // jump) away from a "waiting" card cancels that wait outright and
+    // honors the navigation — see beginAwaitFollowUp's poll callback, which
+    // checks awaitController before acting.
+    cancelAwait();
     index = newIndex;
     mode = "view";
     saveError = undefined;
@@ -540,22 +563,123 @@ function runApp(ctx: RunCtx): void {
     });
   };
 
+  // Reactive cards: refetch cards for a generation that resolved WHILE the
+  // respondent was still parked in "waiting" mode on the corrected card
+  // (cardIndex), and navigate straight into the first new follow-up — it
+  // becomes the very next screen, per-card UI state reset exactly like any
+  // other navigateTo(). Called only from beginAwaitFollowUp below, and only
+  // once its own awaitController check has confirmed the wait wasn't
+  // cancelled out from under it.
+  const pullInFollowUpAndNavigate = async (
+    cardIds: string[],
+    parentCardId: string,
+    cardIndex: number
+  ): Promise<void> => {
+    let freshCards: Card[];
+    try {
+      freshCards = await clientApi.cards(token);
+    } catch (err) {
+      console.warn("Refetch cards after generation failed:", err);
+      if (mode === "waiting" && index === cardIndex) advance();
+      return;
+    }
+
+    if (mode !== "waiting" || index !== cardIndex) {
+      // The respondent navigated away from the waiting card while this
+      // fetch was in flight (navigateTo already cancelled the wait) — don't
+      // yank them anywhere; fall back to the same non-disruptive splice the
+      // background-poll fallback uses.
+      void pullInNewCards(cardIds, parentCardId);
+      return;
+    }
+
+    const existingIds = new Set(cards.map((c) => c.id));
+    const newCards = cardIds
+      .map((id) => freshCards.find((c) => c.id === id))
+      .filter((c): c is Card => !!c && !existingIds.has(c.id));
+
+    if (newCards.length === 0) {
+      advance();
+      return;
+    }
+
+    const insertAt = spliceIndexFor(cards, parentCardId, cardIndex);
+    cards.splice(insertAt, 0, ...newCards);
+    navigateTo(insertAt);
+  };
+
+  // Reactive cards: the in-place wait after a qualifying correction save.
+  // Stays on `cardIndex` (mode = "waiting", see render.ts) instead of
+  // advancing, polling `waitSchedule` (~8s) for the generation kicked off
+  // by this save. Owns the eventual advance()/navigateTo() for this save:
+  //   - completed w/ cards inside the budget -> splice + navigate into the
+  //     first follow-up (pullInFollowUpAndNavigate).
+  //   - skipped/failed -> advance() normally, no follow-up.
+  //   - budget expires (result === null) -> advance() normally, then fall
+  //     back to the existing background poll (startFollowUpPoll) on the
+  //     longer pollSchedule, so a late completion still splices in behind
+  //     the respondent instead of being lost.
+  // A fresh call (a new trigger) supersedes both this and any earlier
+  // background poll; navigateTo cancels this if the respondent moves off
+  // the waiting card before it resolves.
+  const beginAwaitFollowUp = (
+    responseId: string,
+    parentCardId: string,
+    cardIndex: number
+  ): void => {
+    cancelPoll();
+    cancelAwait();
+    const controller = new AbortController();
+    awaitController = controller;
+    mode = "waiting";
+    saveError = undefined;
+    pending = undefined;
+    draw();
+
+    void runPoll(
+      () => clientApi.generations(token, responseId),
+      responseId,
+      controller.signal,
+      waitSchedule
+    ).then((result) => {
+      if (awaitController !== controller) return; // cancelled — navigated away
+      awaitController = undefined;
+
+      if (result?.status === "completed" && result.cardIds.length > 0) {
+        void pullInFollowUpAndNavigate(result.cardIds, parentCardId, cardIndex);
+        return;
+      }
+      if (result?.status === "skipped" || result?.status === "failed") {
+        advance();
+        return;
+      }
+
+      // Budget expired with no terminal status yet.
+      advance();
+      startFollowUpPoll(responseId, parentCardId);
+    });
+  };
+
   const performSave = async (action: PendingAction): Promise<void> => {
     clearRetryTimer();
-    // Deliberately not cancelling an in-flight follow-up poll here: this
-    // save might just be the respondent continuing to answer while an
-    // earlier correction's generation is still running in the background,
-    // and cancelling it would drop that follow-up for good (it only ever
-    // gets spliced in via this same poll — a later reload is the only other
-    // way it'd surface). If *this* save turns out to be a new trigger,
-    // startFollowUpPoll() below cancels the old poll itself before starting
-    // the new one, so the "at most one poll" invariant still holds.
+    // Deliberately not cancelling an in-flight BACKGROUND follow-up poll
+    // here: this save might just be the respondent continuing to answer
+    // while an earlier correction's generation is still running in the
+    // background, and cancelling it would drop that follow-up for good (it
+    // only ever gets spliced in via that poll — a later reload is the only
+    // other way it'd surface). If *this* save turns out to be a new
+    // trigger, beginAwaitFollowUp() below cancels the old background poll
+    // itself before starting its own wait, so "at most one poll of each
+    // kind" still holds. (The in-place "waiting" poll can't already be
+    // running here — mode === "waiting" renders no actions, so no new save
+    // can be initiated from the current card while one is in flight.)
     pending = action;
     saveError = undefined;
     mode = "saving";
     draw();
 
-    const card = cards[index];
+    const cardIndex = index;
+    const card = cards[cardIndex];
 
     let state: ResponseState;
     let value: unknown;
@@ -654,15 +778,26 @@ function runApp(ctx: RunCtx): void {
       .heartbeat(token)
       .catch((err) => console.warn("last_active_at touch failed:", err));
 
+    // Only act on this save if the respondent is still on the card we saved
+    // — they may have navigated away (nav-back/forward, picker jump) while
+    // the save round-tripped. navigateTo() already reset mode/index for
+    // wherever they went; piling a "waiting" state or an advance() on top of
+    // that here would either strand them on the wrong card or skip one.
+    if (index !== cardIndex) return;
+
     // Reactive cards: a "Needs edit" correction may have kicked off a
-    // background generation. Only start the poll — never block navigation
-    // on it, and a false-positive client-side guess just costs one wasted
-    // poll loop (the backend re-derives the trigger independently).
+    // generation. Rather than advancing immediately, wait in place a short
+    // moment for it — most real generations resolve in ~3.5-4s, well inside
+    // beginAwaitFollowUp's budget, so a same-turn follow-up usually becomes
+    // the very next screen instead of quietly appearing behind the
+    // respondent later. A false-positive client-side guess just costs one
+    // wasted wait (the backend re-derives the trigger independently).
     if (
       client.reactive_cards_enabled &&
       hasTriggerPotential(card.response_type, state, value)
     ) {
-      startFollowUpPoll(saved.id, card.id);
+      beginAwaitFollowUp(saved.id, card.id, cardIndex);
+      return;
     }
 
     advance();

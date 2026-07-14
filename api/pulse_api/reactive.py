@@ -801,9 +801,12 @@ async def run_generation(
     the triggering card's `source != 'ai'` (depth-1 loop guard), the
     per-recipient lifetime cap (generation ATTEMPTS, not just
     successfully-created cards — see `card_generations_repo.
-    count_for_recipient`), then the dedup claim — committed BEFORE the LLM
-    call so a concurrent duplicate save loses the race on the database's
-    unique constraint, not on wall-clock timing.
+    count_for_recipient`), the duplicate-follow-up guard (an unanswered
+    AI card already generated from THIS exact `response_id` skips a
+    repeat generation — see `cards_repo.has_unanswered_ai_followup`),
+    then the dedup claim — committed BEFORE the LLM call so a concurrent
+    duplicate save loses the race on the database's unique constraint,
+    not on wall-clock timing.
 
     Runs in four short phases, each on its OWN `_admin_session()` (except
     phase 3, which deliberately holds none at all): (1) load context (with
@@ -879,6 +882,21 @@ async def run_generation(
                 session, recipient_id
             )
             if existing_count >= settings.reactive_max_generated_per_recipient:
+                return
+
+            # Duplicate-follow-up guard, before any claim/LLM call: a
+            # respondent who edits the same card's correction again before
+            # answering (or skipping) its EARLIER follow-up reuses this same
+            # `response_id` (responses upsert on (card_id, recipient_id)),
+            # so the (response_id, trigger_hash) dedup claim below — keyed
+            # on the changed text — would not catch it and would spawn a
+            # second, near-duplicate follow-up while the first is still
+            # outstanding (observed live). See
+            # `cards_repo.has_unanswered_ai_followup` for the full
+            # rationale.
+            if await cards_repo.has_unanswered_ai_followup(
+                session, response_id=response_id, recipient_id=recipient_id
+            ):
                 return
 
             generation_id = await card_generations_repo.claim_pending(

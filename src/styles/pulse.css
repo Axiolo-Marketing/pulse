@@ -230,6 +230,33 @@ button:focus-visible {
   padding: 0 16px 8px;
 }
 
+/* Reactive cards: the in-place waiting state shown on the corrected card
+   itself right after a qualifying save (see renderWaitingBody in render.ts)
+   — a stronger visual weight than .poll-hint since this replaces the whole
+   answer body, not a background supplement. Reuses .voice-dot's pulse
+   animation. */
+.waiting-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  margin: 4px 0 8px;
+}
+
+.waiting-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex: 0 0 auto;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
 .note-field {
   display: block;
   margin: 16px 0 8px;

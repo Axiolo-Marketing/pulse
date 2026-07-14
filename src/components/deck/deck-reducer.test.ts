@@ -99,6 +99,76 @@ describe("save + edit + overlay transitions", () => {
   });
 });
 
+describe("awaitFollowUp (reactive cards in-place wait)", () => {
+  it("enters waiting mode, clears any prior error, and leaves index/total untouched", () => {
+    const s = base({ index: 2, total: 5, saveError: "old" });
+    const next = deckReducer(s, { type: "awaitFollowUp" });
+    expect(next).toMatchObject({
+      index: 2,
+      total: 5,
+      mode: "waiting",
+      saveError: null,
+    });
+  });
+
+  it("does not touch modal/picker/resume flags — only mode + saveError change", () => {
+    const s = base({ modalOpen: true, pickerOpen: true, showResume: true });
+    const next = deckReducer(s, { type: "awaitFollowUp" });
+    expect(next.modalOpen).toBe(true);
+    expect(next.pickerOpen).toBe(true);
+    expect(next.showResume).toBe(true);
+  });
+});
+
+describe("followUpReady (reactive cards in-place wait resolved)", () => {
+  it("always navigates to insertAt with a full per-card UI state reset, unlike cardsInserted", () => {
+    const s = base({
+      index: 2,
+      total: 5,
+      mode: "waiting",
+      saveError: "stale",
+      modalOpen: true,
+      pickerOpen: true,
+      showResume: true,
+    });
+    const next = deckReducer(s, {
+      type: "followUpReady",
+      insertAt: 3,
+      count: 1,
+    });
+    expect(next).toMatchObject({
+      total: 6,
+      index: 3,
+      mode: "view",
+      saveError: null,
+      modalOpen: false,
+      pickerOpen: false,
+      showResume: false,
+    });
+  });
+
+  it("grows total by count for a multi-card generation", () => {
+    const s = base({ index: 2, total: 5, mode: "waiting" });
+    const next = deckReducer(s, {
+      type: "followUpReady",
+      insertAt: 3,
+      count: 2,
+    });
+    expect(next.total).toBe(7);
+  });
+
+  it("navigates to insertAt even when the respondent was NOT on the complete screen — the caller only dispatches this while parked on the waiting card", () => {
+    const s = base({ index: 3, total: 8, mode: "waiting" });
+    const next = deckReducer(s, {
+      type: "followUpReady",
+      insertAt: 4,
+      count: 1,
+    });
+    expect(next.index).toBe(4);
+    expect(next.mode).toBe("view");
+  });
+});
+
 describe("cardsInserted (reactive cards live splice)", () => {
   it("grows total and leaves index untouched when mid-deck", () => {
     const s = base({ index: 2, total: 5 });

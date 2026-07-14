@@ -17,8 +17,10 @@
 //   3. Right after a save, is this the kind of answer that might have
 //      kicked off a generation, so we should start polling?
 //      → `hasTriggerPotential`
-// `pollSchedule` + `runPoll` are the shared polling loop each deck's runtime
-// wires up to `clientApi.generations`.
+// `pollSchedule`/`waitSchedule` + `runPoll` are the shared polling loop each
+// deck's runtime wires up to `clientApi.generations`: a qualifying save
+// waits in place on `waitSchedule` (~8s) before advancing, falling back to
+// a background poll on `pollSchedule` (~40s) only if that budget expires.
 
 import type { Card, ClientResponse, GenerationRow, ResponseState, ResponseType } from "./api";
 
@@ -145,10 +147,23 @@ export function hasTriggerPotential(
 
 /** Delays (ms) between poll attempts after a qualifying save — front-loaded
  * (the common case resolves in a couple seconds) tapering to a steady 5s
- * cadence, for a ~40s total budget before giving up silently. */
+ * cadence, for a ~40s total budget before giving up silently. Used as the
+ * BACKGROUND fallback once `waitSchedule` below expires without a terminal
+ * result — see `hasTriggerPotential`'s callers for the wait-then-advance
+ * flow this backs. */
 export const pollSchedule: readonly number[] = [
   1500, 2500, 4000, 5000, 5000, 5000, 5000, 5000, 5000,
 ];
+
+/** Delays (ms) for the tight, in-place wait right after a qualifying
+ * correction save — the deck stays parked on the corrected card (a visible
+ * "reviewing your correction…" state) instead of advancing, hoping the
+ * generation resolves before the respondent would have moved on anyway.
+ * ~8s total budget: real generations complete in ~3.5-4s, so this usually
+ * lands a same-turn follow-up. If the budget expires with no terminal
+ * result, the caller advances normally and falls back to `pollSchedule`
+ * running in the background. */
+export const waitSchedule: readonly number[] = [1200, 1500, 1500, 1800, 2000];
 
 export interface PollOutcome {
   status: "completed" | "skipped" | "failed";
@@ -175,11 +190,14 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * Poll `fetchGenerations` on `pollSchedule` until the generation for
- * `responseId` reaches a terminal status, the caller aborts via `signal`, or
- * the schedule runs out (in which case this resolves `null` — the deck just
- * gives up quietly, per product decision: a failed/slow generation is
- * invisible to the respondent).
+ * Poll `fetchGenerations` on `schedule` (defaults to `pollSchedule`) until
+ * the generation for `responseId` reaches a terminal status, the caller
+ * aborts via `signal`, or the schedule runs out (in which case this
+ * resolves `null`). Callers pass `waitSchedule` for the tight in-place wait
+ * right after a qualifying save; a `null` result there means "budget
+ * expired, advance and fall back to a background poll" rather than "give up
+ * for good" — see each deck's wait-then-advance flow for how the two
+ * schedules compose.
  *
  * A transient fetch error doesn't abort the loop — it's treated like a
  * not-yet-terminal tick and retried on the next scheduled delay.
@@ -188,8 +206,9 @@ export async function runPoll(
   fetchGenerations: () => Promise<GenerationRow[]>,
   responseId: string,
   signal: AbortSignal,
+  schedule: readonly number[] = pollSchedule,
 ): Promise<PollOutcome | null> {
-  for (const ms of pollSchedule) {
+  for (const ms of schedule) {
     await delay(ms, signal);
     if (signal.aborted) return null;
 

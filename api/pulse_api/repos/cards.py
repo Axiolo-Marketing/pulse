@@ -226,3 +226,52 @@ async def count_generated_for_recipient(session: AsyncSession, recipient_id: str
         {"rid": recipient_id},
     )
     return result.scalar_one()
+
+
+async def has_unanswered_ai_followup(
+    session: AsyncSession, *, response_id: str, recipient_id: str
+) -> bool:
+    """Duplicate-follow-up guard for `reactive.run_generation`.
+
+    `responses` upserts on the `(card_id, recipient_id)` unique
+    constraint, so a respondent who edits the same card's correction a
+    second time reuses the SAME `response_id` — only the text (and
+    therefore the `card_generations` dedup key, `trigger_hash`) changes.
+    That means the `(response_id, trigger_hash)` dedup claim does NOT
+    catch a re-edit: it would happily start a second generation for the
+    same underlying correction while the first one's follow-up card is
+    still sitting unanswered in the respondent's deck, producing two
+    near-duplicate follow-ups (observed live). This check closes that
+    gap: `run_generation` calls it before the dedup claim and skips
+    generating outright if it returns True. Once the respondent answers
+    or skips the earlier follow-up, a fresh edit is free to generate
+    again.
+
+    True iff at least one `source='ai'` card exists with
+    `generated_from_response_id = response_id` for this recipient that
+    has no `responses` row in `answered`/`skipped` state — i.e. it's
+    still outstanding. Cross-checks `recipient_id` on both sides
+    (defense in depth; a recipient-scoped AI card and its own answer
+    should never disagree on whose it is)."""
+    if not (_valid_uuid(response_id) and _valid_uuid(recipient_id)):
+        return False
+    result = await session.execute(
+        text(
+            """
+            select exists (
+              select 1 from public.cards c
+              where c.generated_from_response_id = cast(:resp as uuid)
+                and c.recipient_id = cast(:rid as uuid)
+                and c.source = 'ai'
+                and not exists (
+                  select 1 from public.responses r
+                  where r.card_id = c.id
+                    and r.recipient_id = cast(:rid as uuid)
+                    and r.state in ('answered', 'skipped')
+                )
+            )
+            """
+        ),
+        {"resp": response_id, "rid": recipient_id},
+    )
+    return bool(result.scalar_one())
