@@ -81,6 +81,17 @@ pulse_reminder_inactivity_days: 7
 pulse_reminder_cadence_days: 7
 pulse_reminder_max: 3
 
+# ── Reactive cards (LLM follow-ups, SPEC §15) ───────────────────────────────
+# Deployment-level gate for AI-generated follow-up questions on respondent
+# corrections. OFF by default; enabling also requires the vaulted
+# `vault_pulse_anthropic_api_key` below, plus the per-org allow flag
+# (superadmin) and the per-engagement toggle — see deploy/README.md.
+# `pulse_reactive_model` may be any current Claude model id; cost estimates
+# in the superadmin usage panel are priced for the ids listed in
+# api/pulse_api/reactive.py MODEL_PRICING.
+pulse_reactive_cards_enabled: false
+pulse_reactive_model: "claude-opus-4-8"
+
 # ── Off-box backups (H2) ───────────────────────────────────────────────────
 # The daily `pulse-backup` cron already writes local pg_dump + uploads-mirror
 # copies to {{ pulse_backup_dir }} — that stays the fast-path restore. This
@@ -207,6 +218,12 @@ vault_pulse_microsoft_client_secret: ""
 vault_pulse_restic_password: ""
 vault_pulse_restic_r2_access_key_id: ""
 vault_pulse_restic_r2_secret_access_key: ""
+# Anthropic API key for reactive cards (see pulse_reactive_cards_enabled
+# above). Empty ⇒ generation stays off regardless of the flags. To set:
+#   ansible-vault encrypt_string --vault-password-file vault_secret 'sk-ant-...' \
+#     --name vault_pulse_anthropic_api_key
+# then paste the !vault block over the "" placeholder below.
+vault_pulse_anthropic_api_key: ""
 vault_pulse_resend_api_key: !vault |
           $ANSIBLE_VAULT;1.1;AES256
           35663931303032316437636566386335353562663265656339353762323233656139666161636138

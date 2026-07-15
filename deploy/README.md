@@ -116,30 +116,29 @@ the message (recipient, subject, link) and sends nothing. Failures never raise:
 the link is always recoverable from `journalctl -u pulse-api`, so a Resend
 outage can't roll back org/invite creation.
 
-### Reactive cards (Anthropic API) — not yet wired into the playbook
+### Reactive cards (Anthropic API)
 
 The reactive-cards feature (SPEC §15: LLM-generated follow-up questions when
 a respondent corrects a confirm-edit card) is **default-off at three levels**
 (env, per-org, per-engagement), so deploying the code changes nothing until
-you opt in. Production enablement, when wanted:
+you opt in. The playbook templates the env vars from `group_vars/all.yml`
+(`vault_pulse_anthropic_api_key`, `pulse_reactive_cards_enabled`,
+`pulse_reactive_model`). Production enablement:
 
-1. **Wire the env vars.** `deploy/roles/backend/templates/pulse.env.j2` does
-   not yet carry the reactive vars — add, following the Resend pattern:
-
-   ```
-   # Reactive cards (SPEC §15). Empty key + false = feature fully off.
-   ANTHROPIC_API_KEY={{ vault_pulse_anthropic_api_key | default('') }}
-   REACTIVE_CARDS_ENABLED={{ pulse_reactive_cards_enabled | default(false) | string | lower }}
-   ```
-
-   and vault the key like the Resend one:
+1. **Vault the API key** (same pattern as Resend):
 
    ```bash
    ansible-vault encrypt_string --vault-password-file vault_secret 'sk-ant-...' --name vault_pulse_anthropic_api_key
    ```
 
-   Never set `REACTIVE_FAKE_MODE` in production — it is a dev-only stub that
-   fabricates follow-up cards without calling the API.
+   Paste the `!vault` block over the `vault_pulse_anthropic_api_key: ""`
+   placeholder in `group_vars/all.yml`, flip
+   `pulse_reactive_cards_enabled: true`, and deploy. `pulse_reactive_model`
+   selects the Claude model (default `claude-opus-4-8`; any id priced in
+   `api/pulse_api/reactive.py`'s `MODEL_PRICING` keeps the superadmin cost
+   estimates populated). `REACTIVE_FAKE_MODE` is deliberately not templated —
+   it is a dev-only stub that fabricates follow-up cards without calling the
+   API and must never be enabled in production.
 
 2. **Allow an org** (superadmin): toggle on `/admin/#superadmin`, or
    `PATCH /api/superadmin/orgs/{id}` with `{"reactive_cards_allowed": true}`.
