@@ -496,6 +496,23 @@ def test_estimate_cost_unknown_model_returns_none() -> None:
 
 
 @pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("claude-fable-5", Decimal("60.000000")),   # 10 + 50
+        ("claude-sonnet-5", Decimal("18.000000")),  # 3 + 15
+        ("claude-haiku-4-5", Decimal("6.000000")),  # 1 + 5
+    ],
+)
+def test_estimate_cost_covers_every_switchable_model(
+    model: str, expected: Decimal
+) -> None:
+    """REACTIVE_MODEL is env-switchable with no code change — every model
+    an operator can point it at must have a price so the superadmin cost
+    views don't silently record NULL for those generations."""
+    assert reactive._estimate_cost(model, 1_000_000, 1_000_000) == expected
+
+
+@pytest.mark.parametrize(
     "model,input_tokens,output_tokens",
     [
         (None, 100, 100),
