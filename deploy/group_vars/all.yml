@@ -90,7 +90,7 @@ pulse_reminder_max: 3
 # in the superadmin usage panel are priced for the ids listed in
 # api/pulse_api/reactive.py MODEL_PRICING.
 pulse_reactive_cards_enabled: true
-pulse_reactive_model: "claude-haiku-4-5"
+pulse_reactive_model: "claude-sonnet-5"
 
 # ── Off-box backups (H2) ───────────────────────────────────────────────────
 # The daily `pulse-backup` cron already writes local pg_dump + uploads-mirror
