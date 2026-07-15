@@ -635,3 +635,551 @@ async def test_create_org_response_omits_raw_token(
     raw_token = match.group(1)
     serialized = str(body)
     assert raw_token not in serialized
+
+
+# ── Reactive cards: org allow-flag + usage/cost report (Phase 4) ──────────
+
+
+async def test_patch_org_reactive_flag_flips_and_audits(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Flipping the flag persists, returns the refreshed row, writes an
+    `org.update` audit row with old/new values, and round-trips through
+    both the org-details endpoint and the superadmin listing."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    await db.flush()
+    org_id = seed_admin_user["org_id"]
+
+    r = await admin_authed.patch(
+        f"/api/superadmin/orgs/{org_id}",
+        json={"reactive_cards_allowed": True},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == org_id
+    assert body["reactive_cards_allowed"] is True
+
+    persisted = (
+        await db.execute(
+            text(
+                "select reactive_cards_allowed from public.organizations "
+                "where id = cast(:o as uuid)"
+            ),
+            {"o": org_id},
+        )
+    ).scalar_one()
+    assert persisted is True
+
+    audit_row = (
+        await db.execute(
+            text(
+                "select metadata from public.audit_logs "
+                "where org_id = cast(:o as uuid) and action = 'org.update' "
+                "order by created_at desc limit 1"
+            ),
+            {"o": org_id},
+        )
+    ).mappings().one()
+    md = audit_row["metadata"] or {}
+    assert md.get("changed_fields") == ["reactive_cards_allowed"]
+    assert md.get("old_reactive_cards_allowed") is False
+    assert md.get("new_reactive_cards_allowed") is True
+
+    # Flipping back off round-trips too, including in the org listing the
+    # superadmin UI's per-org toggle reads its `checked` state from.
+    r2 = await admin_authed.patch(
+        f"/api/superadmin/orgs/{org_id}",
+        json={"reactive_cards_allowed": False},
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["reactive_cards_allowed"] is False
+
+    listing = await admin_authed.get("/api/superadmin/orgs?limit=100")
+    assert listing.status_code == 200, listing.text
+    row = next(o for o in listing.json() if o["id"] == org_id)
+    assert row["reactive_cards_allowed"] is False
+
+
+async def test_patch_org_flags_non_superadmin_403(
+    admin_authed: AsyncClient,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """`seed_admin_user` is an owner of Axiolo but NOT a superadmin."""
+    r = await admin_authed.patch(
+        f"/api/superadmin/orgs/{seed_admin_user['org_id']}",
+        json={"reactive_cards_allowed": True},
+    )
+    assert r.status_code == 403, r.text
+
+
+async def test_patch_org_flags_unknown_id_returns_404(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Unknown UUID and malformed UUID both 404 (same shape)."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    await db.flush()
+
+    r1 = await admin_authed.patch(
+        f"/api/superadmin/orgs/{uuid.uuid4()}",
+        json={"reactive_cards_allowed": True},
+    )
+    assert r1.status_code == 404, r1.text
+
+    r2 = await admin_authed.patch(
+        "/api/superadmin/orgs/not-a-uuid",
+        json={"reactive_cards_allowed": True},
+    )
+    assert r2.status_code == 404, r2.text
+
+
+async def _seed_engagement_with_card(
+    db: AsyncSession, *, org_id: str, name: str
+) -> dict[str, str]:
+    """Minimal engagement + one recipient + one card + one answered
+    response — just enough real, FK-linked rows for a `card_generations`
+    row (org -> engagement -> recipient/response/card) to reference."""
+    client = (
+        await db.execute(
+            text(
+                "insert into public.clients (org_id, name) "
+                "values (cast(:o as uuid), :n) "
+                "on conflict (org_id, name) do update set name = excluded.name "
+                "returning id::text"
+            ),
+            {"o": org_id, "n": name},
+        )
+    ).mappings().one()
+    eng = (
+        await db.execute(
+            text(
+                "insert into public.engagements (client_id, org_id) "
+                "values (cast(:c as uuid), cast(:o as uuid)) returning id::text"
+            ),
+            {"c": client["id"], "o": org_id},
+        )
+    ).mappings().one()
+    recipient = (
+        await db.execute(
+            text(
+                "insert into public.recipients (engagement_id, org_id, token) "
+                "values (cast(:e as uuid), cast(:o as uuid), :t) returning id::text"
+            ),
+            {"e": eng["id"], "o": org_id, "t": secrets.token_hex(8)},
+        )
+    ).mappings().one()
+    card = (
+        await db.execute(
+            text(
+                "insert into public.cards "
+                "(engagement_id, order_index, category, title, context, "
+                " question, response_type, org_id) "
+                "values (cast(:e as uuid), 1, 'C', 'T', 'ctx', 'q?', "
+                "'confirm-edit', cast(:o as uuid)) returning id::text"
+            ),
+            {"e": eng["id"], "o": org_id},
+        )
+    ).mappings().one()
+    response = (
+        await db.execute(
+            text(
+                "insert into public.responses "
+                "(card_id, engagement_id, recipient_id, org_id, state, "
+                " response_value) "
+                "values (cast(:c as uuid), cast(:e as uuid), cast(:r as uuid), "
+                "cast(:o as uuid), 'answered', '{}'::jsonb) returning id::text"
+            ),
+            {"c": card["id"], "e": eng["id"], "r": recipient["id"], "o": org_id},
+        )
+    ).mappings().one()
+    return {
+        "org_id": org_id,
+        "engagement_id": eng["id"],
+        "recipient_id": recipient["id"],
+        "card_id": card["id"],
+        "response_id": response["id"],
+    }
+
+
+async def _seed_generation(
+    db: AsyncSession,
+    *,
+    ctx: dict[str, str],
+    status: str,
+    trigger_hash: str,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: str | None = None,
+    days_ago: int = 0,
+) -> None:
+    """Insert one `card_generations` row directly, bypassing the
+    generation engine entirely — the usage-report tests only need the
+    ledger rows to exist with the right status/tokens/cost/age, not a
+    real (mocked) generation run."""
+    await db.execute(
+        text(
+            """
+            insert into public.card_generations
+              (org_id, engagement_id, recipient_id, response_id, card_id,
+               trigger_hash, status, input_tokens, output_tokens, cost_usd,
+               created_at)
+            values
+              (cast(:org as uuid), cast(:eng as uuid), cast(:rid as uuid),
+               cast(:resp as uuid), cast(:card as uuid), :hash, :status,
+               :itok, :otok, cast(:cost as numeric),
+               now() - make_interval(days => :days_ago))
+            """
+        ),
+        {
+            "org": ctx["org_id"],
+            "eng": ctx["engagement_id"],
+            "rid": ctx["recipient_id"],
+            "resp": ctx["response_id"],
+            "card": ctx["card_id"],
+            "hash": trigger_hash,
+            "status": status,
+            "itok": input_tokens,
+            "otok": output_tokens,
+            "cost": cost_usd,
+            "days_ago": days_ago,
+        },
+    )
+
+
+async def test_reactive_usage_returns_per_org_sums_and_totals(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Two seeded orgs, each with mixed-status `card_generations` rows —
+    the per-org sums and the all-orgs totals row must both be correct."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_a = seed_admin_user["org_id"]
+    org_b = await _make_empty_org(db)
+
+    ctx_a = await _seed_engagement_with_card(db, org_id=org_a, name="UsageOrgA")
+    ctx_b = await _seed_engagement_with_card(db, org_id=org_b, name="UsageOrgB")
+
+    await _seed_generation(
+        db, ctx=ctx_a, status="completed", trigger_hash="a1",
+        input_tokens=100, output_tokens=50, cost_usd="0.010000",
+    )
+    await _seed_generation(
+        db, ctx=ctx_a, status="skipped", trigger_hash="a2",
+        input_tokens=20, output_tokens=5,
+    )
+    await _seed_generation(db, ctx=ctx_a, status="failed", trigger_hash="a3")
+    await _seed_generation(
+        db, ctx=ctx_b, status="completed", trigger_hash="b1",
+        input_tokens=200, output_tokens=100, cost_usd="0.020000",
+    )
+    await db.flush()
+
+    r = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["days"] == 30
+
+    by_org = {row["org_id"]: row for row in body["orgs"]}
+
+    row_a = by_org[org_a]
+    assert row_a["generations"] == 3
+    assert row_a["completed"] == 1
+    assert row_a["skipped"] == 1
+    assert row_a["failed"] == 1
+    assert row_a["input_tokens"] == 120
+    assert row_a["output_tokens"] == 55
+    assert row_a["cost_usd"] == pytest.approx(0.01)
+
+    row_b = by_org[org_b]
+    assert row_b["generations"] == 1
+    assert row_b["completed"] == 1
+    assert row_b["skipped"] == 0
+    assert row_b["failed"] == 0
+    assert row_b["input_tokens"] == 200
+    assert row_b["output_tokens"] == 100
+    assert row_b["cost_usd"] == pytest.approx(0.02)
+
+    totals = body["totals"]
+    assert totals["generations"] == 4
+    assert totals["completed"] == 2
+    assert totals["skipped"] == 1
+    assert totals["failed"] == 1
+    assert totals["input_tokens"] == 320
+    assert totals["output_tokens"] == 155
+    assert totals["cost_usd"] == pytest.approx(0.03)
+
+
+async def test_reactive_usage_days_window_filters_by_created_at(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """A generation older than the requested window is excluded; widening
+    the window picks it back up."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_id = seed_admin_user["org_id"]
+    ctx = await _seed_engagement_with_card(db, org_id=org_id, name="Windowed")
+
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="recent",
+        input_tokens=10, output_tokens=5, cost_usd="0.001000", days_ago=1,
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="old",
+        input_tokens=999, output_tokens=999, cost_usd="9.990000", days_ago=40,
+    )
+    await db.flush()
+
+    r30 = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r30.status_code == 200, r30.text
+    row30 = next(o for o in r30.json()["orgs"] if o["org_id"] == org_id)
+    assert row30["generations"] == 1
+    assert row30["input_tokens"] == 10
+
+    r90 = await admin_authed.get("/api/superadmin/reactive-usage?days=90")
+    assert r90.status_code == 200, r90.text
+    row90 = next(o for o in r90.json()["orgs"] if o["org_id"] == org_id)
+    assert row90["generations"] == 2
+    assert row90["input_tokens"] == 1009
+
+
+@pytest.mark.parametrize(
+    "raw_days, expected_days",
+    [(0, 1), (-5, 1), (1000, 365), (365, 365), (30, 30)],
+    ids=["zero", "negative", "over-max", "at-max", "default-ish"],
+)
+async def test_reactive_usage_days_clamped_to_bounds(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    raw_days: int,
+    expected_days: int,
+) -> None:
+    await _become_superadmin(db, seed_admin_user["id"])
+    await db.flush()
+
+    r = await admin_authed.get(f"/api/superadmin/reactive-usage?days={raw_days}")
+    assert r.status_code == 200, r.text
+    assert r.json()["days"] == expected_days
+
+
+async def test_reactive_usage_non_superadmin_403(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.get("/api/superadmin/reactive-usage")
+    assert r.status_code == 403, r.text
+
+
+# ── `engagements` per-engagement drill-down ───────────────────────────────
+
+
+async def test_reactive_usage_engagements_breakdown(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Two engagements (different orgs) with mixed-status generations get
+    correct per-engagement sums; an engagement with zero generations in
+    the window is absent entirely from `engagements`."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_a = seed_admin_user["org_id"]
+    org_b = await _make_empty_org(db)
+
+    ctx_1 = await _seed_engagement_with_card(db, org_id=org_a, name="EngOne")
+    ctx_2 = await _seed_engagement_with_card(db, org_id=org_b, name="EngTwo")
+    ctx_zero = await _seed_engagement_with_card(db, org_id=org_a, name="EngZero")
+
+    await _seed_generation(
+        db, ctx=ctx_1, status="completed", trigger_hash="e1a",
+        input_tokens=100, output_tokens=40, cost_usd="0.010000",
+    )
+    await _seed_generation(
+        db, ctx=ctx_1, status="skipped", trigger_hash="e1b",
+        input_tokens=15, output_tokens=0,
+    )
+    await _seed_generation(
+        db, ctx=ctx_2, status="completed", trigger_hash="e2a",
+        input_tokens=200, output_tokens=90, cost_usd="0.020000",
+    )
+    # `ctx_zero` deliberately gets no `card_generations` row at all — it
+    # must not appear in the breakdown regardless of window size.
+    await db.flush()
+
+    r = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    by_eng = {row["engagement_id"]: row for row in body["engagements"]}
+    assert ctx_zero["engagement_id"] not in by_eng
+
+    row_1 = by_eng[ctx_1["engagement_id"]]
+    assert row_1["engagement_label"] == "EngOne"
+    assert row_1["org_id"] == org_a
+    assert row_1["generations"] == 2
+    assert row_1["input_tokens"] == 115
+    assert row_1["output_tokens"] == 40
+    assert row_1["cost_usd"] == pytest.approx(0.01)
+
+    row_2 = by_eng[ctx_2["engagement_id"]]
+    assert row_2["engagement_label"] == "EngTwo"
+    assert row_2["org_id"] == org_b
+    assert row_2["generations"] == 1
+    assert row_2["input_tokens"] == 200
+    assert row_2["output_tokens"] == 90
+    assert row_2["cost_usd"] == pytest.approx(0.02)
+
+
+async def test_reactive_usage_engagements_days_window_filters_by_created_at(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """A generation older than the requested window is excluded from the
+    per-engagement breakdown too — same `days` window as `orgs`."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_id = seed_admin_user["org_id"]
+    ctx = await _seed_engagement_with_card(db, org_id=org_id, name="WindowedEng")
+
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="recent-e",
+        input_tokens=10, output_tokens=5, cost_usd="0.001000", days_ago=1,
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="old-e",
+        input_tokens=999, output_tokens=999, cost_usd="9.990000", days_ago=40,
+    )
+    await db.flush()
+
+    r30 = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r30.status_code == 200, r30.text
+    row30 = next(
+        e for e in r30.json()["engagements"]
+        if e["engagement_id"] == ctx["engagement_id"]
+    )
+    assert row30["generations"] == 1
+    assert row30["input_tokens"] == 10
+
+    r90 = await admin_authed.get("/api/superadmin/reactive-usage?days=90")
+    assert r90.status_code == 200, r90.text
+    row90 = next(
+        e for e in r90.json()["engagements"]
+        if e["engagement_id"] == ctx["engagement_id"]
+    )
+    assert row90["generations"] == 2
+    assert row90["input_tokens"] == 1009
+
+
+# ── `monthly` per-org cost table (trailing 6 calendar months) ─────────────
+
+
+async def _shift_generation_to_month_offset(
+    db: AsyncSession, *, trigger_hash: str, months_ago: int, day_of_month: int = 3
+) -> None:
+    """Move a previously-seeded `card_generations` row's `created_at` to
+    `day_of_month` of the calendar month `months_ago` months before the
+    current one — precise calendar-month placement that `_seed_generation`'s
+    `days_ago` (a rolling N-day window) can't give us."""
+    await db.execute(
+        text(
+            "update public.card_generations "
+            "set created_at = date_trunc('month', now()) "
+            "  - make_interval(months => :months_ago) "
+            "  + make_interval(days => :day - 1) "
+            "where trigger_hash = :hash"
+        ),
+        {"months_ago": months_ago, "day": day_of_month, "hash": trigger_hash},
+    )
+
+
+async def _month_label(db: AsyncSession, months_ago: int) -> str:
+    """The `"YYYY-MM"` label `months_ago` calendar months before now —
+    computed with the SAME date arithmetic as
+    ``usage_report_monthly`` so the test doesn't re-derive calendar math
+    that could drift from the production query."""
+    row = (
+        await db.execute(
+            text(
+                "select to_char(date_trunc('month', now()) "
+                "  - make_interval(months => :m), 'YYYY-MM') as label"
+            ),
+            {"m": months_ago},
+        )
+    ).mappings().one()
+    return row["label"]
+
+
+async def test_reactive_usage_monthly_buckets_by_calendar_month(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    """Rows are bucketed by calendar month (`date_trunc('month', ...)`,
+    not a rolling N-day window), ordered most-recent-first, and bounded
+    to the trailing 6 calendar months — a row exactly 6 months back
+    (one month past the boundary) is excluded while one 5 months back
+    (the boundary itself) is included."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org_id = seed_admin_user["org_id"]
+    ctx = await _seed_engagement_with_card(db, org_id=org_id, name="MonthlyEng")
+
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-current",
+        input_tokens=10, output_tokens=5, cost_usd="0.001000",
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-last",
+        input_tokens=20, output_tokens=10, cost_usd="0.002000",
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-boundary-in",
+        input_tokens=30, output_tokens=15, cost_usd="0.003000",
+    )
+    await _seed_generation(
+        db, ctx=ctx, status="completed", trigger_hash="m-boundary-out",
+        input_tokens=999, output_tokens=999, cost_usd="9.990000",
+    )
+    await _shift_generation_to_month_offset(db, trigger_hash="m-last", months_ago=1)
+    await _shift_generation_to_month_offset(
+        db, trigger_hash="m-boundary-in", months_ago=5
+    )
+    await _shift_generation_to_month_offset(
+        db, trigger_hash="m-boundary-out", months_ago=6
+    )
+    await db.flush()
+
+    current_label = await _month_label(db, 0)
+    last_label = await _month_label(db, 1)
+    boundary_in_label = await _month_label(db, 5)
+    boundary_out_label = await _month_label(db, 6)
+
+    # `monthly` is independent of `days` — request a small window and
+    # confirm it doesn't affect the monthly table at all.
+    r = await admin_authed.get("/api/superadmin/reactive-usage?days=30")
+    assert r.status_code == 200, r.text
+    monthly = [row for row in r.json()["monthly"] if row["org_id"] == org_id]
+
+    by_month = {row["month"]: row for row in monthly}
+    assert boundary_out_label not in by_month
+    assert current_label in by_month
+    assert last_label in by_month
+    assert boundary_in_label in by_month
+
+    assert by_month[current_label]["generations"] == 1
+    assert by_month[current_label]["input_tokens"] == 10
+    assert by_month[current_label]["cost_usd"] == pytest.approx(0.001)
+
+    assert by_month[last_label]["generations"] == 1
+    assert by_month[last_label]["input_tokens"] == 20
+
+    assert by_month[boundary_in_label]["generations"] == 1
+    assert by_month[boundary_in_label]["input_tokens"] == 30
+
+    # Most-recent-first ordering across the whole `monthly` list (not
+    # just this org's rows) — string comparison works since the label is
+    # zero-padded `"YYYY-MM"`.
+    all_months = [row["month"] for row in r.json()["monthly"]]
+    assert all_months == sorted(all_months, reverse=True)

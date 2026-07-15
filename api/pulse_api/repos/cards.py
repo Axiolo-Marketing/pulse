@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 CARD_COLS = (
     "id::text, engagement_id::text, order_index, category, title, context, question, "
-    "response_type, options, default_value, skip_allowed, attachment_path, created_at"
+    "response_type, options, default_value, skip_allowed, attachment_path, created_at, "
+    "recipient_id::text, source, generated_from_response_id::text"
 )
 
 
@@ -67,12 +68,22 @@ async def create_card(
     skip_allowed: bool,
     attachment_path: str | None,
     org_id: str,
+    recipient_id: str | None = None,
+    source: str = "operator",
+    generated_from_response_id: str | None = None,
 ) -> dict | None:
     """Insert one card. ``org_id`` is NOT NULL on the table (0005), so
     every call must thread the active org's id through. Callers running
     on a ``pulse_member`` session pull this from the resolved
     membership; ``pulse_admin`` callers (none in current code, reserved
     for superadmin work) must pick the right org explicitly.
+
+    ``recipient_id`` / ``source`` / ``generated_from_response_id`` are
+    new in migration 0017 and default to the operator-authored,
+    engagement-shared shape every card had before reactive cards existed
+    — existing callers need no changes. The generation engine (PR 2) is
+    the only caller that passes ``recipient_id`` + ``source="ai"`` +
+    ``generated_from_response_id``.
     """
     if not (_valid_uuid(engagement_id) and _valid_uuid(org_id)):
         return None
@@ -82,12 +93,13 @@ async def create_card(
             insert into public.cards
               (engagement_id, order_index, category, title, context, question,
                response_type, options, default_value, skip_allowed,
-               attachment_path, org_id)
+               attachment_path, org_id, recipient_id, source, generated_from_response_id)
             values
               (cast(:cid as uuid),
                coalesce((select max(order_index) from public.cards where engagement_id = cast(:cid as uuid)), 0) + 1,
                :cat, :title, :ctx, :q, :rt,
-               cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid))
+               cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid),
+               cast(:rid as uuid), :src, cast(:gfr as uuid))
             returning {CARD_COLS}
             """
         ),
@@ -103,6 +115,9 @@ async def create_card(
             "sa": skip_allowed,
             "ap": attachment_path,
             "org": org_id,
+            "rid": recipient_id,
+            "src": source,
+            "gfr": generated_from_response_id,
         },
     )
     return dict(result.mappings().one())
@@ -171,3 +186,92 @@ async def peek_title(session: AsyncSession, card_id: str) -> str | None:
     )
     row = result.mappings().one_or_none()
     return None if row is None else row.get("title")
+
+
+async def delete_generated_for_engagement(session: AsyncSession, engagement_id: str) -> int:
+    """Delete every AI-generated card (``source = 'ai'``) on one engagement.
+
+    Used by the engagement reset route, run BEFORE the responses/uploads
+    wipe: a respondent's answer to a generated card cascades away with
+    the card itself (``responses.card_id`` is ``on delete cascade``), and
+    any ``card_generations`` row tied to that answered card's response
+    cascades too — the remaining generation rows (keyed to the
+    *triggering* response, on an operator card) are cleaned up when the
+    caller subsequently wipes all responses for the engagement. Returns
+    the number of cards removed, for the audit metadata."""
+    if not _valid_uuid(engagement_id):
+        return 0
+    result = await session.execute(
+        text(
+            "delete from public.cards "
+            "where engagement_id = cast(:cid as uuid) and source = 'ai'"
+        ),
+        {"cid": engagement_id},
+    )
+    return result.rowcount or 0
+
+
+async def count_generated_for_recipient(session: AsyncSession, recipient_id: str) -> int:
+    """How many AI-generated cards a recipient already has, across the
+    engagement's whole lifetime — the per-recipient lifetime cap the
+    generation engine gates on (``reactive_max_generated_per_recipient``,
+    PR 2). Uses the partial ``cards_recipient_idx`` index."""
+    if not _valid_uuid(recipient_id):
+        return 0
+    result = await session.execute(
+        text(
+            "select count(*) from public.cards "
+            "where recipient_id = cast(:rid as uuid) and source = 'ai'"
+        ),
+        {"rid": recipient_id},
+    )
+    return result.scalar_one()
+
+
+async def has_unanswered_ai_followup(
+    session: AsyncSession, *, response_id: str, recipient_id: str
+) -> bool:
+    """Duplicate-follow-up guard for `reactive.run_generation`.
+
+    `responses` upserts on the `(card_id, recipient_id)` unique
+    constraint, so a respondent who edits the same card's correction a
+    second time reuses the SAME `response_id` — only the text (and
+    therefore the `card_generations` dedup key, `trigger_hash`) changes.
+    That means the `(response_id, trigger_hash)` dedup claim does NOT
+    catch a re-edit: it would happily start a second generation for the
+    same underlying correction while the first one's follow-up card is
+    still sitting unanswered in the respondent's deck, producing two
+    near-duplicate follow-ups (observed live). This check closes that
+    gap: `run_generation` calls it before the dedup claim and skips
+    generating outright if it returns True. Once the respondent answers
+    or skips the earlier follow-up, a fresh edit is free to generate
+    again.
+
+    True iff at least one `source='ai'` card exists with
+    `generated_from_response_id = response_id` for this recipient that
+    has no `responses` row in `answered`/`skipped` state — i.e. it's
+    still outstanding. Cross-checks `recipient_id` on both sides
+    (defense in depth; a recipient-scoped AI card and its own answer
+    should never disagree on whose it is)."""
+    if not (_valid_uuid(response_id) and _valid_uuid(recipient_id)):
+        return False
+    result = await session.execute(
+        text(
+            """
+            select exists (
+              select 1 from public.cards c
+              where c.generated_from_response_id = cast(:resp as uuid)
+                and c.recipient_id = cast(:rid as uuid)
+                and c.source = 'ai'
+                and not exists (
+                  select 1 from public.responses r
+                  where r.card_id = c.id
+                    and r.recipient_id = cast(:rid as uuid)
+                    and r.state in ('answered', 'skipped')
+                )
+            )
+            """
+        ),
+        {"resp": response_id, "rid": recipient_id},
+    )
+    return bool(result.scalar_one())

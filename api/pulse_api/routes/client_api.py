@@ -19,9 +19,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pulse_api import reactive
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
 from pulse_api.observability import limiter
+from pulse_api.repos import card_generations as card_generations_repo
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import responses as responses_repo
@@ -204,8 +206,56 @@ async def save_response(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="card not found")
+    card_meta = row.pop("card")
     await session.commit()
+
+    # Reactive cards: extract the trigger text once, here, from the
+    # request body this route already validated — and pass it straight
+    # through to `run_generation` rather than letting it re-derive the
+    # trigger from a `responses` row read after the fact. That read used
+    # to race this request's own commit (the outer connection-level
+    # transaction in `get_anon_session` doesn't COMMIT until after this
+    # dependency's teardown runs) and could observe a stale pre-save
+    # snapshot — see `reactive.run_generation`'s docstring. `is_candidate`
+    # still gates on the cheap deployment/source checks; `run_generation`
+    # re-checks everything with fresh reads once it actually runs.
+    #
+    # Scheduled via `reactive.schedule_generation` (an `asyncio.create_task`,
+    # not FastAPI `BackgroundTasks`) — see that function's docstring for
+    # why: `BackgroundTasks` run BEFORE `get_anon_session`'s teardown
+    # commits this response row, which for a direct save (no prior
+    # `/responses/view`) created a circular wait against
+    # `run_generation`'s own commit-visibility retry loop.
+    trigger = reactive.extract_trigger_text(
+        card_meta["response_type"], req.state, req.response_value
+    )
+    if trigger is not None and reactive.is_candidate(card_source=card_meta["source"]):
+        reactive.schedule_generation(
+            response_id=row["id"],
+            recipient_id=row["recipient_id"],
+            engagement_id=row["engagement_id"],
+            card_id=row["card_id"],
+            trigger_text=trigger,
+        )
+
     return row
+
+
+@router.get("/generations")
+@limiter.limit(settings.rate_limit_default)
+async def list_generations(
+    request: Request,
+    response_id: str | None = None,
+    session: AsyncSession = Depends(get_anon_session),
+) -> list[dict]:
+    """Poll surface for the deck's post-save "checking for a follow-up"
+    loop. RLS (`card_generations_self_read`, migration 0017) scopes this
+    to the caller's own recipient; `response_id` narrows further to the
+    one save the deck just made, since that's the only generation the
+    client cares about right after a correction."""
+    return await card_generations_repo.list_for_my_recipient(
+        session, response_id=response_id
+    )
 
 
 @router.get("/uploads")

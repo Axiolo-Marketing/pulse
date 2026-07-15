@@ -116,6 +116,42 @@ the message (recipient, subject, link) and sends nothing. Failures never raise:
 the link is always recoverable from `journalctl -u pulse-api`, so a Resend
 outage can't roll back org/invite creation.
 
+### Reactive cards (Anthropic API) — not yet wired into the playbook
+
+The reactive-cards feature (SPEC §15: LLM-generated follow-up questions when
+a respondent corrects a confirm-edit card) is **default-off at three levels**
+(env, per-org, per-engagement), so deploying the code changes nothing until
+you opt in. Production enablement, when wanted:
+
+1. **Wire the env vars.** `deploy/roles/backend/templates/pulse.env.j2` does
+   not yet carry the reactive vars — add, following the Resend pattern:
+
+   ```
+   # Reactive cards (SPEC §15). Empty key + false = feature fully off.
+   ANTHROPIC_API_KEY={{ vault_pulse_anthropic_api_key | default('') }}
+   REACTIVE_CARDS_ENABLED={{ pulse_reactive_cards_enabled | default(false) | string | lower }}
+   ```
+
+   and vault the key like the Resend one:
+
+   ```bash
+   ansible-vault encrypt_string --vault-password-file vault_secret 'sk-ant-...' --name vault_pulse_anthropic_api_key
+   ```
+
+   Never set `REACTIVE_FAKE_MODE` in production — it is a dev-only stub that
+   fabricates follow-up cards without calling the API.
+
+2. **Allow an org** (superadmin): toggle on `/admin/#superadmin`, or
+   `PATCH /api/superadmin/orgs/{id}` with `{"reactive_cards_allowed": true}`.
+3. **Enable per engagement**: the operator flips "Reactive cards" in the
+   edit-engagement dialog.
+
+Cost visibility: every generation records tokens + `cost_usd` on
+`card_generations`; the superadmin "Reactive cards usage" panel aggregates
+per org (≈ $0.01–0.015 per generation on the default `claude-opus-4-8`).
+Spend is bounded per respondent (attempt cap) and per correction (dedup +
+2-card cap) — see SPEC §15.6.
+
 ### Multi-tenant config (v3.0)
 
 The v2→v3 migration introduced four env vars that **must be set in

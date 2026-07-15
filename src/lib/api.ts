@@ -144,6 +144,13 @@ export interface Engagement {
    * client deck applies it via `applyBranding` on boot. Absent/null →
    * the deck keeps the product defaults. */
   org_branding?: BrandingSettings | null;
+  /** Reactive cards feature flag, fully resolved server-side (deployment +
+   * org `reactive_cards_allowed` + this engagement's own toggle). When
+   * `true`, the deck starts polling `clientApi.generations` after a
+   * qualifying confirm-edit correction (see `src/lib/deck-order.ts`).
+   * Optional so both decks type-check pre-rollout; treat an absent value
+   * as `false`. */
+  reactive_cards_enabled?: boolean;
 }
 
 export interface Card {
@@ -160,6 +167,35 @@ export interface Card {
   skip_allowed: boolean;
   attachment_path: string | null;
   created_at: string;
+  /** Reactive cards: which recipient this card is scoped to, or `null` for
+   * an engagement-shared card (every pre-existing card, and everything an
+   * operator creates). RLS already keeps a foreign recipient's scoped card
+   * off this list entirely — the field is here for deck ordering/display,
+   * not as a client-side trust boundary. Optional so callers pre-rollout
+   * (or fixtures) still type-check. */
+  recipient_id?: string | null;
+  /** Who authored this card: `"operator"` (default, omitted on older rows)
+   * or `"ai"` for a reactive-cards follow-up. Drives deck ordering — see
+   * `orderDeckCards` in `src/lib/deck-order.ts`. */
+  source?: "operator" | "ai";
+  /** For `source === "ai"` cards: the id of the `responses` row (the
+   * correction) that triggered this card's generation. `orderDeckCards`
+   * resolves this back to a parent card id to place the follow-up right
+   * after it. `null`/absent for operator cards. */
+  generated_from_response_id?: string | null;
+}
+
+/** One row from `GET /api/generations` — the client deck's poll surface for
+ * a reactive-cards generation kicked off by a confirm-edit correction. RLS
+ * scopes rows to the calling recipient; `card_ids` is only populated once
+ * `status` reaches `"completed"`. */
+export interface GenerationRow {
+  id: string;
+  response_id: string;
+  status: "pending" | "completed" | "skipped" | "failed";
+  card_ids: string[];
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface ClientResponse {
@@ -228,6 +264,17 @@ export const clientApi = {
 
   heartbeat: (token: string): Promise<{ status: string }> =>
     request("/api/me/heartbeat", { method: "PATCH", token }),
+
+  /** Poll surface for a reactive-cards generation. Pass the saved response's
+   * `id` to scope to that specific correction; omitting it returns every
+   * generation row for the calling recipient. Used by the shared
+   * `runPoll` helper in `src/lib/deck-order.ts`. */
+  generations: (token: string, responseId?: string): Promise<GenerationRow[]> => {
+    const qs = responseId
+      ? `?response_id=${encodeURIComponent(responseId)}`
+      : "";
+    return request(`/api/generations${qs}`, { token });
+  },
 
   /** Upload a file (or recorded blob) against a card. `kind` defaults to
    * `"file"`; voice answers pass `{ kind: "voice", filename: "voice.webm" }`.
@@ -364,6 +411,12 @@ export interface OrgDetails {
    * defaults). Drives the Brand & theme settings form and the live
    * admin-console theme via `applyBranding`. */
   branding: BrandingSettings | null;
+  /** Superadmin-managed org-level gate for the reactive-cards feature
+   * (default `false`). The per-engagement `reactive_cards_enabled` toggle
+   * (see `UpdateEngagementArgs`) can only be turned on while this is
+   * `true` — the engagement edit UI reads this to decide whether that
+   * checkbox is selectable at all. */
+  reactive_cards_allowed: boolean;
 }
 
 export interface MemberRow {
@@ -466,6 +519,12 @@ export interface EngagementSummary {
    * (default `false`). Operators flip it from the engagement edit form. */
   reminders_enabled: boolean;
   total_cards: number;
+  /** How many of `total_cards` are LLM-generated reactive-cards
+   * follow-ups (`cards.source === "ai"`), across every recipient. The
+   * list shows a "+N" badge next to the progress counter when this is
+   * > 0 as a visual cue that reactive follow-ups were added; hidden at
+   * 0. */
+  ai_cards_count: number;
   /** Number of recipients (own magic links) on this engagement. The list
    * progress pill reads `completed_recipients / recipients_count`. */
   recipients_count: number;
@@ -551,6 +610,13 @@ export interface UpdateEngagementArgs {
   /** Toggle reminder emails for this engagement's recipients. Omit to
    * leave it unchanged (same `exclude_unset` semantics as `voice_enabled`). */
   reminders_enabled?: boolean;
+  /** Toggle the reactive-cards engine (AI follow-up questions on
+   * respondent corrections) for this engagement. Omit to leave it
+   * unchanged. Setting `true` 403s server-side unless the org's
+   * `reactive_cards_allowed` is also `true` (see `OrgDetails`) — callers
+   * should gate the control on that flag rather than relying on the
+   * error alone. */
+  reactive_cards_enabled?: boolean;
 }
 
 export interface CreateCardArgs {
@@ -850,6 +916,83 @@ export interface SuperadminOrgRow {
   pending_invite_count: number;
   created_at: string;
   owner_emails: string[];
+  /** Org-level gate for the reactive-cards feature. Superadmin-only
+   * toggle — an engagement can only enable its own reactive-cards
+   * checkbox while this is `true`. */
+  reactive_cards_allowed: boolean;
+}
+
+/** Returned by `PATCH /api/superadmin/orgs/{id}`. */
+export interface SuperadminOrgFlagsRow {
+  id: string;
+  name: string;
+  slug: string;
+  reactive_cards_allowed: boolean;
+}
+
+/** One org's row in the reactive-cards usage/cost report
+ * (`GET /api/superadmin/reactive-usage`). */
+export interface ReactiveUsageOrgRow {
+  org_id: string;
+  org_name: string;
+  generations: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+/** All-orgs sums across the same window as `orgs`. */
+export interface ReactiveUsageTotals {
+  generations: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+/** One engagement's row in the per-engagement usage/cost drill-down
+ * (same `days` window as `orgs`). Only engagements with at least one
+ * generation in the window appear. */
+export interface ReactiveUsageEngagementRow {
+  engagement_id: string;
+  /** `engagement_name` when set (non-blank), else the owning client's
+   * name. */
+  engagement_label: string;
+  org_id: string;
+  org_name: string;
+  generations: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+/** One `(month, org)` row in the trailing-6-calendar-month cost table.
+ * Independent of the `days` window selector. */
+export interface ReactiveUsageMonthlyRow {
+  /** `"YYYY-MM"` label, most recent month first. */
+  month: string;
+  org_id: string;
+  org_name: string;
+  generations: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+export interface ReactiveUsageResponse {
+  days: number;
+  orgs: ReactiveUsageOrgRow[];
+  totals: ReactiveUsageTotals;
+  /** Per-engagement drill-down, same `days` window as `orgs`. */
+  engagements: ReactiveUsageEngagementRow[];
+  /** Per-org monthly cost trend, always the trailing 6 calendar months
+   * regardless of `days`. */
+  monthly: ReactiveUsageMonthlyRow[];
 }
 
 export interface SuperadminInviteSummary {
@@ -904,6 +1047,23 @@ export const superadminApi = {
 
   listOrgMembers: (orgId: string): Promise<SuperadminMemberRow[]> =>
     request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}/members`),
+
+  /** Flip an org's reactive-cards allow gate. */
+  updateOrgFlags: (
+    orgId: string,
+    args: { reactive_cards_allowed: boolean },
+  ): Promise<SuperadminOrgFlagsRow> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(args),
+    }),
+
+  /** Reactive-cards usage/cost report across every org, trailing `days`
+   * (default 30). Monitoring/reporting only — not a billing surface. */
+  reactiveUsage: (opts: { days?: number } = {}): Promise<ReactiveUsageResponse> => {
+    const q = opts.days ? `?days=${encodeURIComponent(opts.days)}` : "";
+    return request(`/api/superadmin/reactive-usage${q}`);
+  },
 };
 
 /** Build an absolute URL for an org logo served by

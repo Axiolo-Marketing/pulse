@@ -999,3 +999,82 @@ async def test_mcp_import_deck_writes_single_audit_row_with_count(
     assert len(rows) == 1
     assert rows[0]["target_id"] == eid
     assert (rows[0]["metadata"] or {}).get("count") == 2
+
+
+# Phase 4: pulse_update_engagement enforces the same org-allow gate as the
+# REST PATCH /api/admin/engagements/{id} route (both call
+# `reactive.ensure_org_allowed`) — turning `reactive_cards_enabled` on
+# fails as a tool error while the org disallows it, and succeeds once the
+# org-level flag is flipped on.
+async def test_mcp_update_engagement_reactive_cards_gate(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    db_conn: AsyncConnection,
+    seed_admin_user: dict[str, str],
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+
+    eng = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Gate Co"}),
+            api_key=raw,
+        )
+    )
+    eid = eng["id"]
+
+    # Org disallows by default (`reactive_cards_allowed = false`) → the
+    # tool call surfaces as a JSON-RPC tool error, not an exception.
+    denied = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_update_engagement",
+            {"engagement_id": eid, "reactive_cards_enabled": True},
+        ),
+        api_key=raw,
+    )
+    assert denied["result"].get("isError") is True, denied
+    assert "reactive cards" in str(denied["result"]).lower()
+
+    # Flip the org-level allow flag directly (bypassing whatever role the
+    # prior tool call left the shared connection in) and retry → succeeds.
+    await db_conn.execute(text("reset role"))
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = true "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+
+    allowed = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload(
+                "pulse_update_engagement",
+                {"engagement_id": eid, "reactive_cards_enabled": True},
+            ),
+            api_key=raw,
+        )
+    )
+    assert allowed["reactive_cards_enabled"] is True
+
+    # Setting it back off never needs the gate.
+    disabled = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload(
+                "pulse_update_engagement",
+                {"engagement_id": eid, "reactive_cards_enabled": False},
+            ),
+            api_key=raw,
+        )
+    )
+    assert disabled["reactive_cards_enabled"] is False

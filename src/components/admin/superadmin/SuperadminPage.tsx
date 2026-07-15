@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import {
   superadminApi,
   ApiError,
+  type ReactiveUsageEngagementRow,
+  type ReactiveUsageMonthlyRow,
   type SuperadminMemberRow,
   type SuperadminOrgRow,
 } from "@/lib/api";
@@ -22,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -289,6 +292,22 @@ function OrgsTableSection(): React.ReactElement {
     },
   });
 
+  const reactiveMut = useMutation({
+    mutationFn: (args: { org: SuperadminOrgRow; allowed: boolean }) =>
+      superadminApi.updateOrgFlags(args.org.id, {
+        reactive_cards_allowed: args.allowed,
+      }),
+    onSuccess: (_data, args) => {
+      void qc.invalidateQueries({ queryKey: ["superadmin", "orgs"] });
+      toast.success(
+        `Reactive cards ${args.allowed ? "enabled" : "disabled"} for ${args.org.name}.`,
+      );
+    },
+    onError: (_err, args) => {
+      toast.error(`Couldn't update reactive cards for ${args.org.name}.`);
+    },
+  });
+
   const orgs = orgsQ.data ?? [];
 
   return (
@@ -300,6 +319,7 @@ function OrgsTableSection(): React.ReactElement {
             <TableHead>Members</TableHead>
             <TableHead>Pending invites</TableHead>
             <TableHead>Owners</TableHead>
+            <TableHead>Reactive cards</TableHead>
             <TableHead>Created</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
@@ -308,7 +328,7 @@ function OrgsTableSection(): React.ReactElement {
           {orgsQ.isPending ? (
             Array.from({ length: 4 }).map((_, i) => (
               <TableRow key={i}>
-                {Array.from({ length: 6 }).map((__, j) => (
+                {Array.from({ length: 7 }).map((__, j) => (
                   <TableCell key={j}>
                     <Skeleton className="h-5 w-full" />
                   </TableCell>
@@ -318,7 +338,7 @@ function OrgsTableSection(): React.ReactElement {
           ) : orgsQ.isError ? (
             <TableRow>
               <TableCell
-                colSpan={6}
+                colSpan={7}
                 className="py-10 text-center text-sm text-destructive"
               >
                 Couldn't load organizations.
@@ -327,7 +347,7 @@ function OrgsTableSection(): React.ReactElement {
           ) : orgs.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={6}
+                colSpan={7}
                 className="py-10 text-center text-sm text-muted-foreground"
               >
                 No organizations.
@@ -350,6 +370,19 @@ function OrgsTableSection(): React.ReactElement {
                     {org.owner_emails.length > 0
                       ? org.owner_emails.join(", ")
                       : "—"}
+                  </TableCell>
+                  <TableCell>
+                    <Switch
+                      checked={org.reactive_cards_allowed}
+                      disabled={
+                        reactiveMut.isPending &&
+                        reactiveMut.variables?.org.id === org.id
+                      }
+                      onCheckedChange={(allowed) =>
+                        reactiveMut.mutate({ org, allowed })
+                      }
+                      aria-label={`Reactive cards for ${org.name}`}
+                    />
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatTimestamp(org.created_at)}
@@ -429,6 +462,324 @@ function OrgsTableSection(): React.ReactElement {
   );
 }
 
+const USAGE_WINDOWS = [30, 90] as const;
+type UsageWindow = (typeof USAGE_WINDOWS)[number];
+
+function formatTokens(n: number): string {
+  return n.toLocaleString();
+}
+
+function formatCost(n: number): string {
+  return `$${n.toFixed(4)}`;
+}
+
+function EngagementUsageTable({
+  engagements,
+  days,
+  isPending,
+  isError,
+}: {
+  engagements: ReactiveUsageEngagementRow[];
+  days: number;
+  isPending: boolean;
+  isError: boolean;
+}): React.ReactElement {
+  return (
+    <div className="border-t border-border">
+      <div className="p-4 pb-0">
+        <h3 className="text-sm font-semibold text-foreground">By engagement</h3>
+        <p className="text-xs text-muted-foreground">
+          Same window as above, broken down per engagement — only engagements
+          with at least one generation appear.
+        </p>
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Engagement</TableHead>
+            <TableHead>Organization</TableHead>
+            <TableHead className="text-right">Calls</TableHead>
+            <TableHead className="text-right">Tokens (in / out)</TableHead>
+            <TableHead className="text-right">Est. cost</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {isPending ? (
+            Array.from({ length: 3 }).map((_, i) => (
+              <TableRow key={i}>
+                {Array.from({ length: 5 }).map((__, j) => (
+                  <TableCell key={j}>
+                    <Skeleton className="h-5 w-full" />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          ) : isError ? (
+            <TableRow>
+              <TableCell
+                colSpan={5}
+                className="py-10 text-center text-sm text-destructive"
+              >
+                Couldn't load engagement usage.
+              </TableCell>
+            </TableRow>
+          ) : engagements.length === 0 ? (
+            <TableRow>
+              <TableCell
+                colSpan={5}
+                className="py-10 text-center text-sm text-muted-foreground"
+              >
+                No engagements with reactive-cards activity in the last {days}{" "}
+                days.
+              </TableCell>
+            </TableRow>
+          ) : (
+            engagements.map((e) => (
+              <TableRow key={e.engagement_id}>
+                <TableCell className="font-medium text-foreground">
+                  {e.engagement_label}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {e.org_name}
+                </TableCell>
+                <TableCell className="text-right">{e.generations}</TableCell>
+                <TableCell className="text-right text-muted-foreground">
+                  {formatTokens(e.input_tokens)} / {formatTokens(e.output_tokens)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {formatCost(e.cost_usd)}
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+function MonthlyUsagePanel({
+  monthly,
+  isPending,
+  isError,
+}: {
+  monthly: ReactiveUsageMonthlyRow[];
+  isPending: boolean;
+  isError: boolean;
+}): React.ReactElement {
+  return (
+    <section className="mt-8 overflow-hidden rounded-lg border border-border bg-card">
+      <div className="p-4">
+        <h2 className="text-sm font-semibold text-foreground">
+          Monthly cost by org
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Trailing 6 calendar months, most recent first — independent of the
+          window above.
+        </p>
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Month</TableHead>
+            <TableHead>Organization</TableHead>
+            <TableHead className="text-right">Calls</TableHead>
+            <TableHead className="text-right">Tokens (in / out)</TableHead>
+            <TableHead className="text-right">Est. cost</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {isPending ? (
+            Array.from({ length: 3 }).map((_, i) => (
+              <TableRow key={i}>
+                {Array.from({ length: 5 }).map((__, j) => (
+                  <TableCell key={j}>
+                    <Skeleton className="h-5 w-full" />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          ) : isError ? (
+            <TableRow>
+              <TableCell
+                colSpan={5}
+                className="py-10 text-center text-sm text-destructive"
+              >
+                Couldn't load monthly usage.
+              </TableCell>
+            </TableRow>
+          ) : monthly.length === 0 ? (
+            <TableRow>
+              <TableCell
+                colSpan={5}
+                className="py-10 text-center text-sm text-muted-foreground"
+              >
+                No reactive-cards activity in the last 6 months.
+              </TableCell>
+            </TableRow>
+          ) : (
+            monthly.map((m) => (
+              <TableRow key={`${m.month}-${m.org_id}`}>
+                <TableCell className="font-medium text-foreground">
+                  {m.month}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {m.org_name}
+                </TableCell>
+                <TableCell className="text-right">{m.generations}</TableCell>
+                <TableCell className="text-right text-muted-foreground">
+                  {formatTokens(m.input_tokens)} / {formatTokens(m.output_tokens)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {formatCost(m.cost_usd)}
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </section>
+  );
+}
+
+function ReactiveUsagePanel(): React.ReactElement {
+  const [days, setDays] = useState<UsageWindow>(30);
+  const usageQ = useQuery({
+    queryKey: ["superadmin", "reactiveUsage", days],
+    queryFn: () => superadminApi.reactiveUsage({ days }),
+  });
+
+  const orgs = usageQ.data?.orgs ?? [];
+  const totals = usageQ.data?.totals;
+  const engagements = usageQ.data?.engagements ?? [];
+  const monthly = usageQ.data?.monthly ?? [];
+
+  return (
+    <>
+      <section className="mt-8 overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">
+              Reactive cards usage
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              LLM calls, tokens, and estimated cost per org — monitoring only,
+              not a billing surface.
+            </p>
+          </div>
+          <div className="flex gap-1.5">
+            {USAGE_WINDOWS.map((w) => (
+              <Button
+                key={w}
+                type="button"
+                size="sm"
+                variant={days === w ? "default" : "outline"}
+                onClick={() => setDays(w)}
+              >
+                {w}d
+              </Button>
+            ))}
+          </div>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Organization</TableHead>
+              <TableHead className="text-right">Calls</TableHead>
+              <TableHead className="text-right">Completed</TableHead>
+              <TableHead className="text-right">Skipped</TableHead>
+              <TableHead className="text-right">Failed</TableHead>
+              <TableHead className="text-right">Tokens (in / out)</TableHead>
+              <TableHead className="text-right">Est. cost</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {usageQ.isPending ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                <TableRow key={i}>
+                  {Array.from({ length: 7 }).map((__, j) => (
+                    <TableCell key={j}>
+                      <Skeleton className="h-5 w-full" />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : usageQ.isError ? (
+              <TableRow>
+                <TableCell
+                  colSpan={7}
+                  className="py-10 text-center text-sm text-destructive"
+                >
+                  Couldn't load reactive-cards usage.
+                </TableCell>
+              </TableRow>
+            ) : orgs.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={7}
+                  className="py-10 text-center text-sm text-muted-foreground"
+                >
+                  No reactive-cards activity in the last {days} days.
+                </TableCell>
+              </TableRow>
+            ) : (
+              <>
+                {orgs.map((o) => (
+                  <TableRow key={o.org_id}>
+                    <TableCell className="font-medium text-foreground">
+                      {o.org_name}
+                    </TableCell>
+                    <TableCell className="text-right">{o.generations}</TableCell>
+                    <TableCell className="text-right">{o.completed}</TableCell>
+                    <TableCell className="text-right">{o.skipped}</TableCell>
+                    <TableCell className="text-right">{o.failed}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {formatTokens(o.input_tokens)} /{" "}
+                      {formatTokens(o.output_tokens)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCost(o.cost_usd)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {totals ? (
+                  <TableRow className="bg-muted/40 font-semibold">
+                    <TableCell>All organizations</TableCell>
+                    <TableCell className="text-right">
+                      {totals.generations}
+                    </TableCell>
+                    <TableCell className="text-right">{totals.completed}</TableCell>
+                    <TableCell className="text-right">{totals.skipped}</TableCell>
+                    <TableCell className="text-right">{totals.failed}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {formatTokens(totals.input_tokens)} /{" "}
+                      {formatTokens(totals.output_tokens)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCost(totals.cost_usd)}
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </>
+            )}
+          </TableBody>
+        </Table>
+        <EngagementUsageTable
+          engagements={engagements}
+          days={days}
+          isPending={usageQ.isPending}
+          isError={usageQ.isError}
+        />
+      </section>
+      <MonthlyUsagePanel
+        monthly={monthly}
+        isPending={usageQ.isPending}
+        isError={usageQ.isError}
+      />
+    </>
+  );
+}
+
 export function SuperadminPage(): React.ReactElement {
   return (
     <TooltipProvider>
@@ -441,6 +792,7 @@ export function SuperadminPage(): React.ReactElement {
         </div>
         <CreateOrgCard />
         <OrgsTableSection />
+        <ReactiveUsagePanel />
       </main>
     </TooltipProvider>
   );

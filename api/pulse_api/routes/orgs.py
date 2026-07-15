@@ -160,7 +160,13 @@ class BrandingSettings(BaseModel):
 
 
 class OrgDetails(BaseModel):
-    """Returned by ``GET /api/orgs/me`` — the Settings page header."""
+    """Returned by ``GET /api/orgs/me`` — the Settings page header.
+
+    ``reactive_cards_allowed`` is the superadmin-managed org-level gate
+    for the reactive-cards feature (see ``pulse_api.reactive`` module
+    docstring for the full three-gate chain) — the admin UI reads this
+    to decide whether the per-engagement toggle is selectable at all.
+    """
 
     id: str
     name: str
@@ -170,6 +176,7 @@ class OrgDetails(BaseModel):
     role: str
     member_count: int
     pending_invite_count: int
+    reactive_cards_allowed: bool = False
 
 
 class UpdateOrgRequest(BaseModel):
@@ -389,6 +396,7 @@ async def get_my_org(
         role=_role_str(membership),
         member_count=member_count,
         pending_invite_count=invite_count,
+        reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
     )
 
 
@@ -451,6 +459,7 @@ async def update_my_org(
         role=_role_str(membership),
         member_count=member_count,
         pending_invite_count=invite_count,
+        reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
     )
 
 
@@ -520,6 +529,7 @@ async def update_my_org_branding(
         role=_role_str(membership),
         member_count=member_count,
         pending_invite_count=invite_count,
+        reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
     )
 
 

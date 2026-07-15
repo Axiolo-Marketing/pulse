@@ -384,6 +384,231 @@ async def test_list_engagements_includes_voice_enabled(
     assert row["voice_enabled"] is False
 
 
+# ── reactive_cards_enabled toggle (Phase 4: admin surface + flags) ───────────
+
+
+async def test_get_engagement_reactive_cards_enabled_defaults_false(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
+    assert r.status_code == 200
+    assert r.json()["engagement"]["reactive_cards_enabled"] is False
+
+
+async def test_list_engagements_includes_reactive_cards_enabled(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.get("/api/admin/engagements")
+    assert r.status_code == 200
+    row = next(c for c in r.json() if c["id"] == seed_client["id"])
+    assert row["reactive_cards_enabled"] is False
+
+
+# ── ai_cards_count ("+N" badge, reactive-cards Phase 4) ──────────────────────
+
+
+async def test_list_engagements_ai_cards_count_zero_for_plain_engagement(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+) -> None:
+    """`seed_cards` inserts only operator-authored cards (`source`
+    defaults to `'operator'`) — `ai_cards_count` is 0 until a reactive
+    follow-up actually lands."""
+    r = await admin_authed.get("/api/admin/engagements")
+    assert r.status_code == 200
+    row = next(c for c in r.json() if c["id"] == seed_client["id"])
+    assert row["ai_cards_count"] == 0
+
+
+async def test_list_engagements_ai_cards_count_counts_source_ai_cards(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    axiolo_org: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Seed two `source='ai'` cards alongside the shared/operator cards
+    from `seed_cards` — the count reflects only the AI-sourced ones."""
+    for i in range(2):
+        await db.execute(
+            text(
+                "insert into public.cards "
+                "(engagement_id, order_index, category, title, context, "
+                " question, response_type, org_id, source) "
+                "values (cast(:e as uuid), :idx, 'AI', :t, 'ctx', 'q?', "
+                "'short-text', cast(:o as uuid), 'ai')"
+            ),
+            {
+                "e": seed_client["id"],
+                "idx": 100 + i,
+                "t": f"AI Card {i}",
+                "o": axiolo_org["id"],
+            },
+        )
+
+    r = await admin_authed.get("/api/admin/engagements")
+    assert r.status_code == 200
+    row = next(c for c in r.json() if c["id"] == seed_client["id"])
+    assert row["ai_cards_count"] == 2
+    # The shared/operator cards from `seed_cards` don't count toward it,
+    # even though they DO count toward the overall `total_cards`.
+    assert row["total_cards"] == len(seed_cards) + 2
+
+
+async def test_patch_engagement_reactive_cards_enabled_true_403_when_org_disallowed(
+    admin_authed: AsyncClient, seed_client: dict[str, str], db: AsyncSession
+) -> None:
+    """The org defaults to `reactive_cards_allowed = false` — turning the
+    per-engagement toggle on is refused with a 403 and a clear message,
+    and the column is never actually written."""
+    r = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"reactive_cards_enabled": True},
+    )
+    assert r.status_code == 403, r.text
+    assert "reactive cards" in r.json()["detail"].lower()
+
+    row = (
+        await db.execute(
+            text(
+                "select reactive_cards_enabled from public.engagements "
+                "where id = cast(:e as uuid)"
+            ),
+            {"e": seed_client["id"]},
+        )
+    ).scalar_one()
+    assert row is False
+
+
+async def test_patch_engagement_reactive_cards_enabled_true_succeeds_when_org_allowed(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_admin_user: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = true "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+
+    r = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"reactive_cards_enabled": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["reactive_cards_enabled"] is True
+
+    # Round-trips on a fresh GET.
+    detail = await admin_authed.get(f"/api/admin/engagements/{seed_client['id']}")
+    assert detail.json()["engagement"]["reactive_cards_enabled"] is True
+
+
+async def test_patch_engagement_reactive_cards_enabled_false_always_works(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    """Turning the flag OFF never needs the org-level gate — an org that
+    revokes `reactive_cards_allowed` after an engagement enabled it must
+    still be able to disable that engagement's own toggle."""
+    r = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"reactive_cards_enabled": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["reactive_cards_enabled"] is False
+
+
+async def test_patch_engagement_resending_true_survives_org_revocation(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_admin_user: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Enable while allowed, revoke the org flag, then PATCH with
+    `reactive_cards_enabled: true` again (a UI editing off a stale
+    org-allow snapshot resends the whole form). Only the false→true
+    transition is gated, so the resend must succeed — the engagement was
+    already enabled and generation stops anyway via the engine's own
+    fresh org-flag read."""
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = true "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+    r = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"reactive_cards_enabled": True},
+    )
+    assert r.status_code == 200, r.text
+
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = false "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+
+    r = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"engagement_name": "renamed", "reactive_cards_enabled": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["reactive_cards_enabled"] is True
+    assert r.json()["engagement_name"] == "renamed"
+
+
+async def test_patch_engagement_unrelated_field_unaffected_by_org_revocation(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_admin_user: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Enable while allowed, then have the org revoke the allow-flag —
+    a later PATCH that doesn't touch `reactive_cards_enabled` must still
+    succeed (the 403 only fires when the request explicitly sets the
+    field to `True`), and the stale-`True` engagement flag rides along
+    untouched rather than being retroactively reset."""
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = true "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+    enable = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"reactive_cards_enabled": True},
+    )
+    assert enable.status_code == 200, enable.text
+
+    await db.execute(
+        text(
+            "update public.organizations set reactive_cards_allowed = false "
+            "where id = cast(:o as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"]},
+    )
+    await db.flush()
+
+    r = await admin_authed.patch(
+        f"/api/admin/engagements/{seed_client['id']}",
+        json={"brief": "unrelated edit"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["brief"] == "unrelated edit"
+    assert r.json()["reactive_cards_enabled"] is True
+
+
 # ── DELETE /api/admin/engagements/{id} ────────────────────────────────────────
 
 

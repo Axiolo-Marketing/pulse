@@ -33,6 +33,7 @@ const ACTION_LABELS: Record<string, string> = {
   "card.update": "Edited card",
   "card.delete": "Deleted card",
   "card.import": "Imported cards",
+  "card.reactive_generate": "AI follow-up generated",
   "attachment.upload": "Uploaded attachment",
   "org.update": "Updated organization",
   "org.logo_set": "Updated logo",
@@ -83,10 +84,20 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
       return `reset engagement answers (${num(m.responses_cleared)} responses, ${num(m.uploads_cleared)} uploads cleared)`;
     case "card.import":
       return `imported ${num(m.count)} card(s)`;
+    case "card.reactive_generate": {
+      const ids = Array.isArray(m.card_ids) ? m.card_ids : [];
+      return `generated ${ids.length} AI follow-up card${ids.length === 1 ? "" : "s"}`;
+    }
     case "org.update":
-      return m.old_name && m.new_name
-        ? `renamed the organization from "${str(m.old_name)}" to "${str(m.new_name)}"`
-        : "updated the organization";
+      if (m.old_name && m.new_name) {
+        return `renamed the organization from "${str(m.old_name)}" to "${str(m.new_name)}"`;
+      }
+      if (typeof m.new_reactive_cards_allowed === "boolean") {
+        return m.new_reactive_cards_allowed
+          ? "enabled reactive cards for the organization"
+          : "disabled reactive cards for the organization";
+      }
+      return "updated the organization";
     case "member.invite":
       return `invited ${str(m.email)} (${str(m.role)})`;
     case "member.role_change":

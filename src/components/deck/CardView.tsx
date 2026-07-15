@@ -29,6 +29,27 @@ interface CardMedia {
   onVoiceDeleted: () => void;
 }
 
+// Reactive cards: shown in place of the normal answer body right after a
+// qualifying correction save, while DeckApp waits (briefly) to see if the
+// correction kicked off a follow-up — see `awaitFollowUp` in DeckApp.tsx. No
+// actions render at all here (nothing to disable, nothing to double-submit);
+// navigation (back/forward/picker) stays live in the footer/topbar and
+// cancels the wait if the respondent uses it.
+function WaitingStatus(): React.ReactElement {
+  return (
+    <div
+      role="status"
+      className="mt-4 flex items-center gap-2.5 rounded-md bg-secondary px-3 py-2.5 text-sm font-medium text-secondary-foreground"
+    >
+      <span
+        className="size-2.5 shrink-0 animate-pulse rounded-full bg-primary"
+        aria-hidden="true"
+      />
+      One moment — reviewing your correction…
+    </div>
+  );
+}
+
 function PriorHint({
   card,
   existing,
@@ -182,7 +203,7 @@ export function CardView({
   card: CardModel;
   position: number;
   total: number;
-  mode: "view" | "edit" | "saving";
+  mode: "view" | "edit" | "saving" | "waiting";
   saveError: string | null;
   showResume: boolean;
   existing?: ClientResponse;
@@ -192,7 +213,7 @@ export function CardView({
   media: CardMedia;
 }): React.ReactElement {
   const saving = mode === "saving";
-  const showVoice = media.voiceEnabled && mode !== "edit";
+  const showVoice = media.voiceEnabled && mode !== "edit" && mode !== "waiting";
   return (
     <div className="flex min-h-dvh flex-col">
       <TopBar
@@ -237,14 +258,18 @@ export function CardView({
           </p>
           <PriorHint card={card} existing={existing} />
           <div className="mt-5">
-            <InputForType
-              card={card}
-              mode={mode}
-              saving={saving}
-              existing={existing}
-              handlers={handlers}
-              media={media}
-            />
+            {mode === "waiting" ? (
+              <WaitingStatus />
+            ) : (
+              <InputForType
+                card={card}
+                mode={mode}
+                saving={saving}
+                existing={existing}
+                handlers={handlers}
+                media={media}
+              />
+            )}
           </div>
           {showVoice ? (
             <div className="mt-6 border-t border-border pt-5">

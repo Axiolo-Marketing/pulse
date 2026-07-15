@@ -33,6 +33,11 @@ class Engagement(SQLModel, table=True):
             reminder job. Defaults ``True``; the magic-link token and
             per-recipient activity now live on ``Recipient`` (migration
             0015), so reminders fan out per recipient.
+        reactive_cards_enabled: Per-engagement opt-in for the reactive
+            follow-up generation feature (migration 0017). Defaults
+            ``False``; only takes effect when the deployment env var and
+            the owning organization's ``reactive_cards_allowed`` are also
+            on (SPEC-level gate chain — see CLAUDE.md).
         created_at: Insert timestamp (naive UTC).
     """
 
@@ -46,4 +51,5 @@ class Engagement(SQLModel, table=True):
     brief: str | None = None
     voice_enabled: bool = False
     reminders_enabled: bool = True
+    reactive_cards_enabled: bool = False
     created_at: datetime = Field(default_factory=utcnow_naive)

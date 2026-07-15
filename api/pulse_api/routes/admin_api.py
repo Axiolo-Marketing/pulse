@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
-from pulse_api import reminders, storage
+from pulse_api import reactive, reminders, storage
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (
@@ -65,12 +65,16 @@ class UpdateEngagementRequest(BaseModel):
     ``voice_enabled`` toggles the per-engagement voice recorder and
     ``reminders_enabled`` pauses/resumes the scheduled reminder fan-out;
     omitting either (the `model_dump(exclude_unset=True)` path) leaves it
-    untouched."""
+    untouched. ``reactive_cards_enabled`` toggles the reactive-cards
+    engine for this engagement — setting it ``True`` 403s unless the
+    caller's org has ``reactive_cards_allowed`` (see
+    ``reactive.ensure_org_allowed``, checked in the route handler)."""
 
     engagement_name: str | None = None
     brief: str | None = None
     voice_enabled: bool | None = None
     reminders_enabled: bool | None = None
+    reactive_cards_enabled: bool | None = None
 
 
 class AddRecipientRequest(BaseModel):
@@ -248,6 +252,25 @@ async def update_engagement(
 ) -> dict[str, Any]:
     user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
+    if fields.get("reactive_cards_enabled") is True:
+        # Gate only the false→true transition: a UI resending an
+        # already-enabled engagement's flag (stale org-allow snapshot
+        # after a mid-session revocation) must not 403 an unrelated
+        # edit. Revocation stops NEW enables; already-enabled
+        # engagements stop generating anyway because the engine
+        # re-reads the org flag on every run.
+        current = await engagements_repo.get_by_id(session, engagement_id)
+        already_enabled = bool(current and current.get("reactive_cards_enabled"))
+        if not already_enabled and not await reactive.ensure_org_allowed(
+            session, membership.org_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "reactive cards are not enabled for this organization — "
+                    "ask an Axiolo admin to turn them on first"
+                ),
+            )
     row = await engagements_repo.update_engagement(session, engagement_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
@@ -317,8 +340,10 @@ async def reset_engagement(
 ) -> dict[str, int]:
     """Reset an engagement for a clean restart: wipe every response and
     every upload (rows + on-disk files), returning all cards to an
-    unanswered state. The cards, the engagement, and the magic link are
-    left intact, so the same URL can be re-run by the client (or a fresh
+    unanswered state, and remove any AI-generated follow-up cards (they
+    were produced from responses that no longer exist after the reset).
+    Operator-authored cards, the engagement, and the magic link are left
+    intact, so the same URL can be re-run by the client (or a fresh
     reviewer). Distinct from delete, which removes everything.
 
     Use when multiple people need to take the deck, or a client wants to
@@ -327,8 +352,27 @@ async def reset_engagement(
     if (await engagements_repo.get_by_id(session, engagement_id)) is None:
         raise HTTPException(status_code=404, detail="engagement not found")
 
+    # Uploads go first, before anything cascades them away silently: an
+    # AI-generated card can carry an upload today (the upload route has no
+    # response_type restriction — a voice note can attach to any card the
+    # recipient can see), and `uploads.card_id` is `on delete cascade`. If
+    # the AI-card delete below ran first, such an upload's row would
+    # vanish out from under this query before it ever got a chance to
+    # collect its `storage_path`, orphaning the on-disk file. Deleting
+    # uploads first guarantees every current upload — regardless of which
+    # card owns it — is captured for on-disk cleanup.
+    #
+    # Responses go next, while every card (AI-generated included) still
+    # exists, so `responses_cleared` counts answers to AI cards too — and
+    # every card_generations row cascades away here via its response_id
+    # FK. Only then are the AI cards themselves removed; by that point
+    # their responses and generation rows are already gone, so the delete
+    # cascades nothing and `ai_cards_removed` is an exact card count.
     removed_uploads = await uploads_repo.delete_all_for_engagement(session, engagement_id)
     responses_cleared = await responses_repo.delete_all_for_engagement(session, engagement_id)
+    ai_cards_removed = await cards_repo.delete_generated_for_engagement(
+        session, engagement_id
+    )
     await record_audit(
         session,
         org_id=membership.org_id,
@@ -339,6 +383,7 @@ async def reset_engagement(
         metadata={
             "responses_cleared": responses_cleared,
             "uploads_cleared": len(removed_uploads),
+            "ai_cards_removed": ai_cards_removed,
         },
     )
     await session.commit()

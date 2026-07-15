@@ -113,6 +113,50 @@ async def db_conn(engine: AsyncEngine) -> AsyncIterator[AsyncConnection]:
 
 
 @pytest.fixture
+def db_conn_lock() -> asyncio.Lock:
+    """Serializes `db_conn` between a request and a background task racing it.
+
+    Every test shares ONE raw `db_conn` (see its docstring). For
+    reactive-cards tests, a client-token request can schedule a detached
+    `asyncio.create_task` (`reactive.schedule_generation`) that runs
+    concurrently with, not after, that SAME request's own dependency
+    teardown — BY DESIGN (that's the whole point of `create_task` over
+    `BackgroundTasks`, letting the teardown's commit and the task's own
+    retry loop overlap instead of circularly waiting on each other — see
+    `reactive.schedule_generation`'s docstring). In production the request
+    and the background task each open their OWN pooled connection, so
+    genuine concurrent use is safe; in tests they'd share this one
+    physical connection/transaction, and `AsyncConnection` is documented
+    as unsafe for concurrent use by more than one coroutine at a time —
+    two coroutines truly interleaving raw `db_conn.execute()` calls (or
+    greenlet-bridged ORM calls) can hang the event loop rather than
+    raising, which surfaced as a real, intermittent hang in
+    `tests/test_reactive_cards.py` (the background generation task's
+    `_admin_session()` racing `_override_anon_session`'s teardown for the
+    request that scheduled it).
+
+    Held ONLY by `_override_anon_session` (the client-token path — the
+    only one that can trigger this race) and by the reactive-cards
+    `_admin_session()` override in `test_reactive_cards.py`, each for
+    their full logical-session lifetime. Deliberately NOT held by
+    `_override_session` / `_override_org_scoped_session` /
+    `_patched_touch_last_used` (the cookie/API-key admin paths, which
+    never schedule this kind of background work): `_override_session` is
+    a `yield`-based FastAPI dependency that stays open (paused at
+    `yield`) for a request's FULL lifetime once any other dependency pulls
+    it in, and `_override_org_scoped_session` sits behind
+    `Depends(get_current_org_member)` — itself behind another
+    `Depends(get_admin_session)` i.e. `_override_session`. Making
+    `_override_session` also take this lock deadlocks every such request
+    against itself the instant `_override_org_scoped_session` tries to
+    acquire the same (already self-held) lock — confirmed live while
+    building this fixture. Function-scoped, like `db_conn` itself, so it
+    never leaks across tests.
+    """
+    return asyncio.Lock()
+
+
+@pytest.fixture
 async def db(db_conn: AsyncConnection) -> AsyncIterator[AsyncSession]:
     factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
     async with factory() as session:
@@ -165,7 +209,9 @@ async def become_member(conn: AsyncConnection, *, org_id: str) -> None:
 
 @pytest.fixture
 async def client(
-    db_conn: AsyncConnection, monkeypatch: pytest.MonkeyPatch
+    db_conn: AsyncConnection,
+    db_conn_lock: asyncio.Lock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[AsyncClient]:
     # Reset the global rate limiter at the start of each test so a fresh
     # budget is available. slowapi keeps in-process state, which would
@@ -178,6 +224,23 @@ async def client(
     do NOT commit that transaction when `session.commit()` is called —
     they only end the session's own work — so route handlers can commit
     freely and the outer rollback at teardown still wipes everything out.
+
+    `_override_anon_session` below holds `db_conn_lock` for its whole
+    logical-session lifetime — see that fixture's docstring for why
+    (client-token routes are the only ones that can schedule a detached
+    reactive-cards `asyncio.create_task`, which then touches this same
+    `db_conn` concurrently with THIS dependency's own teardown). The other
+    overrides below deliberately do NOT take the lock: they back
+    cookie/API-key admin routes, which never schedule that kind of
+    background work, and — unlike `_override_anon_session`, always a leaf
+    dependency — `_override_org_scoped_session` sits behind
+    `Depends(get_current_org_member)`, itself behind another
+    `Depends(get_admin_session)` (`_override_session`) that FastAPI keeps
+    open (paused at `yield`) for the whole request. Making `_override_
+    session` take the same lock deadlocked every such request against
+    itself the moment `_override_org_scoped_session` tried to acquire it
+    too — confirmed live while fixing the reactive-cards race below, so
+    don't reintroduce it.
     """
     async def _override_session() -> AsyncIterator[AsyncSession]:
         # If a prior request in the same test flipped to pulse_anon,
@@ -193,32 +256,34 @@ async def client(
     ) -> AsyncIterator[AsyncSession]:
         if not x_pulse_token:
             raise HTTPException(status_code=401, detail="missing token")
-        # Flip db_conn's effective role to pulse_anon and set the GUCs the
-        # helper functions read (pulse.token + pulse.org_id). All three
-        # are SET LOCAL — they roll back with the outer transaction at
-        # teardown. This matches the production `get_anon_session` shape
-        # exactly, including the org_id lookup from the client row.
-        await db_conn.execute(text("set local role pulse_anon"))
-        await db_conn.execute(
-            text("select set_config('pulse.token', :t, true)"),
-            {"t": x_pulse_token},
-        )
-        org_id = (
+        async with db_conn_lock:
+            # Flip db_conn's effective role to pulse_anon and set the GUCs
+            # the helper functions read (pulse.token + pulse.org_id). All
+            # three are SET LOCAL — they roll back with the outer
+            # transaction at teardown. This matches the production
+            # `get_anon_session` shape exactly, including the org_id
+            # lookup from the client row.
+            await db_conn.execute(text("set local role pulse_anon"))
             await db_conn.execute(
-                text(
-                    "select coalesce((select org_id::text from public.recipients "
-                    "where token = :t limit 1), '')"
-                ),
+                text("select set_config('pulse.token', :t, true)"),
                 {"t": x_pulse_token},
             )
-        ).scalar_one()
-        await db_conn.execute(
-            text("select set_config('pulse.org_id', :o, true)"),
-            {"o": org_id or ""},
-        )
-        factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
-        async with factory() as session:
-            yield session
+            org_id = (
+                await db_conn.execute(
+                    text(
+                        "select coalesce((select org_id::text from public.recipients "
+                        "where token = :t limit 1), '')"
+                    ),
+                    {"t": x_pulse_token},
+                )
+            ).scalar_one()
+            await db_conn.execute(
+                text("select set_config('pulse.org_id', :o, true)"),
+                {"o": org_id or ""},
+            )
+            factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
+            async with factory() as session:
+                yield session
 
     # `_touch_last_used` in production opens a brand-new admin-engine
     # session so the request's injected session isn't committed mid-request.
@@ -260,8 +325,8 @@ async def client(
         re-implement the resolution logic.
         """
         _, membership = org_member
-        # The cookie-auth path in `_override_session` set role=anon for
-        # a prior request inside this test; reset before flipping.
+        # The cookie-auth path in `_override_session` set role=anon for a
+        # prior request inside this test; reset before flipping.
         await db_conn.execute(text("reset role"))
         await db_conn.execute(text("set local role pulse_member"))
         await db_conn.execute(

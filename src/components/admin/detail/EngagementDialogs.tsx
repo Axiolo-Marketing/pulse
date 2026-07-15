@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { adminApi, ApiError, type Engagement } from "@/lib/api";
+import { adminApi, ApiError, orgsApi, type Engagement } from "@/lib/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,13 +42,23 @@ export function EditEngagementDialog({
   const [reminders, setReminders] = useState(
     engagement.reminders_enabled ?? false,
   );
+  const [reactiveCards, setReactiveCards] = useState(
+    engagement.reactive_cards_enabled ?? false,
+  );
   const [error, setError] = useState<string | null>(null);
+
+  // Org-level gate for the reactive-cards checkbox — superadmin-managed,
+  // not editable here. Reuses the `["orgs", "me"]` cache the Settings page
+  // already populates; a cache miss just costs one extra cheap GET.
+  const orgQ = useQuery({ queryKey: ["orgs", "me"], queryFn: () => orgsApi.me() });
+  const reactiveCardsAllowed = orgQ.data?.reactive_cards_allowed ?? false;
 
   useEffect(() => {
     if (open) {
       setName(engagement.engagement_name ?? "");
       setVoice(engagement.voice_enabled);
       setReminders(engagement.reminders_enabled ?? false);
+      setReactiveCards(engagement.reactive_cards_enabled ?? false);
       setError(null);
     }
   }, [open, engagement]);
@@ -59,6 +69,12 @@ export function EditEngagementDialog({
         engagement_name: name.trim() || null,
         voice_enabled: voice,
         reminders_enabled: reminders,
+        // Only sent when the org allows it — never resend a stale `true`
+        // for an org whose access has since been revoked (the checkbox is
+        // disabled in that case; see `reactiveCardsAllowed` below).
+        ...(reactiveCardsAllowed
+          ? { reactive_cards_enabled: reactiveCards }
+          : {}),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["engagement", engagementId] });
@@ -100,6 +116,22 @@ export function EditEngagementDialog({
               onCheckedChange={setReminders}
             />
             <Label htmlFor="ee-reminders">Send reminder emails</Label>
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="ee-reactive"
+                checked={reactiveCards}
+                onCheckedChange={setReactiveCards}
+                disabled={!reactiveCardsAllowed}
+              />
+              <Label htmlFor="ee-reactive">AI follow-up questions</Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {reactiveCardsAllowed
+                ? "When a respondent corrects an answer, propose a short AI-generated follow-up card, live in their session."
+                : "Ask an Axiolo admin to enable reactive cards for your organization first."}
+            </p>
           </div>
           {error ? (
             <p className="text-sm text-destructive" role="alert">

@@ -13,7 +13,14 @@ vi.mock("@/lib/api", () => ({
   adminApi: { uploadDownloadUrl: (id: string) => `/dl/${id}` },
 }));
 
-import { fmtSize, recipientLabel, ResponseBody, StateBadge } from "./parts";
+import {
+  AiFollowupBadge,
+  AiFollowupCountBadge,
+  fmtSize,
+  recipientLabel,
+  ResponseBody,
+  StateBadge,
+} from "./parts";
 
 function makeCard(over: Partial<CardModel> = {}): CardModel {
   return {
@@ -179,5 +186,170 @@ describe("helpers", () => {
     expect(fmtSize(500)).toBe("500 B");
     expect(fmtSize(2048)).toBe("2 KB");
     expect(fmtSize(5 * 1024 * 1024)).toBe("5.0 MB");
+  });
+});
+
+function recipient(over: Partial<Recipient> = {}): Recipient {
+  return {
+    id: "r1",
+    engagement_id: "e1",
+    email: "renee@example.com",
+    name: "Renee",
+    token: "0123456789abcdef",
+    last_active_at: null,
+    invited_at: null,
+    last_reminded_at: null,
+    reminder_count: 0,
+    unsubscribed_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    completed_count: 0,
+    total_cards: 0,
+    ...over,
+  };
+}
+
+describe("AiFollowupBadge", () => {
+  it("renders nothing for an operator-authored card (source omitted or explicit)", () => {
+    const { container, rerender } = render(
+      <AiFollowupBadge
+        card={makeCard()}
+        recipients={[]}
+        cards={[]}
+        responses={[]}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+
+    rerender(
+      <AiFollowupBadge
+        card={makeCard({ source: "operator" })}
+        recipients={[]}
+        cards={[]}
+        responses={[]}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders the AI badge with recipient attribution when the recipient resolves", () => {
+    render(
+      <AiFollowupBadge
+        card={makeCard({ source: "ai", recipient_id: "r1" })}
+        recipients={[recipient({ id: "r1", email: "renee@example.com" })]}
+        cards={[]}
+        responses={[]}
+      />,
+    );
+    expect(screen.getByText("AI follow-up · for renee@example.com")).toBeInTheDocument();
+  });
+
+  it("renders the bare badge when the recipient can't be resolved", () => {
+    render(
+      <AiFollowupBadge
+        card={makeCard({ source: "ai", recipient_id: "missing" })}
+        recipients={[]}
+        cards={[]}
+        responses={[]}
+      />,
+    );
+    expect(screen.getByText("AI follow-up")).toBeInTheDocument();
+  });
+
+  it("tooltip resolves the triggering card's title when the chain is resolvable", () => {
+    const parent = makeCard({ id: "parent1", title: "Confirm your legal name" });
+    const triggerResponse = { id: "resp1", card_id: "parent1" } as ClientResponse;
+
+    render(
+      <AiFollowupBadge
+        card={makeCard({
+          id: "ai1",
+          source: "ai",
+          recipient_id: "r1",
+          generated_from_response_id: "resp1",
+        })}
+        recipients={[recipient({ id: "r1" })]}
+        cards={[parent]}
+        responses={[triggerResponse]}
+      />,
+    );
+    const badge = screen.getByText("AI follow-up · for renee@example.com");
+    expect(badge.closest("[title]")).toHaveAttribute(
+      "title",
+      'Generated from a correction on "Confirm your legal name"',
+    );
+  });
+
+  it("tooltip falls back to a generic label when the trigger chain can't be resolved", () => {
+    render(
+      <AiFollowupBadge
+        card={makeCard({ source: "ai", recipient_id: "r1" })}
+        recipients={[recipient({ id: "r1" })]}
+        cards={[]}
+        responses={[]}
+      />,
+    );
+    const badge = screen.getByText("AI follow-up · for renee@example.com");
+    expect(badge.closest("[title]")).toHaveAttribute(
+      "title",
+      "AI-generated follow-up card",
+    );
+  });
+
+  it("escapes a hostile card title in the tooltip instead of rendering it as HTML", () => {
+    const hostileTitle = '<img src=x onerror="window.__pwned=true">';
+    const parent = makeCard({ id: "parent1", title: hostileTitle });
+    const triggerResponse = { id: "resp1", card_id: "parent1" } as ClientResponse;
+
+    render(
+      <AiFollowupBadge
+        card={makeCard({
+          id: "ai1",
+          source: "ai",
+          recipient_id: "r1",
+          generated_from_response_id: "resp1",
+        })}
+        recipients={[recipient({ id: "r1" })]}
+        cards={[parent]}
+        responses={[triggerResponse]}
+      />,
+    );
+    // The hostile string must land verbatim in the `title` attribute (plain
+    // text, never interpreted as markup) — and no such element must have
+    // actually been injected into the DOM.
+    const badge = screen.getByText("AI follow-up · for renee@example.com");
+    expect(badge.closest("[title]")).toHaveAttribute(
+      "title",
+      `Generated from a correction on "${hostileTitle}"`,
+    );
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+    expect(
+      (window as unknown as { __pwned?: boolean }).__pwned,
+    ).toBeUndefined();
+  });
+});
+
+describe("AiFollowupCountBadge", () => {
+  it("renders nothing when count is 0", () => {
+    const { container } = render(<AiFollowupCountBadge count={0} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders +N with a singular label at count 1", () => {
+    render(<AiFollowupCountBadge count={1} />);
+    const badge = screen.getByText("+1");
+    expect(badge).toHaveAttribute("title", "1 AI follow-up question added");
+    expect(badge).toHaveAttribute(
+      "aria-label",
+      "1 AI follow-up question added",
+    );
+  });
+
+  it("renders +N with a plural label when count > 1", () => {
+    render(<AiFollowupCountBadge count={3} />);
+    const badge = screen.getByText("+3");
+    expect(badge).toHaveAttribute(
+      "title",
+      "3 AI follow-up questions added",
+    );
   });
 });

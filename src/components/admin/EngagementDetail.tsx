@@ -39,7 +39,13 @@ import {
   EditEngagementDialog,
 } from "./detail/EngagementDialogs";
 import { RecipientsPanel } from "./detail/RecipientsPanel";
-import { rcKey, recipientLabel, ResponseBody, StateBadge } from "./detail/parts";
+import {
+  AiFollowupBadge,
+  rcKey,
+  recipientLabel,
+  ResponseBody,
+  StateBadge,
+} from "./detail/parts";
 import { AdminError, AdminLoading } from "./states";
 
 function buildMarkdown(detail: EngagementDetailData): string {
@@ -174,7 +180,15 @@ function CardBlock({
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Card {card.order_index} · {card.category}
           </p>
-          <h3 className="mt-0.5 font-semibold text-foreground">{card.title}</h3>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2">
+            <h3 className="font-semibold text-foreground">{card.title}</h3>
+            <AiFollowupBadge
+              card={card}
+              recipients={detail.recipients}
+              cards={detail.cards}
+              responses={detail.responses}
+            />
+          </div>
         </div>
         <div className="flex shrink-0 gap-1">
           <Button variant="ghost" size="icon" onClick={onEdit} aria-label="Edit card">
