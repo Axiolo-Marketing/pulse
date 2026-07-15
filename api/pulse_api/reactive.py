@@ -52,11 +52,20 @@ logger = logging.getLogger(__name__)
 
 # USD per million tokens, (input, output). Looked up at call time so a
 # later price change never rewrites a past generation's recorded cost.
-# Unknown models record tokens but no cost estimate (the dev-fake "fake"
-# model is handled separately in `run_generation` — it always records
+# Covers every model REACTIVE_MODEL can reasonably point at (list
+# prices — Sonnet 5's temporary intro discount is ignored so estimates
+# stay conservative). Unknown models still generate fine and record
+# token counts, just with no cost estimate (the dev-fake "fake" model
+# is handled separately in `run_generation` — it always records
 # `Decimal("0")`, not `None`, since it's a known no-cost stand-in).
 MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "claude-fable-5": (10.00, 50.00),
     "claude-opus-4-8": (5.00, 25.00),
+    "claude-opus-4-7": (5.00, 25.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-sonnet-5": (3.00, 15.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
 }
 
 _VALID_RESPONSE_TYPES = {"single-select", "multi-select", "short-text", "long-text"}
