@@ -1,5 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
+import { toast } from "sonner";
 
+import { Toaster } from "@/components/ui/sonner";
 import {
   clientApi,
   type Card as CardModel,
@@ -115,7 +117,14 @@ export default function DeckApp(): React.ReactElement {
   if (boot.status === "error") {
     return <DeckError title={boot.title} body={boot.body} />;
   }
-  return <DeckRunner token={boot.token} boot={boot.data} />;
+  // The Toaster mounts here (not in DeckRunner) so a toast fired right
+  // before the complete screen replaces the card view still gets rendered.
+  return (
+    <>
+      <DeckRunner token={boot.token} boot={boot.data} />
+      <Toaster position="top-center" />
+    </>
+  );
 }
 
 function DeckRunner({
@@ -447,6 +456,10 @@ function DeckRunner({
     setResponses((m) => new Map(m).set(current.id, saved));
     clientApi.heartbeat(token).catch(() => {});
 
+    // The "Send note" path gets an explicit confirmation — the deck advances
+    // right after, so the toast is the signal the note actually went through.
+    if (action.kind === "note") toast.success("Note sent");
+
     // Only act on this save if the recipient is still on the card we saved
     // (mirrors app.ts's cardIndex capture).
     if (indexRef.current !== startIndex) return;
@@ -476,6 +489,8 @@ function DeckRunner({
     onEditSubmit: (correction) => void performSave({ kind: "edit", correction }),
     onSingleSelect: (option, note) =>
       void performSave({ kind: "single-select", option, note }),
+    onNoteSubmit: (note, option) =>
+      void performSave({ kind: "note", note, option }),
     onMultiSelectSubmit: (options, note) =>
       void performSave({ kind: "multi-select", options, note }),
     onTextSubmit: (text, note) =>

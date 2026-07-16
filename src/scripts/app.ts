@@ -21,6 +21,7 @@ import {
   renderComplete,
   renderError,
   renderLoading,
+  showToast,
   type CardHandlers,
   type CardMode,
   type CompletedUpload,
@@ -310,6 +311,9 @@ function runApp(ctx: RunCtx): void {
     | { kind: "edit"; correction: string }
     | { kind: "skip"; note?: string }
     | { kind: "single-select"; option: string; note?: string }
+    // The note as the answer itself (single-select's "Send note" button);
+    // `option` preserves the currently-highlighted choice, if any.
+    | { kind: "note"; note: string; option?: string }
     | { kind: "multi-select"; options: string[]; note?: string }
     | { kind: "text"; text: string; note?: string }
     | { kind: "link"; url: string; note?: string }
@@ -713,6 +717,12 @@ function runApp(ctx: RunCtx): void {
         state = "answered";
         value = withNote({ selected: action.option }, action.note);
         break;
+      case "note":
+        state = "answered";
+        value = action.option
+          ? { selected: action.option, note: action.note }
+          : { note: action.note };
+        break;
       case "multi-select":
         state = "answered";
         value = withNote({ selected: action.options }, action.note);
@@ -772,6 +782,10 @@ function runApp(ctx: RunCtx): void {
 
     clearRetryTimer();
     responses.set(card.id, saved);
+
+    // The "Send note" path gets an explicit confirmation — the deck advances
+    // right after, so the toast is the signal the note actually went through.
+    if (action.kind === "note") showToast("Note sent");
 
     // Best-effort heartbeat — errors are non-fatal.
     clientApi
@@ -1078,6 +1092,9 @@ function runApp(ctx: RunCtx): void {
     onSingleSelect: (option, note) => {
       draftSelections = new Set([option]);
       void performSave({ kind: "single-select", option, note });
+    },
+    onNoteSubmit: (note, option) => {
+      void performSave({ kind: "note", note, option });
     },
     onMultiSelectSubmit: (options, note) => {
       void performSave({ kind: "multi-select", options, note });

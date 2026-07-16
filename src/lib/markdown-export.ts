@@ -117,7 +117,9 @@ function renderResponseBody(
           ].join("\n");
       break;
     case "single-select":
-      body = `**${v.selected ?? ""}**`;
+      // A note-only answer (the deck's "Send note" path) has no `selected`;
+      // the note suffix below carries the whole response.
+      body = v.selected ? `**${v.selected}**` : "_No option selected._";
       break;
     case "multi-select": {
       const arr = Array.isArray(v.selected) ? v.selected : [];

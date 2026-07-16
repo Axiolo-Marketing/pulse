@@ -132,6 +132,11 @@ export interface CardHandlers {
   onEditSubmit: (correction: string) => void;
   // typed inputs (each carries an optional free-form note)
   onSingleSelect: (option: string, note?: string) => void;
+  /** The note field's own submit — only single-select cards render it (every
+   * other type folds the note into its primary submit button). `option`
+   * carries the currently-highlighted choice, if any, so a note sent after
+   * tapping an option doesn't clobber the selection. */
+  onNoteSubmit: (note: string, option?: string) => void;
   onMultiSelectSubmit: (options: string[], note?: string) => void;
   onTextSubmit: (text: string, note?: string) => void;
   onLinkSubmit: (url: string, note?: string) => void;
@@ -724,9 +729,22 @@ function renderActions(
         <button class="btn btn-secondary" type="button" data-action="edit-start" ${dis}>Needs edit</button>
         ${skipBtn}
       `;
-    case "single-select":
-      // Single-select auto-saves on tap; no Continue button needed.
-      return skipBtn;
+    case "single-select": {
+      // Options auto-save on tap. The button below is the note's own submit
+      // path — for a respondent whose answer is the free-form note itself,
+      // or who typed one after tapping an option. It starts disabled until
+      // the note has text; attachHandlers wires the enable/disable toggle.
+      const priorNote =
+        ((args.existingResponse?.response_value ?? {}) as { note?: string })
+          .note ?? "";
+      const noteDisabled = saving || priorNote.trim() === "";
+      return `
+        <button class="btn btn-primary" type="button" data-action="note-submit" ${
+          noteDisabled ? "disabled" : ""
+        }>${savingLabel ?? "Send note"}</button>
+        ${skipBtn}
+      `;
+    }
     case "multi-select":
       return `
         <button class="btn btn-primary" type="button" data-action="multi-submit" ${dis}>${
@@ -855,9 +873,23 @@ function attachHandlers(mount: HTMLElement, args: RenderCardArgs): void {
   for (const btn of mount.querySelectorAll<HTMLButtonElement>(
     "button[data-action]"
   )) {
-    if (btn.disabled) continue;
+    // note-submit starts disabled until the note has text (see below); wire
+    // its click anyway — a disabled button fires no events, and the input
+    // listener enables it in place without a re-render.
+    if (btn.disabled && btn.dataset.action !== "note-submit") continue;
     const action = btn.dataset.action;
     btn.addEventListener("click", () => dispatch(mount, action, btn, handlers));
+  }
+
+  // Enable the note's own submit only while the note has text.
+  const noteSubmit = mount.querySelector<HTMLButtonElement>(
+    "button[data-action='note-submit']"
+  );
+  const noteInput = mount.querySelector<HTMLTextAreaElement>("#note-input");
+  if (noteSubmit && noteInput) {
+    noteInput.addEventListener("input", () => {
+      noteSubmit.disabled = noteInput.value.trim() === "";
+    });
   }
 
   // File input is not a <button>, so it needs its own listener.
@@ -941,6 +973,19 @@ function dispatch(
     case "toggle-single": {
       const opt = btn.dataset.option ?? "";
       handlers.onSingleSelect(opt, readNote(mount));
+      return;
+    }
+    case "note-submit": {
+      const note = readNote(mount);
+      if (!note) {
+        // Defensive — the button is disabled while the note is empty.
+        mount.querySelector<HTMLTextAreaElement>("#note-input")?.focus();
+        return;
+      }
+      const selected = mount.querySelector<HTMLButtonElement>(
+        "button[data-action='toggle-single'].selected"
+      )?.dataset.option;
+      handlers.onNoteSubmit(note, selected);
       return;
     }
     case "toggle-multi": {
@@ -1054,4 +1099,19 @@ function readNote(mount: HTMLElement): string | undefined {
   const ta = mount.querySelector<HTMLTextAreaElement>("#note-input");
   const v = (ta?.value ?? "").trim();
   return v || undefined;
+}
+
+/** Transient confirmation notice ("Note sent"), bottom-center, auto-dismissed.
+ * Never a window.alert/confirm — errors keep using the inline save banner. */
+export function showToast(message: string): void {
+  document.querySelector(".deck-toast")?.remove();
+  const el = document.createElement("div");
+  el.className = "deck-toast";
+  el.setAttribute("role", "status");
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("is-leaving");
+    setTimeout(() => el.remove(), 300);
+  }, 2200);
 }

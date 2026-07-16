@@ -7,6 +7,9 @@ export type PendingAction =
   | { kind: "edit"; correction: string }
   | { kind: "skip"; note?: string }
   | { kind: "single-select"; option: string; note?: string }
+  // The note as the answer itself (single-select's "Send note" button);
+  // `option` preserves the currently-highlighted choice, if any.
+  | { kind: "note"; note: string; option?: string }
   | { kind: "multi-select"; options: string[]; note?: string }
   | { kind: "text"; text: string; note?: string }
   | { kind: "link"; url: string; note?: string }
@@ -67,6 +70,12 @@ export function encodeResponse(
     case "single-select":
       state = "answered";
       value = withNote({ selected: action.option }, action.note);
+      break;
+    case "note":
+      state = "answered";
+      value = action.option
+        ? { selected: action.option, note: action.note }
+        : { note: action.note };
       break;
     case "multi-select":
       state = "answered";

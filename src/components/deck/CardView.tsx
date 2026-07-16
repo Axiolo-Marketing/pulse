@@ -123,6 +123,7 @@ function InputForType({
           saving={saving}
           existing={existing}
           onSelect={handlers.onSingleSelect}
+          onNoteSubmit={handlers.onNoteSubmit}
           onSkip={handlers.onSkip}
         />
       );
@@ -261,7 +262,12 @@ export function CardView({
             {mode === "waiting" ? (
               <WaitingStatus />
             ) : (
+              // Keyed by card so draft state (typed note/text, local
+              // selections) resets when the deck advances — consecutive
+              // cards of the same type would otherwise reuse the same
+              // component instance and inherit the previous card's drafts.
               <InputForType
+                key={card.id}
                 card={card}
                 mode={mode}
                 saving={saving}

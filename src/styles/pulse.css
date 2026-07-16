@@ -1207,3 +1207,31 @@ button:focus-visible {
 @media (min-width: 720px) {
   .modal-panel { margin: 32px; }
 }
+
+/* ── Toast (transient confirmation, e.g. "Note sent") ────────────────── */
+
+.deck-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 120;
+  background: var(--ink);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(10, 15, 46, 0.25);
+  animation: deck-toast-in 0.2s ease-out;
+}
+
+.deck-toast.is-leaving {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+@keyframes deck-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}

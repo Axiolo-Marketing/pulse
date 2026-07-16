@@ -26,6 +26,22 @@ describe("encodeResponse — response_value parity with app.ts", () => {
     });
   });
 
+  it("note (Send note, nothing selected) → answered { note }", () => {
+    expect(encodeResponse({ kind: "note", note: "call me first" })).toEqual({
+      state: "answered",
+      response_value: { note: "call me first" },
+    });
+  });
+
+  it("note with a highlighted option keeps it → { selected, note }", () => {
+    expect(
+      encodeResponse({ kind: "note", note: "but rename it", option: "B" }),
+    ).toEqual({
+      state: "answered",
+      response_value: { selected: "B", note: "but rename it" },
+    });
+  });
+
   it("multi-select → answered { selected: [...] }", () => {
     expect(
       encodeResponse({ kind: "multi-select", options: ["A", "C"] }),

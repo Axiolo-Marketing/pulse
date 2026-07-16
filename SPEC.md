@@ -133,7 +133,7 @@ Every interaction in Pulse is a card. A card is a single unit of decision or inp
 | Type | Behavior | response_value shape |
 |---|---|---|
 | `confirm-edit` | Yes / Needs edit / Skip. Edit opens a textarea pre-filled with the prior correction or `default_value`. | `{confirmed: true}` or `{confirmed: false, correction}` |
-| `single-select` | 2–5 mutually exclusive options. Auto-saves on tap and advances. | `{selected, note?}` |
+| `single-select` | 2–5 mutually exclusive options. Auto-saves on tap and advances. A typed note can also be sent on its own via the "Send note" button (enabled once the note has text) — it saves as answered, keeps any highlighted option, confirms with a "Note sent" toast, and advances. | `{selected, note?}` or `{note}` (note-only) |
 | `multi-select` | 2–9 options. Toggle any number, then Continue. | `{selected: [...], note?}` |
 | `short-text` | Single-line input. | `{text}` |
 | `long-text` | Multi-line textarea. Voice-friendly placeholder. | `{text}` |

@@ -165,7 +165,13 @@ export function ResponseBody({
         );
         break;
       case "single-select":
-        content = <p className="font-medium">{String(v.selected ?? "")}</p>;
+        // A note-only answer (the deck's "Send note" path) has no
+        // `selected`; the Note line below carries the whole response.
+        content = v.selected ? (
+          <p className="font-medium">{String(v.selected)}</p>
+        ) : (
+          <Muted>No option selected.</Muted>
+        );
         break;
       case "multi-select": {
         const arr = Array.isArray(v.selected) ? v.selected : [];

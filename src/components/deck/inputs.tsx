@@ -158,12 +158,14 @@ export function SingleSelectInput({
   saving,
   existing,
   onSelect,
+  onNoteSubmit,
   onSkip,
 }: {
   card: CardModel;
   saving: boolean;
   existing?: ClientResponse;
   onSelect: (option: string, note?: string) => void;
+  onNoteSubmit: (note: string, option?: string) => void;
   onSkip: (note?: string) => void;
 }): React.ReactElement {
   const prior = priorValue(existing);
@@ -203,6 +205,16 @@ export function SingleSelectInput({
       </div>
       <NoteField value={note} onChange={setNote} disabled={saving} />
       <Actions>
+        {/* Options auto-save on tap; this is the note's own submit path —
+            for a respondent whose answer is the free-form note itself, or
+            who typed one after tapping an option. */}
+        <Button
+          type="button"
+          disabled={saving || note.trim() === ""}
+          onClick={() => onNoteSubmit(note.trim(), selected ?? undefined)}
+        >
+          {saving ? "Saving…" : "Send note"}
+        </Button>
         <SkipButton
           card={card}
           saving={saving}

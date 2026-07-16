@@ -50,6 +50,7 @@ describe("SingleSelectInput", () => {
         card={card}
         saving={false}
         onSelect={onSelect}
+        onNoteSubmit={vi.fn()}
         onSkip={vi.fn()}
       />,
     );
@@ -66,6 +67,7 @@ describe("SingleSelectInput", () => {
         saving={false}
         existing={priorResponse({ selected: "C" })}
         onSelect={vi.fn()}
+        onNoteSubmit={vi.fn()}
         onSkip={vi.fn()}
       />,
     );
@@ -73,6 +75,44 @@ describe("SingleSelectInput", () => {
       "aria-checked",
       "true",
     );
+  });
+
+  it("Send note is disabled until the note has text, then submits it", async () => {
+    const onNoteSubmit = vi.fn();
+    render(
+      <SingleSelectInput
+        card={card}
+        saving={false}
+        onSelect={vi.fn()}
+        onNoteSubmit={onNoteSubmit}
+        onSkip={vi.fn()}
+      />,
+    );
+    const send = screen.getByRole("button", { name: /send note/i });
+    expect(send).toBeDisabled();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/notes/i), "  just a note  ");
+    expect(send).toBeEnabled();
+    await user.click(send);
+    expect(onNoteSubmit).toHaveBeenCalledWith("just a note", undefined);
+  });
+
+  it("Send note keeps the prior selection", async () => {
+    const onNoteSubmit = vi.fn();
+    render(
+      <SingleSelectInput
+        card={card}
+        saving={false}
+        existing={priorResponse({ selected: "C" })}
+        onSelect={vi.fn()}
+        onNoteSubmit={onNoteSubmit}
+        onSkip={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/notes/i), "more context");
+    await user.click(screen.getByRole("button", { name: /send note/i }));
+    expect(onNoteSubmit).toHaveBeenCalledWith("more context", "C");
   });
 });
 
