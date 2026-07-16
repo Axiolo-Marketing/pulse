@@ -89,13 +89,15 @@ install-hooks:
 
 # ── Production deploy via Ansible ─────────────────────────────────────────
 # The Astro + Python build runs on the VPS (git pull → uv sync → npm build),
-# so there is no local build step here. The vault password is read from
-# deploy/vault_secret (gitignored); `--ask-become-pass` prompts once for the
-# VPS sudo password. `deploy-check` is the safety net — always read every diff
-# before running `deploy-apply` against the shared VPS. See deploy/README.md.
+# so there is no local build step here. Both targets delegate to ./deploy.sh —
+# the standard entry point shared in shape with the other Axiolo deploys
+# (sitechecker, octoping). The vault password is read from deploy/vault_secret
+# (gitignored); the script prompts once for the VPS sudo password.
+# `deploy-check` is the safety net — always read every diff before running
+# `deploy-apply` against the shared VPS. See deploy/README.md.
 
 deploy-check:
-	cd deploy && ansible-playbook deploy.yml --vault-password-file vault_secret --ask-become-pass --check --diff
+	./deploy.sh --check
 
 deploy-apply:
-	cd deploy && ansible-playbook deploy.yml --vault-password-file vault_secret --ask-become-pass
+	./deploy.sh

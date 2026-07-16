@@ -173,16 +173,40 @@ run. Migration `0004_multi_tenant.py` also creates `pulse_member` inside a
 
 The playbook clones the repo on the VPS and builds the Astro frontend
 there. **Commit and push first** — Ansible deploys whatever is on
-`{{ pulse_repo_branch }}` at origin, not your working tree.
+`{{ pulse_repo_branch }}` at origin, not your working tree (the script
+warns if your local branch differs from origin).
+
+`./deploy.sh` at the repo root is the standard entry point — the same
+script shape as the other Axiolo deploys (sitechecker, octoping). It reads
+the vault password from `deploy/vault_secret`, prompts once for the VPS
+sudo password, and runs the playbook from `deploy/` so `ansible.cfg`
+applies. `make deploy-check` / `make deploy-apply` are thin aliases.
 
 ```bash
-git push    # make sure main is up-to-date
+git push          # make sure main is up-to-date
 
 # DRY RUN — read every diff. Anything outside Pulse's owned paths is a bug.
-ansible-playbook deploy.yml --ask-vault-pass --check --diff
+./deploy.sh --check
 
 # APPLY for real.
-ansible-playbook deploy.yml --ask-vault-pass
+./deploy.sh
+```
+
+Useful variations (see `./deploy.sh --help` for the full list):
+
+```bash
+./deploy.sh --branch feat/xyz        # deploy a specific branch
+./deploy.sh --tags backend,frontend  # run only specific roles
+./deploy.sh --diff                   # apply, showing every diff
+BECOME_PASSWORD=... ./deploy.sh      # non-interactive sudo password
+```
+
+The raw playbook invocation still works if you need something the script
+doesn't wrap:
+
+```bash
+cd deploy/
+ansible-playbook deploy.yml --vault-password-file vault_secret --ask-become-pass --check --diff
 ```
 
 ## After the first successful deploy
@@ -213,9 +237,8 @@ ansible-playbook deploy.yml --ask-vault-pass
    superadmin's email in `owner_emails`.
 
 4. **Other apps on the shared box are still up.** Open their URLs, check
-   their service status. If anything regressed,
-   `ansible-playbook deploy.yml --check --diff` will help you see what was
-   applied.
+   their service status. If anything regressed, `./deploy.sh --check` will
+   help you see what was applied.
 
 ## Onboarding a new tenant org
 
@@ -253,8 +276,7 @@ then `DELETE /api/superadmin/orgs/{org_id}` via the UI button.
 
 ```bash
 git push
-cd deploy/
-ansible-playbook deploy.yml --ask-vault-pass
+./deploy.sh
 ```
 
 The `backend` role `git pull`s on the VPS, runs `uv sync --frozen`, runs

@@ -1,7 +1,8 @@
 # Deploy configuration. Non-secret values are plain; secrets are inline
 # ansible-vault encrypted strings at the bottom of this file (decrypted at
-# runtime via --vault-password-file). Run the playbook with `make deploy-check`
-# / `make deploy-apply`, which pass the vault password file automatically.
+# runtime via --vault-password-file). Run the playbook with `./deploy.sh`
+# at the repo root (or `make deploy-check` / `make deploy-apply`, which
+# delegate to it) — the script passes the vault password file automatically.
 
 # ── Identity ──────────────────────────────────────────────────────────────
 pulse_domain: pulse.axiolo.com

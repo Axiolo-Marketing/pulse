@@ -5,9 +5,9 @@
 # inside Pulse's slice. First run should always include `--check --diff` so
 # the operator can read every diff before applying for real.
 #
-# Usage:
-#   ansible-playbook deploy.yml --ask-vault-pass --check --diff   # preview
-#   ansible-playbook deploy.yml --ask-vault-pass                  # apply
+# Usage (./deploy.sh at the repo root is the standard entry point):
+#   ./deploy.sh --check   # preview — runs with --check --diff
+#   ./deploy.sh           # apply
 #
 # Bootstrap notes for DNS, sudo, and intentional global config live in
 # deploy/README.md.
