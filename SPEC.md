@@ -31,7 +31,7 @@ For the operational runbook — "how to onboard a new client end-to-end" — see
 
 Pulse is a mobile-first decision and validation tool. A consultant (the operator) sends a single secure link to a client. The client opens the link on any device, taps through a sequence of pre-populated decision cards, confirms or corrects what we already know, and uploads documents where needed. Progress saves automatically. The client can stop and resume at any time from any device with the same link.
 
-The operator sees responses in real time as they arrive, edits card text directly when wording needs to change, and exports responses to whatever project management or operations system the engagement uses (in v1, that is ClickUp).
+The operator sees responses in real time as they arrive, edits card text directly when wording needs to change, and copies responses out as Markdown to paste into whatever project management or operations system the engagement uses.
 
 ### Why Pulse Exists
 
@@ -91,7 +91,7 @@ Every engagement starts with a one-page profile capturing how *this* client move
 - A representative quote so anyone reading can hear their voice
 - What this means for their deck (card order, tone, response types to favor)
 
-The brief lives in `clients.brief` and is edited from `/admin/`. New briefs open with a structured template pre-filled so the shape is right from the first keystroke. Click **Copy as Markdown** to share the brief with the client, the team, or anywhere markdown pastes (email, Slack, ClickUp).
+The brief lives in `clients.brief` and is edited from `/admin/`. New briefs open with a structured template pre-filled so the shape is right from the first keystroke. Click **Copy as Markdown** to share the brief with the client, the team, or anywhere markdown pastes (email, Slack, docs).
 
 The first deployment is **Renee Mueller** (GLC). The second is **Josh Rosen** (HotSpex). Both briefs are accessible inside the admin at their respective engagement detail pages.
 
@@ -107,7 +107,7 @@ Tom is the consultant running every engagement. He uses Pulse from a desktop bro
 - Sends the URL to the client via SMS or email
 - Watches responses arrive in real time (admin engagement detail)
 - Edits card wording when needed (admin → Edit on each card)
-- Exports responses to ClickUp (admin → Copy as Markdown, per-card or whole engagement)
+- Exports responses as Markdown (admin → Copy as Markdown, per-card or whole engagement)
 - Shares the brief with the client or team (admin → Copy brief as Markdown)
 
 Tom is the only operator. There is no multi-user admin in v1. The admin is gated by a single shared password.
@@ -526,7 +526,6 @@ Header with "+ New engagement" button. Table with one row per client:
   - Title
   - State badge (Answered green / Skipped amber / Viewed gray / Not viewed gray)
   - Formatted response body
-  - Suggested ClickUp status dropdown (override-able)
   - Timestamp ("Answered 5 minutes ago" or "Viewed 2 hours ago")
   - **Edit** button + **Delete** button + **Copy** button
 - "+ Add card" trigger at the bottom
@@ -552,7 +551,7 @@ Save PATCHes the `cards` row, updates local state, re-renders the article. Cance
 
 **Delete** prompts for confirmation listing what cascades (responses, uploads, storage objects). FK cascade handles responses/uploads; storage objects are best-effort removed.
 
-### ClickUp Markdown Export
+### Markdown Export
 
 Format per §14.3. Two paths:
 - **Per-card Copy** button — single card's block.
@@ -676,7 +675,7 @@ wire it via the admin Edit form (Active reference path = `deliverables/<slug>.ht
 |---|---|---|
 | M1–M4 | Project scaffold + RLS + all response types + attachments | #1 |
 | M5–M6 | Save/resume + brand polish + auto-retry | #1 |
-| M7 | `/admin` with password gate + ClickUp export | #1 |
+| M7 | `/admin` with password gate + Markdown export | #1 |
 | M8 | GitHub Actions deploy + first production deploy | #1 |
 | Post-M8 | Back/forward navigation + slide picker | #2 |
 | Post-M8 | Notes textarea on every card; Card 13 wording | #3 |
@@ -701,7 +700,7 @@ The whole flow happens in `/admin/` — no terminal, no git, no files.
 
 3. Click **+ Write brief** at the top. A markdown editor opens, pre-filled with a structured template (profile, deck sketch, source material, ops log, handoff checklist).
 4. Fill in what you know about the client and what this engagement is trying to validate. Save.
-5. The brief is now editable inline at any time. Use **Copy as Markdown** to paste it into an email, Slack, ClickUp, or anywhere you want to share context with the client or the team.
+5. The brief is now editable inline at any time. Use **Copy as Markdown** to paste it into an email, Slack, docs, or anywhere you want to share context with the client or the team.
 
 **Author the cards:**
 
@@ -723,7 +722,7 @@ The whole flow happens in `/admin/` — no terminal, no git, no files.
 12. Watch responses arrive in the admin (refresh to see new state).
 13. Edit any card wording inline if you want to refine. Existing responses stay valid because they're tied to `card_id`, not the wording.
 14. Update the brief's operations log as the engagement progresses.
-15. When the client is done, **Copy all as Markdown** and paste the responses into ClickUp.
+15. When the client is done, **Copy all as Markdown** and paste the responses into your project management tool.
 
 **Hygiene:**
 
@@ -741,7 +740,7 @@ An engagement is successful if:
 2. They tap through at least half the deck in their first session.
 3. They return at least once and resume cleanly.
 4. They submit at least one substantive response (not just skips or confirms — an edit, a note, a file).
-5. Tom can see responses in the admin in real time and export them to ClickUp.
+5. Tom can see responses in the admin in real time and export them as Markdown.
 6. The client gives positive or neutral feedback. (Negative is informative.)
 7. The product feels like an Axiolo product, not a generic survey tool.
 
@@ -781,15 +780,13 @@ once decided, then re-run `make deploy-apply`.
 
 Single shared password. Hash stored as `PUBLIC_ADMIN_PASSWORD_HASH` (SHA-256 hex), inlined into the admin chunk at build. Login flag in `sessionStorage`; tab close ends the session.
 
-### 14.3 ClickUp Export Format
+### 14.3 Markdown Export Format
 
 ```
 # {Card Title}
 
-**Status:** {recommended_status}
-
-## Response from {Client Name}
-{response body, with Note: suffix if a note was provided}
+## Response from {Client Name} — {Recipient}
+{response body, with Voice answer / Note: suffix if provided}
 
 ## Original Context
 {the card's context}
@@ -800,26 +797,11 @@ Single shared password. Hash stored as `PUBLIC_ADMIN_PASSWORD_HASH` (SHA-256 hex
 ---
 ```
 
-One block per card, separated by `---` rules.
-
-**Recommended status** auto-suggested per the table below. Override per-card via dropdown before copying.
-
-| Response pattern | Status |
-|---|---|
-| Confirmed without edit | Axiolo Review |
-| Edited the existing content | Axiolo Review |
-| Uploaded a file | Axiolo Review |
-| Skipped a card | Waiting on Good Life |
-| Said they need help (regex on "need help") | Needs Attention |
-| Indicated a blocker (regex on "blocked", "stuck", "waiting on") | Blocked |
-| Card not yet viewed | Waiting on Good Life |
-| Selected "Done" or "Approved" or "Complete" | Approved |
-| Empty file-upload, empty multi-select | Waiting on Good Life |
-
-Valid status values:
-`Waiting on Axiolo`, `Waiting on Good Life`, `Needs Attention`, `Axiolo Review`, `Client Review`, `Blocked`, `Approved`, `Complete`.
-
-> The "Waiting on Good Life" label is a holdover from the first engagement. For non-GLC engagements, the operator can override per-card. Future enhancement: per-engagement default-status labels.
+One block per card, separated by `---` rules. When an engagement has more
+than one recipient, the export emits one set of blocks per recipient and the
+heading reads `Response from {Client Name} — {Recipient}`; a single-recipient
+export drops the ` — {Recipient}` suffix. The output is plain Markdown meant
+to paste into whatever project management or ops tool the engagement uses.
 
 ### 14.4 Timestamps
 

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-Pulse is a mobile-first decision/validation tool. A consultant sends a single secure URL to a client; the client taps through a deck of pre-populated decision cards on their phone, confirms/corrects/uploads, and progress saves continuously. The operator manages engagements in `/admin/` and exports responses to ClickUp.
+Pulse is a mobile-first decision/validation tool. A consultant sends a single secure URL to a client; the client taps through a deck of pre-populated decision cards on their phone, confirms/corrects/uploads, and progress saves continuously. The operator manages engagements in `/admin/` and copies responses out as Markdown.
 
-`SPEC.md` is the canonical product spec (data model, response-type semantics, ClickUp export format, operator runbook). Visual-identity sections may lag the actual codebase tokens — the CSS in `src/styles/` is authoritative for brand.
+`SPEC.md` is the canonical product spec (data model, response-type semantics, Markdown export format, operator runbook). Visual-identity sections may lag the actual codebase tokens — the CSS in `src/styles/` is authoritative for brand.
 
 The design document for the migration off Supabase to the current stack lives at `~/.claude/plans/now-that-you-know-inherited-allen.md`. It covers the **why** behind nearly every architectural choice. Read it before reopening anything load-bearing.
 
@@ -150,7 +150,7 @@ Schema in `api/migrations/versions/0001_initial_schema.py`. All raw SQL via `op.
 
 The `db-init` directory contains `01-pulse-roles.sql` — runs once on a fresh DB volume to create the `pulse_anon` + `pulse_admin` roles + the `pulse_test` database. In production this is done by the Ansible `postgres-pulse` role from vaulted vars.
 
-Adding a card response type means: (1) update the `response_type` CHECK constraint in a new Alembic migration, (2) extend the renderer in `src/scripts/app.ts`, (3) extend the admin display formatter in `admin.ts`, (4) extend `src/lib/status-suggest.ts` for ClickUp status. SPEC §4 has the canonical list + `response_value` shapes.
+Adding a card response type means: (1) update the `response_type` CHECK constraint in a new Alembic migration, (2) extend the renderer in `src/scripts/app.ts`, (3) extend the admin display formatter in `admin.ts`, (4) extend the export renderer in `src/lib/markdown-export.ts`. SPEC §4 has the canonical list + `response_value` shapes.
 
 ## File uploads
 

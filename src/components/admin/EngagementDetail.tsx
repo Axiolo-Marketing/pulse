@@ -27,7 +27,6 @@ import {
   renderCardMarkdown,
   renderEngagementMarkdown,
 } from "@/lib/markdown-export";
-import { suggestStatus } from "@/lib/status-suggest";
 import { formatTimestamp } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -64,7 +63,6 @@ function buildMarkdown(detail: EngagementDetailData): string {
           card,
           client: detail.engagement,
           response,
-          status: suggestStatus(card, response),
           uploads: ups.map((u) => ({
             id: u.id,
             name: u.file_name,

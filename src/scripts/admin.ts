@@ -33,10 +33,6 @@ import {
 } from "./settings";
 import { renderSuperadmin } from "./superadmin";
 import {
-  suggestStatus,
-  type Status,
-} from "../lib/status-suggest";
-import {
   renderCardMarkdown,
   renderEngagementMarkdown,
   type UploadInfo,
@@ -1713,10 +1709,6 @@ function renderDetail(
   const data = bucketDetail(payload);
   const { client, cards, responses, uploads, recipients } = data;
 
-  // Status export plumbing only — the inline status picker is gone, so this
-  // map stays empty and the export builders fall back to `suggestStatus`.
-  const statusOverrides = new Map<string, Status>();
-
   // Multi-respondent: responses/uploads are keyed by (recipient, card). The
   // detail is a by-question comparison view — every card shows ALL recipients'
   // answers stacked, so there's no "selected recipient" anymore.
@@ -1886,10 +1878,10 @@ function renderDetail(
   // heading per card). With no recipients, fall back to the no-recipient form.
   const buildAllMarkdown = (): string => {
     if (recipients.length === 0) {
-      return buildEngagementMarkdown(data, statusOverrides, undefined);
+      return buildEngagementMarkdown(data, undefined);
     }
     return recipients
-      .map((r) => buildEngagementMarkdown(data, statusOverrides, r))
+      .map((r) => buildEngagementMarkdown(data, r))
       .join("\n\n");
   };
 
@@ -2071,7 +2063,6 @@ function renderDetail(
             card,
             respOf(rid, card.id),
             upsOf(rid, card.id),
-            undefined,
             recipientById(rid),
           );
           await navigator.clipboard.writeText(md);
@@ -2931,7 +2922,7 @@ function formatBytes(bytes: number): string {
 
 function summarizeUploads(uploads: UploadRow[]): UploadInfo[] {
   // Voice answers are not file attachments — keep them out of the Markdown
-  // attachment summary so the ClickUp export still lists only `file` uploads.
+  // attachment summary so the export still lists only `file` uploads.
   return uploads
     .filter((u) => u.kind !== "voice")
     .map((u) => ({ id: u.id, name: u.file_name, sizeBytes: u.file_size_bytes }));
@@ -2942,15 +2933,12 @@ function buildSingleCardMarkdown(
   card: Card,
   response: ClientResponse | undefined,
   uploads: UploadRow[],
-  statusOverride: Status | undefined,
   recipient: Recipient | undefined,
 ): string {
-  const status = statusOverride ?? suggestStatus(card, response);
   return renderCardMarkdown({
     card,
     client,
     response,
-    status,
     uploads: summarizeUploads(uploads),
     recipientLabel: recipient ? recipientLabel(recipient) : undefined,
   });
@@ -2958,7 +2946,6 @@ function buildSingleCardMarkdown(
 
 function buildEngagementMarkdown(
   data: DetailViewData,
-  overrides: Map<string, Status>,
   recipient: Recipient | undefined,
 ): string {
   const label = recipient ? recipientLabel(recipient) : undefined;
@@ -2970,13 +2957,11 @@ function buildEngagementMarkdown(
     const uploads = recipient
       ? data.uploads.get(rcKey(recipient.id, card.id)) ?? []
       : [];
-    const status = overrides.get(card.id) ?? suggestStatus(card, response);
     blocks.push(
       renderCardMarkdown({
         card,
         client: data.client,
         response,
-        status,
         uploads: summarizeUploads(uploads),
         recipientLabel: label,
       })

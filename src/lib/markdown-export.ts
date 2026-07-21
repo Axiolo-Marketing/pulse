@@ -1,5 +1,4 @@
 import type { Card, ClientResponse, Engagement } from "./api";
-import type { Status } from "./status-suggest";
 
 export interface UploadInfo {
   id: string;
@@ -19,7 +18,6 @@ export interface ExportArgs {
   card: Card;
   client: Engagement;
   response: ClientResponse | undefined;
-  status: Status;
   /** Every upload for this card+recipient (both files and voice notes), each
    * with a download `url`. */
   uploads: UploadInfo[];
@@ -48,10 +46,10 @@ interface ResponseValueShape {
   note?: string;
 }
 
-// Render one card's response as a ClickUp-ready markdown block per spec
-// §14.3. Caller separates blocks with `---` rules.
+// Render one card's response as a paste-ready markdown block. Caller
+// separates blocks with `---` rules.
 export function renderCardMarkdown(args: ExportArgs): string {
-  const { card, client, response, status, uploads, recipientLabel } = args;
+  const { card, client, response, uploads, recipientLabel } = args;
 
   const responseBody = renderResponseBody(card, response, uploads);
   const heading = recipientLabel
@@ -60,8 +58,6 @@ export function renderCardMarkdown(args: ExportArgs): string {
 
   return [
     `# ${card.title}`,
-    "",
-    `**Status:** ${status}`,
     "",
     heading,
     responseBody,
