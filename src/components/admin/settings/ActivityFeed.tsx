@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { PersonAvatar } from "./parts";
+
 /** Stable dotted action enum → human-readable label. Kept in sync with
  * `AUDIT_ACTIONS` in `api/pulse_api/audit.py`. The keys double as the
  * "By action" filter's option values. */
@@ -29,6 +31,8 @@ const ACTION_LABELS: Record<string, string> = {
   "recipient.add": "Added respondent",
   "recipient.remove": "Removed respondent",
   "engagement.invites_sent": "Sent invites",
+  "client.contact_save": "Saved client contact",
+  "client.contact_remove": "Removed client contact",
   "card.create": "Added card",
   "card.update": "Edited card",
   "card.delete": "Deleted card",
@@ -84,6 +88,18 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
       return `reset engagement answers (${num(m.responses_cleared)} responses, ${num(m.uploads_cleared)} uploads cleared)`;
     case "card.import":
       return `imported ${num(m.count)} card(s)`;
+    case "engagement.invites_sent": {
+      const emails = Array.isArray(m.emails) ? m.emails.map(String) : [];
+      return emails.length
+        ? `emailed the deck to ${emails.join(", ")}`
+        : `emailed the deck to ${num(m.count)} respondent(s)`;
+    }
+    case "recipient.add":
+      return `added respondent ${str(m.email)}`;
+    case "client.contact_save":
+      return `saved client contact ${str(m.email)}`;
+    case "client.contact_remove":
+      return `removed client contact ${str(m.email)}`;
     case "card.reactive_generate": {
       const ids = Array.isArray(m.card_ids) ? m.card_ids : [];
       return `generated ${ids.length} AI follow-up card${ids.length === 1 ? "" : "s"}`;
@@ -119,12 +135,13 @@ function memberLabel(m: MemberRow): string {
 
 function ActivityRow({ entry }: { entry: ActivityEntry }): React.ReactElement {
   return (
-    <div className="flex items-start justify-between gap-4 py-3">
-      <p className="min-w-0 text-sm text-foreground">
+    <div className="flex items-start gap-3 px-5 py-3">
+      <PersonAvatar label={actorName(entry)} />
+      <p className="min-w-0 flex-1 pt-1.5 text-sm text-foreground">
         <span className="font-medium">{actorName(entry)}</span>{" "}
-        {formatActivityPhrase(entry)}
+        <span className="text-muted-foreground">{formatActivityPhrase(entry)}</span>
       </p>
-      <span className="shrink-0 text-xs text-muted-foreground">
+      <span className="shrink-0 pt-1.5 text-xs text-muted-foreground">
         {formatTimestamp(entry.created_at)}
       </span>
     </div>
@@ -193,13 +210,10 @@ export function ActivityFeed(): React.ReactElement {
   const hasFilters = actor !== "" || action !== "";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
       {/* Filters bar */}
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-5 py-3">
         <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">
-            By user
-          </span>
           <Select
             value={actor || ANY_ACTOR}
             onValueChange={(v) => {
@@ -207,11 +221,11 @@ export function ActivityFeed(): React.ReactElement {
               resetPages();
             }}
           >
-            <SelectTrigger className="w-52" aria-label="Filter by user">
+            <SelectTrigger className="h-8 w-44 bg-background" aria-label="Filter by user">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ANY_ACTOR}>Anyone</SelectItem>
+              <SelectItem value={ANY_ACTOR}>All people</SelectItem>
               {members.map((m) => (
                 <SelectItem key={m.user_id} value={m.user_id}>
                   {memberLabel(m)}
@@ -222,9 +236,6 @@ export function ActivityFeed(): React.ReactElement {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">
-            By action
-          </span>
           <Select
             value={action || ALL_ACTIONS}
             onValueChange={(v) => {
@@ -232,7 +243,7 @@ export function ActivityFeed(): React.ReactElement {
               resetPages();
             }}
           >
-            <SelectTrigger className="w-56" aria-label="Filter by action">
+            <SelectTrigger className="h-8 w-52 bg-background" aria-label="Filter by action">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -265,14 +276,14 @@ export function ActivityFeed(): React.ReactElement {
       {firstQuery.isPending ? (
         <div className="flex flex-col divide-y divide-border">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="flex items-center justify-between gap-4 py-3">
+            <div key={i} className="flex items-center justify-between gap-4 px-5 py-3">
               <Skeleton className="h-4 w-2/3" />
               <Skeleton className="h-3 w-20 shrink-0" />
             </div>
           ))}
         </div>
       ) : firstQuery.isError ? (
-        <p className="py-6 text-center text-sm text-destructive" role="alert">
+        <p className="px-5 py-6 text-center text-sm text-destructive" role="alert">
           Couldn't load activity. Please refresh and try again.
         </p>
       ) : (() => {
@@ -297,7 +308,7 @@ export function ActivityFeed(): React.ReactElement {
               ))}
             </div>
             {cursor ? (
-              <div className="mt-4 flex justify-center">
+              <div className="flex justify-center border-t border-border px-5 py-3">
                 <Button
                   variant="outline"
                   size="sm"

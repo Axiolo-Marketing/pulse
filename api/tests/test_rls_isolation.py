@@ -415,3 +415,43 @@ async def test_card_generations_visible_to_org_member_not_other_orgs(
         await db_conn.execute(text("select id::text from public.card_generations"))
     ).all()
     assert visible_other_org == [], "a different org's member saw this org's card_generations row"
+
+
+async def test_client_contacts_visible_only_to_owning_org(
+    db: AsyncSession,
+    db_conn: AsyncConnection,
+    seed_client: dict[str, str],
+) -> None:
+    """``client_contacts_member_scope`` (migration 0018): a member sees their
+    own org's saved contacts and none of another org's, and can't insert a
+    contact into another org."""
+    org_id, client_id = seed_client["org_id"], seed_client["client_id"]
+    await db.execute(
+        text(
+            "insert into public.client_contacts (org_id, client_id, email) "
+            "values (cast(:o as uuid), cast(:c as uuid), 'seen@example.com')"
+        ),
+        {"o": org_id, "c": client_id},
+    )
+
+    await become_member(db_conn, org_id=org_id)
+    emails = (
+        await db_conn.execute(text("select email from public.client_contacts"))
+    ).scalars().all()
+    assert emails == ["seen@example.com"]
+
+    await db_conn.execute(text("reset role"))
+    other_org = str(uuid.uuid4())
+    await become_member(db_conn, org_id=other_org)
+    assert (
+        await db_conn.execute(text("select email from public.client_contacts"))
+    ).all() == []
+
+    with pytest.raises(DBAPIError):
+        await db_conn.execute(
+            text(
+                "insert into public.client_contacts (org_id, client_id, email) "
+                "values (cast(:o as uuid), cast(:c as uuid), 'sneak@example.com')"
+            ),
+            {"o": org_id, "c": client_id},
+        )

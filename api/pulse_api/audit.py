@@ -24,12 +24,18 @@ string emitted by the route layer appears in this list.
 * ``engagement.update``     — engagement field change
 * ``engagement.delete``     — engagement permanently removed
 * ``engagement.reset``      — engagement responses + uploads wiped for re-run
+* ``engagement.invites_sent`` — operator emailed the deck link to chosen respondents
+* ``recipient.add``         — respondent added to an engagement (no email sent)
+* ``recipient.remove``      — respondent removed (their answers cascade)
+* ``client.contact_save``   — person saved (or updated) on a client's contact list
+* ``client.contact_remove`` — person removed from a client's contact list
 * ``card.create``           — single card added to an engagement
 * ``card.update``           — card field change
 * ``card.delete``           — card removed
 * ``card.import``           — bulk markdown import (one row per call)
 * ``card.reactive_generate`` — reactive-cards engine auto-inserted an AI follow-up card
 * ``attachment.upload``     — admin uploaded an active-reference file
+* ``upload.transcribe``     — operator (re)queued transcription of a voice answer
 * ``org.update``            — org name changed, or (superadmin) an org-level
   admin flag like ``reactive_cards_allowed`` changed
 * ``org.branding``          — org branding/theme overrides changed
@@ -67,14 +73,18 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "recipient.add",
         "recipient.remove",
         "engagement.invites_sent",
+        # Client contacts
+        "client.contact_save",
+        "client.contact_remove",
         # Card lifecycle
         "card.create",
         "card.update",
         "card.delete",
         "card.import",
         "card.reactive_generate",
-        # Attachments
+        # Attachments + uploads
         "attachment.upload",
+        "upload.transcribe",
         # Organization
         "org.update",
         "org.branding",

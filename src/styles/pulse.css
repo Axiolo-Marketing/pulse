@@ -1,9 +1,9 @@
 :root {
-  --primary:       #2960F6;
-  --primary-dark:  #020F82;
-  --primary-soft:  #E8EEFE;
-  --ink:           #0A0F2E;
-  --surface-muted: #F4F4F6;
+  --primary:       #171717;
+  --primary-dark:  #0A0A0A;
+  --primary-soft:  #F5F5F5;
+  --ink:           #0A0A0A;
+  --surface-muted: #FFFFFF;
   --border:        #E2E2E2;
   --muted:         #717171;
   --warning:       #F59E0B;
@@ -19,7 +19,7 @@
   --radius-sm:    8px;
   --shadow-card:  0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
 
-  --font-sans:    "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+  --font-sans:    -apple-system, BlinkMacSystemFont, "Segoe UI",
                   Roboto, Helvetica, Arial, sans-serif;
 }
 

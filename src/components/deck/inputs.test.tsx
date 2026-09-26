@@ -228,7 +228,7 @@ describe("ContactShareInput", () => {
     const user = userEvent.setup();
     await user.type(screen.getByPlaceholderText("Name"), "Sam");
     await user.type(screen.getByPlaceholderText("Email"), "sam@x.test");
-    await user.type(screen.getByPlaceholderText("Role"), "CTO");
+    await user.type(screen.getByPlaceholderText("Role (optional)"), "CTO");
     expect(submit).toBeEnabled();
     await user.click(submit);
     expect(onSubmit).toHaveBeenCalledWith(

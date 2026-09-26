@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { ApiKeysManager } from "./ApiKeysManager";
-import { FormMessage, SettingsSection } from "./parts";
+import { FormMessage, Pill, SettingsSection } from "./parts";
 
 type Msg = { kind: "success" | "error"; text: string } | null;
 
@@ -42,19 +42,21 @@ function ProfileForm({ user }: { user: AuthUser }): React.ReactElement {
   });
 
   return (
-    <SettingsSection title="Profile" description="Your name and sign-in email.">
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setMsg(null);
-          mut.mutate();
-        }}
-      >
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="pf-email">Email</Label>
-          <Input id="pf-email" type="email" value={user.email} disabled />
-        </div>
+    <SettingsSection
+      title="Profile"
+      description="Your display name is shown to teammates and in the activity log."
+      onSubmit={() => {
+        setMsg(null);
+        mut.mutate();
+      }}
+      footerHint={<FormMessage message={msg} />}
+      footer={
+        <Button type="submit" size="sm" disabled={mut.isPending}>
+          Save
+        </Button>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="pf-name">Display name</Label>
           <Input
@@ -64,13 +66,11 @@ function ProfileForm({ user }: { user: AuthUser }): React.ReactElement {
             placeholder="Optional"
           />
         </div>
-        <div className="flex items-center gap-3">
-          <Button type="submit" disabled={mut.isPending}>
-            Save
-          </Button>
-          <FormMessage message={msg} />
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="pf-email">Email</Label>
+          <Input id="pf-email" type="email" value={user.email} disabled />
         </div>
-      </form>
+      </div>
     </SettingsSection>
   );
 }
@@ -119,22 +119,25 @@ function PasswordForm({ user }: { user: AuthUser }): React.ReactElement {
 
   return (
     <SettingsSection
-      title={hasPw ? "Change password" : "Set a password"}
+      title={hasPw ? "Password" : "Set a password"}
       description={
         hasPw
           ? "Update the password you use to sign in."
           : "Add a password so you can sign in without a linked account."
       }
+      onSubmit={submit}
+      footerHint={
+        msg ? <FormMessage message={msg} /> : "At least 8 characters."
+      }
+      footer={
+        <Button type="submit" size="sm" disabled={mut.isPending}>
+          {hasPw ? "Update password" : "Set password"}
+        </Button>
+      }
     >
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
+      <div className="grid gap-4 sm:grid-cols-2">
         {hasPw ? (
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 sm:col-span-2 sm:max-w-[calc(50%-0.5rem)]">
             <Label htmlFor="pw-current">Current password</Label>
             <Input
               id="pw-current"
@@ -166,13 +169,7 @@ function PasswordForm({ user }: { user: AuthUser }): React.ReactElement {
             onChange={(e) => setConfirm(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-3">
-          <Button type="submit" disabled={mut.isPending}>
-            {hasPw ? "Update password" : "Set password"}
-          </Button>
-          <FormMessage message={msg} />
-        </div>
-      </form>
+      </div>
     </SettingsSection>
   );
 }
@@ -184,32 +181,38 @@ function LinkedAccounts(): React.ReactElement {
   });
   const identities: OAuthIdentitySummary[] = q.data ?? [];
 
+  const linked = new Map(identities.map((i) => [i.provider, i]));
+
   return (
     <SettingsSection
-      title="Linked accounts"
-      description="Third-party accounts you can sign in with."
+      title="Sign-in methods"
+      description="Third-party accounts you can use to sign in to Pulse."
+      flush
     >
       {q.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : identities.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No third-party accounts linked.
-        </p>
+        <p className="px-5 py-4 text-sm text-muted-foreground">Loading…</p>
       ) : (
-        <ul className="flex flex-col divide-y divide-border">
-          {identities.map((id) => (
-            <li
-              key={id.provider}
-              className="flex items-center justify-between py-2.5 text-sm"
-            >
-              <span className="font-medium text-foreground">
-                {PROVIDER_LABELS[id.provider] ?? id.provider}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Linked {formatTimestamp(id.linked_at)}
-              </span>
-            </li>
-          ))}
+        <ul className="divide-y divide-border">
+          {Object.entries(PROVIDER_LABELS).map(([provider, label]) => {
+            const id = linked.get(provider);
+            return (
+              <li key={provider} className="flex items-center gap-3 px-5 py-3">
+                <span className="flex size-8 items-center justify-center rounded-md border border-border text-xs font-semibold text-muted-foreground">
+                  {label[0]}
+                </span>
+                <span className="flex-1 text-sm font-medium text-foreground">
+                  {label}
+                </span>
+                {id ? (
+                  <span className="text-xs text-muted-foreground">
+                    Connected {formatTimestamp(id.linked_at)}
+                  </span>
+                ) : (
+                  <Pill>Not connected</Pill>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </SettingsSection>

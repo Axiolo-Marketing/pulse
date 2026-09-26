@@ -140,6 +140,9 @@ export interface Engagement {
    * through in a follow-up — frontend already handles the field
    * gracefully when absent (treats it as `null`). */
   org_logo_path?: string | null;
+  /** The consultant (operator) org's name, on `/api/me`. The deck shows it
+   * in the brand colour when the org has no logo. */
+  org_name?: string | null;
   /** The operator org's branding/theme. When `/api/me` returns this, the
    * client deck applies it via `applyBranding` on boot. Absent/null →
    * the deck keeps the product defaults. */
@@ -151,6 +154,8 @@ export interface Engagement {
    * Optional so both decks type-check pre-rollout; treat an absent value
    * as `false`. */
   reactive_cards_enabled?: boolean;
+  /** Per-engagement opt-in to transcribe voice answers (admin views). */
+  transcription_enabled?: boolean;
 }
 
 export interface Card {
@@ -230,6 +235,14 @@ export interface UploadRow {
    * operator viewer renders voice uploads as an inline `<audio>` player. */
   kind: "file" | "voice";
   uploaded_at: string;
+  /** Voice answers only (migration 0019): the speech-to-text result and its
+   * state. `transcript_status` is null until transcription runs (it only
+   * runs when the engagement opted in and the server has a provider). */
+  transcript?: string | null;
+  transcript_status?: "pending" | "done" | "failed" | null;
+  transcript_provider?: string | null;
+  transcript_error?: string | null;
+  transcribed_at?: string | null;
 }
 
 // ── Client-facing API ─────────────────────────────────────────────────────
@@ -582,12 +595,32 @@ export interface ClientSummary {
 
 export type Client = ClientSummary;
 
+/** A saved person on a client — the respondent type-ahead source. Adding a
+ * recipient to any of the client's engagements saves them here too. */
+export interface ClientContact {
+  id: string;
+  client_id: string;
+  email: string;
+  name: string | null;
+  role: string | null;
+  created_at: string;
+}
+
+/** Result of an explicit invite send. `skipped` lists recipient ids that
+ * weren't emailed (unsubscribed, or no email). */
+export interface SendInvitesResult {
+  sent: number;
+  skipped: string[];
+}
+
 export interface EngagementDetail {
   engagement: Engagement;
   recipients: Recipient[];
   cards: Card[];
   responses: ClientResponse[];
   uploads: UploadRow[];
+  /** Whether this server can transcribe voice answers at all. */
+  transcription_available?: boolean;
 }
 
 export interface CreateEngagementArgs {
@@ -617,6 +650,10 @@ export interface UpdateEngagementArgs {
    * should gate the control on that flag rather than relying on the
    * error alone. */
   reactive_cards_enabled?: boolean;
+  /** Toggle voice-answer transcription. `true` 400s server-side when the
+   * deployment has no transcription provider (see
+   * `EngagementDetail.transcription_available`). */
+  transcription_enabled?: boolean;
 }
 
 export interface CreateCardArgs {
@@ -753,6 +790,17 @@ export const adminApi = {
       method: "DELETE",
     }),
 
+  /** Email the deck link to these recipients (send or resend). Adding a
+   * recipient never emails on its own. 400 when the deck has no cards. */
+  sendInvites: (
+    engagementId: string,
+    recipientIds: string[],
+  ): Promise<SendInvitesResult> =>
+    request(`/api/admin/engagements/${engagementId}/invites`, {
+      method: "POST",
+      body: JSON.stringify({ recipient_ids: recipientIds }),
+    }),
+
   createCard: (engagementId: string, args: CreateCardArgs): Promise<Card> =>
     request(`/api/admin/engagements/${engagementId}/cards`, {
       method: "POST",
@@ -788,6 +836,12 @@ export const adminApi = {
   // for same-site requests.
   uploadDownloadUrl: (uploadId: string): string =>
     `${API_BASE}/api/admin/uploads/${uploadId}/download`,
+
+  /** (Re)transcribe a voice answer in the background. 400 when the upload
+   * isn't voice, the server can't transcribe, or the engagement hasn't
+   * opted in. */
+  transcribeUpload: (uploadId: string): Promise<{ status: "pending" }> =>
+    request(`/api/admin/uploads/${uploadId}/transcribe`, { method: "POST" }),
 };
 
 /** Real clients (companies), operator-only. Org-scoped on the backend via
@@ -797,6 +851,24 @@ export const adminApi = {
  * `client_name`), so there's no create/update/delete here. */
 export const clientsApi = {
   list: (): Promise<ClientSummary[]> => request("/api/admin/clients"),
+
+  listContacts: (clientId: string): Promise<ClientContact[]> =>
+    request(`/api/admin/clients/${clientId}/contacts`),
+
+  /** Save a contact, or update the one with the same email. */
+  saveContact: (
+    clientId: string,
+    args: { email: string; name?: string | null; role?: string | null },
+  ): Promise<ClientContact> =>
+    request(`/api/admin/clients/${clientId}/contacts`, {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  removeContact: (clientId: string, contactId: string): Promise<void> =>
+    request(`/api/admin/clients/${clientId}/contacts/${contactId}`, {
+      method: "DELETE",
+    }),
 };
 
 // ── Org switching, details, members, invites (operator surface) ───────────
@@ -1010,7 +1082,8 @@ export interface SuperadminOrgPayload {
 
 export interface CreateOrgResult {
   org: SuperadminOrgPayload;
-  invite: SuperadminInviteSummary;
+  /** Null when no owner was invited — the calling superadmin owns it. */
+  invite: SuperadminInviteSummary | null;
 }
 
 export interface SuperadminMemberRow {
@@ -1030,10 +1103,11 @@ export const superadminApi = {
     return request(`/api/superadmin/orgs${q}`);
   },
 
+  /** Omit `owner_email` to own the org yourself (no invite, no email). */
   createOrg: (args: {
     name: string;
     slug: string;
-    owner_email: string;
+    owner_email?: string;
   }): Promise<CreateOrgResult> =>
     request("/api/superadmin/orgs", {
       method: "POST",

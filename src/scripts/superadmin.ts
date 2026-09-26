@@ -595,7 +595,9 @@ function bindCreateForm(
         slug,
         owner_email: owner,
       });
-      msg.textContent = `Invite sent to ${result.invite.email}`;
+      msg.textContent = result.invite
+        ? `Invite sent to ${result.invite.email}`
+        : "Organization created — you are its owner.";
       msg.classList.add("success");
       // Reset the form so a second org is one form away.
       if (nameInput) nameInput.value = "";

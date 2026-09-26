@@ -3,6 +3,7 @@ from pulse_api.models.audit_log import AuditLog
 from pulse_api.models.card import Card
 from pulse_api.models.card_generation import CardGeneration
 from pulse_api.models.client import Client
+from pulse_api.models.client_contact import ClientContact
 from pulse_api.models.engagement import Engagement
 from pulse_api.models.oauth_authorization_code import OAuthAuthorizationCode
 from pulse_api.models.oauth_client import OAuthClient
@@ -25,6 +26,7 @@ __all__ = [
     "Card",
     "CardGeneration",
     "Client",
+    "ClientContact",
     "Engagement",
     "MemberRole",
     "OAuthAuthorizationCode",

@@ -16,23 +16,26 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { cn } from "@/lib/utils";
+
+import { Field, FormSectionLabel, ToggleList, ToggleRow } from "../form-parts";
 
 export function EditEngagementDialog({
   engagementId,
   engagement,
+  transcriptionAvailable,
   open,
   onOpenChange,
 }: {
   engagementId: string;
   engagement: Engagement;
+  /** Whether the server has a transcription provider configured. */
+  transcriptionAvailable: boolean;
   open: boolean;
   onOpenChange: (o: boolean) => void;
 }): React.ReactElement {
@@ -44,6 +47,9 @@ export function EditEngagementDialog({
   );
   const [reactiveCards, setReactiveCards] = useState(
     engagement.reactive_cards_enabled ?? false,
+  );
+  const [transcribe, setTranscribe] = useState(
+    engagement.transcription_enabled ?? false,
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +65,7 @@ export function EditEngagementDialog({
       setVoice(engagement.voice_enabled);
       setReminders(engagement.reminders_enabled ?? false);
       setReactiveCards(engagement.reactive_cards_enabled ?? false);
+      setTranscribe(engagement.transcription_enabled ?? false);
       setError(null);
     }
   }, [open, engagement]);
@@ -75,6 +82,9 @@ export function EditEngagementDialog({
         ...(reactiveCardsAllowed
           ? { reactive_cards_enabled: reactiveCards }
           : {}),
+        // Only sent when the server can transcribe (turning it on otherwise
+        // 400s); an unavailable server leaves the stored flag untouched.
+        ...(transcriptionAvailable ? { transcription_enabled: transcribe } : {}),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["engagement", engagementId] });
@@ -90,61 +100,81 @@ export function EditEngagementDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit engagement</DialogTitle>
+          <DialogDescription>
+            Rename this engagement and choose what respondents can do.
+          </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ee-name">Engagement name</Label>
+        <form
+          id="edit-engagement-form"
+          className="flex flex-col gap-5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            mut.mutate();
+          }}
+        >
+          <Field id="ee-name" label="Engagement name" optional>
             <Input
               id="ee-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Optional"
+              placeholder="e.g. Q3 brand refresh"
             />
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch
-              id="ee-voice"
-              checked={voice}
-              onCheckedChange={setVoice}
-            />
-            <Label htmlFor="ee-voice">Enable voice answers</Label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch
-              id="ee-reminders"
-              checked={reminders}
-              onCheckedChange={setReminders}
-            />
-            <Label htmlFor="ee-reminders">Send reminder emails</Label>
-          </div>
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <Switch
+          </Field>
+          <div className="flex flex-col gap-2">
+            <FormSectionLabel>Respondent experience</FormSectionLabel>
+            <ToggleList>
+              <ToggleRow
+                id="ee-voice"
+                label="Voice answers"
+                description="Respondents can record a voice note on any card."
+                checked={voice}
+                onCheckedChange={setVoice}
+              />
+              <ToggleRow
+                id="ee-reminders"
+                label="Reminder emails"
+                description="Nudge invited respondents who haven't finished."
+                checked={reminders}
+                onCheckedChange={setReminders}
+              />
+              <ToggleRow
+                id="ee-transcribe"
+                label="Transcribe voice answers"
+                description={
+                  transcriptionAvailable
+                    ? "Voice notes are sent to a speech-to-text service and the text is shown here and in exports. Leave off for clients whose recordings must stay private."
+                    : "Not set up on this server."
+                }
+                checked={transcribe}
+                onCheckedChange={setTranscribe}
+                disabled={!transcriptionAvailable || !voice}
+              />
+              <ToggleRow
                 id="ee-reactive"
+                label="AI follow-up questions"
+                description={
+                  reactiveCardsAllowed
+                    ? "When a respondent corrects an answer, add a short AI-written follow-up card to their deck."
+                    : "Not enabled for your organization. Ask an Axiolo admin to turn it on."
+                }
                 checked={reactiveCards}
                 onCheckedChange={setReactiveCards}
                 disabled={!reactiveCardsAllowed}
               />
-              <Label htmlFor="ee-reactive">AI follow-up questions</Label>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {reactiveCardsAllowed
-                ? "When a respondent corrects an answer, propose a short AI-generated follow-up card, live in their session."
-                : "Ask an Axiolo admin to enable reactive cards for your organization first."}
-            </p>
+            </ToggleList>
           </div>
           {error ? (
             <p className="text-sm text-destructive" role="alert">
               {error}
             </p>
           ) : null}
-        </div>
+        </form>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => mut.mutate()} disabled={mut.isPending}>
-            Save
+          <Button type="submit" form="edit-engagement-form" disabled={mut.isPending}>
+            Save changes
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -184,10 +214,7 @@ export function ConfirmDialog({
           <AlertDialogAction
             onClick={onConfirm}
             disabled={pending}
-            className={cn(
-              destructive &&
-                "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-            )}
+            variant={destructive ? "destructive" : "default"}
           >
             {confirmLabel}
           </AlertDialogAction>

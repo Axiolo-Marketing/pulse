@@ -17,9 +17,10 @@ describe("ui-version toggle", () => {
     expect(prefersV2()).toBe(true);
   });
 
-  it("optOutToV1 clears the cookie", () => {
+  it("optOutToV1 sets a sticky v1 cookie", () => {
     optInToV2();
     optOutToV1();
+    expect(document.cookie).toContain("pulse_ui=v1");
     expect(prefersV2()).toBe(false);
   });
 });

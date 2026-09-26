@@ -5,6 +5,7 @@ import { HashRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { authApi, orgsApi, type AuthUser } from "@/lib/api";
 import { applyBranding } from "@/lib/branding";
 
+import { AdminFooter, PulseWordmark } from "./Brand";
 import { EngagementDetail } from "./EngagementDetail";
 import { EngagementList } from "./EngagementList";
 import { OrgSwitcher } from "./OrgSwitcher";
@@ -44,28 +45,23 @@ export function AdminShell({ user }: { user: AuthUser }): React.ReactElement {
   return (
     <HashRouter>
       <div className="flex min-h-dvh flex-col bg-background">
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur">
-          <div className="flex items-center gap-3">
-            <Link
-              to="/"
-              className="flex items-center gap-2 text-base font-semibold text-foreground"
-            >
-              <img src="/axiolo-logo.svg" alt="Axiolo" width="72" height="20" />
-              <span aria-hidden="true" className="text-muted-foreground">
-                ·
-              </span>
-              Pulse
-              <span className="font-normal text-muted-foreground">Admin</span>
-            </Link>
-            <OrgSwitcher
-              orgs={orgsQ.data ?? []}
-              activeOrgId={user.active_org_id}
-              onSwitch={(id) => void switchOrg(id)}
-            />
+        <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur">
+          <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-3 px-4">
+            <div className="flex items-center gap-4">
+              <Link to="/" aria-label="Pulse home">
+                <PulseWordmark />
+              </Link>
+              <span aria-hidden="true" className="h-5 w-px bg-border" />
+              <OrgSwitcher
+                orgs={orgsQ.data ?? []}
+                activeOrgId={user.active_org_id}
+                onSwitch={(id) => void switchOrg(id)}
+              />
+            </div>
+            <nav className="flex items-center">
+              <UserMenu user={user} onSignOut={() => void signOut()} />
+            </nav>
           </div>
-          <nav className="flex items-center">
-            <UserMenu user={user} onSignOut={() => void signOut()} />
-          </nav>
         </header>
         <Routes>
           <Route path="/" element={<EngagementList />} />
@@ -87,6 +83,7 @@ export function AdminShell({ user }: { user: AuthUser }): React.ReactElement {
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <AdminFooter />
       </div>
     </HashRouter>
   );

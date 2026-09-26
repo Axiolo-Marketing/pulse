@@ -217,7 +217,7 @@ async def test_recipients_have_distinct_tokens(
     assert a.json()["token"] != b.json()["token"]
 
 
-# ── Auto-invite: adding a respondent mails them; the first card mails stragglers ─
+# ── Invites are explicit: adding people or cards never emails anyone ─────────
 
 
 async def _recipient_by_email(
@@ -229,30 +229,31 @@ async def _recipient_by_email(
     return next(x for x in recips if x["email"] == email)
 
 
-async def test_add_respondent_emails_invite_when_deck_has_cards(
+_CARD = {
+    "category": "C", "title": "T", "context": "x",
+    "question": "q?", "response_type": "short-text", "skip_allowed": True,
+}
+
+
+async def test_add_respondent_does_not_email(
     admin_authed: AsyncClient,
     seed_client: dict[str, str],
     seed_cards: list[dict[str, str]],
     captured_emails: list,
 ) -> None:
     eid = seed_client["id"]
-    # seed_client's own recipient has no email (legacy) → never invited; the
-    # one we add is the only invitee, and the deck already has cards.
     r = await admin_authed.post(
         f"/api/admin/engagements/{eid}/recipients",
         json={"email": "ask@example.com", "name": "Ask"},
     )
     assert r.status_code == 201
-    # The invite goes out on add — no separate send step.
-    assert len(captured_emails) == 1
-    assert captured_emails[0].to == "ask@example.com"
-    assert "?t=" in captured_emails[0].body  # the deck link
+    assert captured_emails == []
     assert (await _recipient_by_email(admin_authed, eid, "ask@example.com"))[
         "invited_at"
-    ] is not None
+    ] is None
 
 
-async def test_empty_deck_defers_invite_until_first_card(
+async def test_adding_cards_does_not_email_waiting_respondents(
     admin_authed: AsyncClient,
     seed_client: dict[str, str],
     captured_emails: list,
@@ -262,26 +263,165 @@ async def test_empty_deck_defers_invite_until_first_card(
         f"/api/admin/engagements/{eid}/recipients",
         json={"email": "wait@example.com"},
     )
-    # Nothing sent yet — there are no questions to answer.
+    card = await admin_authed.post(f"/api/admin/engagements/{eid}/cards", json=_CARD)
+    assert card.status_code == 201
+    imported = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/cards/import-markdown",
+        json={"markdown": IMPORT_MD_TWO_CARDS},
+    )
+    assert imported.status_code == 201
     assert captured_emails == []
-    assert (await _recipient_by_email(admin_authed, eid, "wait@example.com"))[
+
+
+async def test_send_invites_emails_chosen_recipients_and_stamps_invited_at(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    captured_emails: list,
+) -> None:
+    eid = seed_client["id"]
+    a = (await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients", json={"email": "a@example.com"}
+    )).json()
+    await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients", json={"email": "b@example.com"}
+    )
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/invites", json={"recipient_ids": [a["id"]]}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"sent": 1, "skipped": []}
+    assert [e.to for e in captured_emails] == ["a@example.com"]
+    assert "?t=" in captured_emails[0].body  # the deck link
+    assert (await _recipient_by_email(admin_authed, eid, "a@example.com"))[
+        "invited_at"
+    ] is not None
+    assert (await _recipient_by_email(admin_authed, eid, "b@example.com"))[
         "invited_at"
     ] is None
 
-    # Adding the first card invites the waiting respondent.
-    card = await admin_authed.post(
-        f"/api/admin/engagements/{eid}/cards",
-        json={
-            "category": "C", "title": "T", "context": "x",
-            "question": "q?", "response_type": "short-text", "skip_allowed": True,
-        },
+    # A resend goes out again.
+    again = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/invites", json={"recipient_ids": [a["id"]]}
     )
-    assert card.status_code == 201
-    assert len(captured_emails) == 1
-    assert captured_emails[0].to == "wait@example.com"
-    assert (await _recipient_by_email(admin_authed, eid, "wait@example.com"))[
-        "invited_at"
-    ] is not None
+    assert again.json()["sent"] == 1
+    assert len(captured_emails) == 2
+
+
+async def test_send_invites_requires_cards(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    captured_emails: list,
+) -> None:
+    eid = seed_client["id"]
+    a = (await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients", json={"email": "a@example.com"}
+    )).json()
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/invites", json={"recipient_ids": [a["id"]]}
+    )
+    assert r.status_code == 400
+    assert captured_emails == []
+
+
+async def test_send_invites_skips_unsubscribed(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    captured_emails: list,
+) -> None:
+    eid = seed_client["id"]
+    a = (await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients", json={"email": "gone@example.com"}
+    )).json()
+    await db.execute(
+        text("update public.recipients set unsubscribed_at = now() where id = cast(:i as uuid)"),
+        {"i": a["id"]},
+    )
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{eid}/invites", json={"recipient_ids": [a["id"]]}
+    )
+    assert r.json() == {"sent": 0, "skipped": [a["id"]]}
+    assert captured_emails == []
+
+
+async def test_send_invites_unknown_engagement_404(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{uuid.uuid4()}/invites",
+        json={"recipient_ids": [str(uuid.uuid4())]},
+    )
+    assert r.status_code == 404
+
+
+# ── Client contacts ───────────────────────────────────────────────────────────
+
+
+async def test_adding_recipient_saves_client_contact(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+) -> None:
+    eid, cid = seed_client["id"], seed_client["client_id"]
+    await admin_authed.post(
+        f"/api/admin/engagements/{eid}/recipients",
+        json={"email": "Pat@Example.com", "name": "Pat"},
+    )
+    contacts = (await admin_authed.get(f"/api/admin/clients/{cid}/contacts")).json()
+    assert [(c["email"], c["name"]) for c in contacts] == [("Pat@Example.com", "Pat")]
+
+    # Same person on another of this client's engagements: no duplicate, and
+    # an add without a name keeps the saved one.
+    eng2 = await admin_authed.post(
+        "/api/admin/engagements", json={"client_id": cid, "engagement_name": "Two"}
+    )
+    await admin_authed.post(
+        f"/api/admin/engagements/{eng2.json()['id']}/recipients",
+        json={"email": "pat@example.com"},
+    )
+    contacts = (await admin_authed.get(f"/api/admin/clients/{cid}/contacts")).json()
+    assert len(contacts) == 1
+    assert contacts[0]["name"] == "Pat"
+
+
+async def test_client_contacts_crud(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+) -> None:
+    cid = seed_client["client_id"]
+    r = await admin_authed.post(
+        f"/api/admin/clients/{cid}/contacts",
+        json={"email": "lee@example.com", "name": "Lee", "role": "CFO"},
+    )
+    assert r.status_code == 201
+    contact = r.json()
+    assert (contact["name"], contact["role"]) == ("Lee", "CFO")
+
+    # Upsert on email updates in place.
+    r2 = await admin_authed.post(
+        f"/api/admin/clients/{cid}/contacts",
+        json={"email": "LEE@example.com", "role": "CEO"},
+    )
+    assert r2.json()["id"] == contact["id"]
+    assert (r2.json()["name"], r2.json()["role"]) == ("Lee", "CEO")
+
+    d = await admin_authed.delete(f"/api/admin/clients/{cid}/contacts/{contact['id']}")
+    assert d.status_code == 204
+    assert (await admin_authed.get(f"/api/admin/clients/{cid}/contacts")).json() == []
+    d2 = await admin_authed.delete(f"/api/admin/clients/{cid}/contacts/{contact['id']}")
+    assert d2.status_code == 404
+
+
+async def test_client_contacts_unknown_client_404(
+    admin_authed: AsyncClient,
+) -> None:
+    r = await admin_authed.get(f"/api/admin/clients/{uuid.uuid4()}/contacts")
+    assert r.status_code == 404
+    r = await admin_authed.post(
+        f"/api/admin/clients/{uuid.uuid4()}/contacts", json={"email": "x@example.com"}
+    )
+    assert r.status_code == 404
 
 
 # ── PATCH /api/admin/engagements/{id} ─────────────────────────────────────────

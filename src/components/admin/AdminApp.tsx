@@ -34,7 +34,7 @@ export default function AdminApp(): React.ReactElement {
       ) : (
         <Gate />
       )}
-      <Toaster richColors position="top-center" />
+      <Toaster theme="light" position="top-center" />
     </QueryClientProvider>
   );
 }

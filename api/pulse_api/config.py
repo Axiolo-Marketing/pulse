@@ -130,13 +130,25 @@ class Settings(BaseSettings):
     # `reactive_fake_mode` true in production.
     anthropic_api_key: str = ""
     reactive_cards_enabled: bool = False
-    reactive_model: str = "claude-opus-4-8"
-    reactive_max_output_tokens: int = 2048
+    reactive_model: str = "claude-sonnet-5"
+    # low | medium | high | xhigh | max; empty = omit (API default). Never
+    # sent to Haiku models, which reject it (see reactive._output_config).
+    reactive_effort: str = "low"
+    # Headroom for any brief reasoning on models that think by default.
+    reactive_max_output_tokens: int = 4096
     reactive_timeout_seconds: float = 60.0
     reactive_max_cards_per_generation: int = 2
     reactive_max_generated_per_recipient: int = 10
     reactive_max_trigger_chars: int = 4000
     reactive_fake_mode: bool = False
+
+    # Voice transcription (``pulse_api/transcription.py``). Two gates, both
+    # default-off: this deployment switch + a configured provider, and the
+    # per-engagement ``engagements.transcription_enabled`` opt-in. Providers:
+    # ``fake`` (dev only — canned text, no network, never in production).
+    # Real providers (e.g. Deepgram) plug in behind the same interface.
+    transcription_enabled: bool = False
+    transcription_provider: str = "fake"
     # SDK-level retry count for transient errors (429/5xx/connection).
     # 2 matches the `anthropic` package's own default — set explicitly
     # (rather than relying on the SDK default) so tests can dial it to 0

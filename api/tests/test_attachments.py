@@ -117,12 +117,14 @@ async def test_serve_round_trip(
         await fresh.aclose()
 
 
-async def test_serve_html_includes_csp_and_content_disposition(
+async def test_serve_html_is_sandboxed_and_renders_inline(
     admin_authed: AsyncClient,
 ) -> None:
     """M2: HTML attachments used to be served with no CSP at all, letting
-    operator-uploaded JS execute on our origin. Assert both the strict
-    CSP and the download-nudging Content-Disposition are present."""
+    operator-uploaded JS execute on our origin. Now they carry the CSP
+    `sandbox` directive (opaque origin even when opened top-level) with
+    scripts blocked — and render inline (no forced download), so the
+    deck's reference viewer and "Open in new tab" actually show them."""
     html = b"<!doctype html><script>alert(1)</script>"
     r = await admin_authed.post(
         "/api/admin/attachments",
@@ -134,10 +136,11 @@ async def test_serve_html_includes_csp_and_content_disposition(
     assert r2.status_code == 200
     assert r2.headers["content-type"].startswith("text/html")
     csp = r2.headers.get("content-security-policy", "")
-    assert "script-src 'none'" in csp
-    disposition = r2.headers.get("content-disposition", "")
-    assert disposition.startswith("attachment;")
-    assert filename in disposition
+    directives = [d.strip() for d in csp.split(";")]
+    assert "sandbox" in directives  # no allow-same-origin / allow-scripts
+    assert "script-src 'none'" in directives
+    assert "default-src 'none'" in directives
+    assert "content-disposition" not in r2.headers
 
 
 async def test_serve_pdf_includes_csp_but_no_content_disposition(

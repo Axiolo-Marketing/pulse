@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { X } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 
 import { API_BASE } from "@/lib/api";
 
@@ -21,6 +21,17 @@ function resolveSrc(path: string, baseSlash: string): string {
   return `${baseSlash}${path}`;
 }
 
+/** Absolute-path URL for a card's reference document. */
+export function referenceSrc(path: string): string {
+  const base = (import.meta.env.BASE_URL ?? "/") as string;
+  return resolveSrc(path, base.endsWith("/") ? base : `${base}/`);
+}
+
+/** True when the reference is an image (rendered as <img>, not a frame). */
+export function isImageReference(path: string): boolean {
+  return IMAGE_EXTS.has(ext(path));
+}
+
 export function AttachmentModal({
   title,
   path,
@@ -33,10 +44,8 @@ export function AttachmentModal({
   const panelRef = useRef<HTMLDivElement>(null);
   useModalA11y(panelRef, onClose);
 
-  const base = (import.meta.env.BASE_URL ?? "/") as string;
-  const baseSlash = base.endsWith("/") ? base : `${base}/`;
-  const src = resolveSrc(path, baseSlash);
-  const isImage = IMAGE_EXTS.has(ext(path));
+  const src = referenceSrc(path);
+  const isImage = isImageReference(path);
 
   return (
     <div
@@ -49,21 +58,37 @@ export function AttachmentModal({
         type="button"
         aria-label="Close"
         tabIndex={-1}
-        className="absolute inset-0 cursor-default bg-black/45"
+        className="absolute inset-0 cursor-default bg-black/40 backdrop-blur-[2px]"
         onClick={onClose}
       />
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="relative m-3 flex w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-card shadow-lg outline-none"
+        className="relative m-3 flex w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl outline-none"
       >
-        <header className="flex items-center justify-between bg-foreground px-4 py-3 text-[color:var(--card)]">
-          <span className="font-semibold">{title} reference</span>
+        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <span className="min-w-0 flex-1 truncate text-base font-semibold text-foreground">
+            {title} reference
+          </span>
+          {/* Full-screen is easier for wide documents on a phone, and a
+              fallback if the embedded view misbehaves. Uploaded references
+              are served sandboxed (CSP), so a new tab is just as isolated
+              as the iframe below. */}
+          <a
+            href={src}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground [&_svg]:size-4"
+          >
+            <ExternalLink aria-hidden="true" />
+            <span className="hidden sm:inline">Open in new tab</span>
+            <span className="sm:hidden">Open</span>
+          </a>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="flex size-8 items-center justify-center rounded-md hover:bg-white/10 [&_svg]:size-5"
+            className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground [&_svg]:size-4"
           >
             <X aria-hidden="true" />
           </button>

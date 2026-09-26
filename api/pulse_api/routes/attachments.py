@@ -109,15 +109,27 @@ async def serve_attachment(filename: str) -> FileResponse:
     # else — SVG (can embed <script>), HTML/PDF, and
     # `application/octet-stream` for anything that slips past the
     # allow-list — gets a strict CSP so a directly-opened attachment
-    # can't execute script on our origin. This is what M2 in the audit
-    # flagged: HTML attachments were served with zero CSP, letting
-    # operator-uploaded JS run same-origin. HTML additionally gets a
-    # Content-Disposition nudge toward downloading rather than rendering
-    # inline, since some browsers' "view source"/inline viewers don't
-    # honor CSP consistently.
-    if mime_type not in _RASTER_IMAGE_MIME_TYPES:
-        headers["Content-Security-Policy"] = "script-src 'none'; default-src 'self' data:;"
+    # can't execute script on our origin (audit finding M2: HTML
+    # attachments used to be served with zero CSP, letting operator-
+    # uploaded JS run same-origin).
+    #
+    # HTML additionally gets the CSP `sandbox` directive: the document is
+    # rendered in an opaque origin even when opened top-level (the deck's
+    # "Open in new tab"), so it can never act on our origin or read its
+    # cookies/storage — the same isolation the deck's sandboxed iframe
+    # gives it. That's what lets it render inline instead of being forced
+    # to download (the old `Content-Disposition: attachment` also made the
+    # deck's reference iframe download rather than show the document).
+    # Inline styles, images and web fonts are allowed so designed
+    # deliverables look right; scripts stay blocked.
     if path.suffix.lower() in (".html", ".htm"):
-        headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
+        headers["Content-Security-Policy"] = (
+            "sandbox; default-src 'none'; "
+            "style-src 'unsafe-inline' https:; "
+            "img-src 'self' data: https:; font-src data: https:; "
+            "script-src 'none'"
+        )
+    elif mime_type not in _RASTER_IMAGE_MIME_TYPES:
+        headers["Content-Security-Policy"] = "script-src 'none'; default-src 'self' data:;"
 
     return FileResponse(path=path, media_type=mime_type, headers=headers)

@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 UPLOAD_COLS = (
     "id::text, card_id::text, engagement_id::text, recipient_id::text, file_name, "
-    "file_size_bytes, storage_path, mime_type, kind, uploaded_at"
+    "file_size_bytes, storage_path, mime_type, kind, uploaded_at, "
+    "transcript, transcript_status, transcript_provider, transcript_error, "
+    "transcribed_at"
 )
 
 

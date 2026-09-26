@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Upload } from "lucide-react";
+import {
+  AlignLeft,
+  CircleCheck,
+  CircleDot,
+  Contact,
+  Link2,
+  ListChecks,
+  LoaderCircle,
+  Paperclip,
+  TextCursorInput,
+  Upload,
+  type LucideIcon,
+} from "lucide-react";
 
 import {
   adminApi,
@@ -20,27 +32,72 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
-const RESPONSE_TYPES: { value: ResponseType; label: string }[] = [
-  { value: "confirm-edit", label: "Confirm / edit" },
-  { value: "single-select", label: "Single select" },
-  { value: "multi-select", label: "Multi select" },
-  { value: "short-text", label: "Short text" },
-  { value: "long-text", label: "Long text" },
-  { value: "file-upload", label: "File upload" },
-  { value: "document-link", label: "Document link" },
-  { value: "contact-share", label: "Contact share" },
+import { Field, FormSectionLabel, ToggleList, ToggleRow } from "../form-parts";
+
+const RESPONSE_TYPES: {
+  value: ResponseType;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+}[] = [
+  { value: "confirm-edit", label: "Confirm or edit", hint: "Confirm a value you pre-fill, or correct it", icon: CircleCheck },
+  { value: "single-select", label: "Single choice", hint: "Pick one option", icon: CircleDot },
+  { value: "multi-select", label: "Multiple choice", hint: "Pick any number of options", icon: ListChecks },
+  { value: "short-text", label: "Short text", hint: "A one-line answer", icon: TextCursorInput },
+  { value: "long-text", label: "Long text", hint: "A paragraph or more", icon: AlignLeft },
+  { value: "file-upload", label: "File upload", hint: "Attach one or more files", icon: Paperclip },
+  { value: "document-link", label: "Link", hint: "Paste a URL to a document", icon: Link2 },
+  { value: "contact-share", label: "Contact", hint: "Name, role and email of a person", icon: Contact },
 ];
+
+/** Response-type picker: a grid of icon tiles (radio group semantics).
+ * Locked on edit — the type is immutable once a card exists. */
+function ResponseTypePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ResponseType;
+  onChange: (v: ResponseType) => void;
+  disabled?: boolean;
+}): React.ReactElement {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Response type"
+      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+    >
+      {RESPONSE_TYPES.map((rt) => {
+        const selected = rt.value === value;
+        return (
+          <button
+            key={rt.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            title={rt.hint}
+            disabled={disabled && !selected}
+            onClick={() => onChange(rt.value)}
+            className={cn(
+              "flex flex-col items-start gap-2 rounded-lg border p-3 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              selected
+                ? "border-foreground bg-muted/60 font-medium text-foreground"
+                : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+              disabled && !selected && "cursor-not-allowed opacity-40 hover:border-border hover:text-muted-foreground",
+              disabled && selected && "pointer-events-none",
+            )}
+          >
+            <rt.icon className="size-4" aria-hidden="true" />
+            <span className="leading-tight">{rt.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function hasOptions(type: ResponseType): boolean {
   return type === "single-select" || type === "multi-select";
@@ -160,154 +217,164 @@ export function CardEditorDialog({
     if (file) uploadMutation.mutate(file);
   }
 
+  const typeHint = RESPONSE_TYPES.find((rt) => rt.value === responseType)?.hint;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit card" : "New card"}</DialogTitle>
           <DialogDescription>
             {isEditing
-              ? "Update this card in the engagement deck."
-              : "Add a card to the engagement deck."}
+              ? "Changes show up for respondents the next time they open the deck."
+              : "Add a question to the engagement deck."}
           </DialogDescription>
         </DialogHeader>
         <form
-          className="flex flex-col gap-4"
+          className="flex flex-col gap-6"
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
           noValidate
         >
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="card-category">Category</Label>
-            <Input
-              id="card-category"
-              required
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="card-title">Title</Label>
-            <Input
-              id="card-title"
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="card-context">Context</Label>
-            <Textarea
+          <section className="flex flex-col gap-4">
+            <FormSectionLabel>Question</FormSectionLabel>
+            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+              <Field id="card-category" label="Category" hint="Groups cards, e.g. Brand.">
+                <Input
+                  id="card-category"
+                  required
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  disabled={submitting}
+                />
+              </Field>
+              <Field id="card-title" label="Title" hint="Short headline shown on the card.">
+                <Input
+                  id="card-title"
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  disabled={submitting}
+                />
+              </Field>
+            </div>
+            <Field
               id="card-context"
-              required
-              value={context}
-              onChange={(e) => setContext(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="card-question">Question</Label>
-            <Textarea
-              id="card-question"
-              required
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="card-response-type">Response type</Label>
-            <Select
-              value={responseType}
-              onValueChange={(v) => setResponseType(v as ResponseType)}
-              disabled={isEditing || submitting}
+              label="Context"
+              hint="Why you're asking, or what you already know."
             >
-              <SelectTrigger id="card-response-type" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {RESPONSE_TYPES.map((rt) => (
-                  <SelectItem key={rt.value} value={rt.value}>
-                    {rt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {isEditing ? (
+              <Textarea
+                id="card-context"
+                required
+                rows={3}
+                value={context}
+                onChange={(e) => setContext(e.target.value)}
+                disabled={submitting}
+              />
+            </Field>
+            <Field id="card-question" label="Question">
+              <Textarea
+                id="card-question"
+                required
+                rows={2}
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                disabled={submitting}
+              />
+            </Field>
+          </section>
+
+          <section className="flex flex-col gap-4 border-t border-border pt-5">
+            <FormSectionLabel>Answer</FormSectionLabel>
+            <div className="flex flex-col gap-1.5">
+              <ResponseTypePicker
+                value={responseType}
+                onChange={setResponseType}
+                disabled={isEditing || submitting}
+              />
               <p className="text-xs text-muted-foreground">
-                Response type can&apos;t be changed after a card is created.
+                {isEditing
+                  ? "Response type can't be changed after a card is created."
+                  : typeHint}
               </p>
+            </div>
+            {hasOptions(responseType) ? (
+              <Field id="card-options" label="Options" hint="One option per line.">
+                <Textarea
+                  id="card-options"
+                  rows={4}
+                  value={optionsText}
+                  onChange={(e) => setOptionsText(e.target.value)}
+                  disabled={submitting}
+                />
+              </Field>
             ) : null}
-          </div>
-          {hasOptions(responseType) ? (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="card-options">Options</Label>
-              <Textarea
-                id="card-options"
-                value={optionsText}
-                onChange={(e) => setOptionsText(e.target.value)}
-                disabled={submitting}
-                placeholder="One option per line"
-              />
-            </div>
-          ) : null}
-          {responseType === "confirm-edit" ? (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="card-default-value">Default value</Label>
-              <Textarea
+            {responseType === "confirm-edit" ? (
+              <Field
                 id="card-default-value"
-                value={defaultValue}
-                onChange={(e) => setDefaultValue(e.target.value)}
-                disabled={submitting}
-                placeholder="The value shown for confirmation"
-              />
-            </div>
-          ) : null}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="card-attachment">Attachment path</Label>
-            <div className="flex gap-2">
-              <Input
-                id="card-attachment"
-                value={attachmentPath}
-                onChange={(e) => setAttachmentPath(e.target.value)}
-                disabled={submitting}
-                placeholder="Optional"
-                className="flex-1"
-              />
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="hidden"
-                onChange={onFileChosen}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={submitting || uploading}
+                label="Pre-filled value"
+                optional
+                hint="What the respondent confirms or corrects."
               >
-                {uploading ? (
-                  <LoaderCircle className="animate-spin" aria-hidden="true" />
-                ) : (
-                  <Upload aria-hidden="true" />
-                )}
-                Upload file
-              </Button>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch
-              id="card-skip-allowed"
-              checked={skipAllowed}
-              onCheckedChange={setSkipAllowed}
-              disabled={submitting}
-            />
-            <Label htmlFor="card-skip-allowed">Allow skipping</Label>
-          </div>
+                <Textarea
+                  id="card-default-value"
+                  rows={2}
+                  value={defaultValue}
+                  onChange={(e) => setDefaultValue(e.target.value)}
+                  disabled={submitting}
+                />
+              </Field>
+            ) : null}
+            <Field
+              id="card-attachment"
+              label="Reference document"
+              optional
+              hint="Opens beside the question. Upload a file, or enter a deliverables/… path."
+            >
+              <div className="flex gap-2">
+                <Input
+                  id="card-attachment"
+                  value={attachmentPath}
+                  onChange={(e) => setAttachmentPath(e.target.value)}
+                  disabled={submitting}
+                  placeholder="deliverables/brand-audit.html"
+                  className="flex-1 font-mono text-xs"
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={onFileChosen}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={submitting || uploading}
+                >
+                  {uploading ? (
+                    <LoaderCircle className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Upload aria-hidden="true" />
+                  )}
+                  Upload
+                </Button>
+              </div>
+            </Field>
+            <ToggleList>
+              <ToggleRow
+                id="card-skip-allowed"
+                label="Allow skipping"
+                description="Respondents can move past this card without answering."
+                checked={skipAllowed}
+                onCheckedChange={setSkipAllowed}
+                disabled={submitting}
+              />
+            </ToggleList>
+          </section>
+
           {error ? (
             <p className="text-sm font-medium text-destructive" role="alert">
               {error}

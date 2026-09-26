@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { applyBranding, FONT_OPTIONS, BRANDING_DEFAULTS } from "@/lib/branding";
 import { ConfirmDialog } from "@/components/admin/detail/EngagementDialogs";
+import { SettingsSection } from "./parts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 
 // ── Local colour helpers ────────────────────────────────────────────────────
 
@@ -207,17 +207,42 @@ export function BrandingSettings({
   const pending = saveMut.isPending || resetMut.isPending;
 
   return (
-    <section className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold text-foreground">Brand &amp; theme</h2>
-        <p className="text-sm text-muted-foreground">
-          Colours and font applied across your engagement decks and the admin
-          console.
-        </p>
-      </div>
-
-      <Separator />
-
+    <SettingsSection
+      title="Brand & theme"
+      description="Colours and font respondents see on your engagement decks."
+      footerHint={
+        error ? (
+          <span className="text-destructive" role="alert">
+            {error}
+          </span>
+        ) : undefined
+      }
+      footer={
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setError(null);
+              setResetOpen(true);
+            }}
+            disabled={pending}
+          >
+            Reset to defaults
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setError(null);
+              saveMut.mutate();
+            }}
+            disabled={pending}
+          >
+            Save branding
+          </Button>
+        </>
+      }
+    >
       <div className="grid gap-6 md:grid-cols-2">
         {/* Controls */}
         <div className="flex flex-col gap-4">
@@ -291,34 +316,6 @@ export function BrandingSettings({
         </div>
       </div>
 
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-
-      <div className="flex items-center gap-2">
-        <Button
-          onClick={() => {
-            setError(null);
-            saveMut.mutate();
-          }}
-          disabled={pending}
-        >
-          Save branding
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setError(null);
-            setResetOpen(true);
-          }}
-          disabled={pending}
-        >
-          Reset to defaults
-        </Button>
-      </div>
-
       <ConfirmDialog
         open={resetOpen}
         onOpenChange={setResetOpen}
@@ -332,6 +329,6 @@ export function BrandingSettings({
           resetMut.mutate();
         }}
       />
-    </section>
+    </SettingsSection>
   );
 }

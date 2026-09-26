@@ -39,6 +39,14 @@ function reseedDevAdmin(): void {
   }
 }
 
+// These selectors are v1's (#login-email, #user-menu-trigger, …). /admin/
+// now defaults to v2, so pin the v1 shell with its sticky opt-out cookie.
+test.beforeEach(async ({ context, baseURL }) => {
+  await context.addCookies([
+    { name: "pulse_ui", value: "v1", url: baseURL ?? "http://localhost:4321" },
+  ]);
+});
+
 test.beforeAll(reseedDevAdmin);
 test.afterAll(reseedDevAdmin); // restore dev-admin-password no matter what
 
