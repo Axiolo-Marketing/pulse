@@ -161,7 +161,7 @@ export function ensureFontLoaded(slug: string): void {
 
 /** Resolve a font slug to its catalogue entry, defaulting to
  * {@link BRANDING_DEFAULTS}.font when the slug is absent or unrecognized. */
-function resolveFont(slug: string | null | undefined): FontOption {
+export function resolveFont(slug: string | null | undefined): FontOption {
   const found = slug ? FONT_OPTIONS.find((o) => o.slug === slug) : undefined;
   return (
     found ??

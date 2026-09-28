@@ -131,6 +131,19 @@ function Muted({ children }: { children: React.ReactNode }): React.ReactElement 
 
 /** One recipient's answer to one card — value per response_type, plus any
  * file/voice uploads (downloaded through the admin session cookie). */
+/** A `pending` transcript older than this was abandoned (the worker died
+ * mid-run); the server lets it be claimed again. Mirrors
+ * `STALE_CLAIM_SECONDS` in `api/pulse_api/repos/uploads.py`. */
+const TRANSCRIPT_STALE_MS = 600_000;
+
+/** Still being transcribed: `pending` with a live claim. While pending,
+ * `transcribed_at` holds the claim time. */
+export function isTranscribing(upload: UploadRow, now = Date.now()): boolean {
+  if (upload.transcript_status !== "pending") return false;
+  const since = Date.parse(upload.transcribed_at ?? upload.uploaded_at);
+  return Number.isNaN(since) || now - since < TRANSCRIPT_STALE_MS;
+}
+
 /** Operator controls for voice-answer transcripts. `enabled` = this
  * engagement opted in AND the server can transcribe; only then are the
  * Transcribe / Retry actions offered. */
@@ -146,7 +159,10 @@ function VoiceTranscript({
   upload: UploadRow;
   controls?: TranscriptionControls;
 }): React.ReactElement | null {
-  const status = upload.transcript_status ?? null;
+  const status =
+    upload.transcript_status === "pending" && !isTranscribing(upload)
+      ? "failed" // abandoned claim — offer Retry instead of spinning forever
+      : (upload.transcript_status ?? null);
   const canAct = !!controls?.enabled;
 
   if (status === "done" && upload.transcript) {

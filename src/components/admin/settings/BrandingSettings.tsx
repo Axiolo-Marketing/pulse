@@ -8,7 +8,12 @@ import {
   type OrgDetails,
   type BrandingSettings as Branding,
 } from "@/lib/api";
-import { applyBranding, FONT_OPTIONS, BRANDING_DEFAULTS } from "@/lib/branding";
+import {
+  applyBranding,
+  BRANDING_DEFAULTS,
+  FONT_OPTIONS,
+  resolveFont,
+} from "@/lib/branding";
 import { ConfirmDialog } from "@/components/admin/detail/EngagementDialogs";
 import { SettingsSection } from "./parts";
 import { Button } from "@/components/ui/button";
@@ -199,9 +204,8 @@ export function BrandingSettings({
   const effBrand = cleanHex(brandColor) ?? BRANDING_DEFAULTS.brand_color;
   const effBg = cleanHex(background) ?? BRANDING_DEFAULTS.background_color;
   const effText = cleanHex(text) ?? BRANDING_DEFAULTS.text_color;
-  const effFont = (
-    FONT_OPTIONS.find((o) => o.slug === font) ?? FONT_OPTIONS[0]
-  ).cssFamily;
+  // Same fallback as the deck (`applyBranding`), so the preview matches it.
+  const effFont = resolveFont(font).cssFamily;
   const ratio = contrastRatio(effText, effBg);
 
   const pending = saveMut.isPending || resetMut.isPending;

@@ -25,6 +25,15 @@ provider call runs with NO session open, so a slow provider never pins a
 pooled connection. Failures mark the row ``failed`` (with the error) and
 never surface to the respondent.
 
+Claiming: a recording is sent to the provider at most once at a time. Every
+run first flips the row to ``pending`` with a conditional UPDATE
+(``uploads_repo.CLAIM_SQL``) that matches only when no other attempt holds it — the job
+does this itself for fresh uploads, and the admin retry route does it on its
+own session (so the UI sees ``pending`` at once and a second click gets a
+409). While ``pending``, ``transcribed_at`` records when the claim was made,
+so a claim orphaned by a crashed worker can be retaken after
+``STALE_CLAIM_SECONDS``.
+
 Providers: ``fake`` (dev only — canned text, no network) today. A real
 provider is a function ``(audio: bytes, mime_type: str | None) ->
 TranscriptResult`` registered in ``_PROVIDERS``.
@@ -45,6 +54,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pulse_api import storage
 from pulse_api.config import settings
 from pulse_api.db import admin_engine
+from pulse_api.repos.uploads import CLAIM_SQL, STALE_CLAIM_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +123,11 @@ async def _admin_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-def schedule_transcription(upload_id: str) -> None:
+def schedule_transcription(upload_id: str, *, claimed: bool = False) -> None:
     """Fire-and-forget ``run_transcription`` (see module docstring for why
-    this is ``asyncio.create_task`` and not ``BackgroundTasks``)."""
-    task = asyncio.create_task(run_transcription(upload_id))
+    this is ``asyncio.create_task`` and not ``BackgroundTasks``). Pass
+    ``claimed=True`` when the caller already took the claim."""
+    task = asyncio.create_task(run_transcription(upload_id, claimed=claimed))
     _pending_tasks.add(task)
 
     def _done(t: asyncio.Task) -> None:
@@ -170,22 +181,41 @@ async def _write(upload_id: str, **fields: object) -> None:
         await session.commit()
 
 
-async def run_transcription(upload_id: str) -> None:
+async def _claim(upload_id: str) -> bool:
+    async with _admin_session() as session:
+        claimed = (
+            await session.execute(
+                text(CLAIM_SQL), {"uid": upload_id, "stale": STALE_CLAIM_SECONDS}
+            )
+        ).scalar_one_or_none()
+        await session.commit()
+    return claimed is not None
+
+
+async def run_transcription(upload_id: str, *, claimed: bool = False) -> None:
     """Transcribe one voice upload. Never raises: every failure past the
-    gates is recorded on the row as ``failed``."""
-    if not (_valid_uuid(upload_id) and available()):
+    gates is recorded on the row as ``failed``. Without ``claimed`` the job
+    takes the claim itself and does nothing if another attempt holds it."""
+    if not _valid_uuid(upload_id):
         return
-    target = await _load_target(upload_id)
-    if target is None:
-        logger.warning("transcription: upload %s never became visible", upload_id)
+    target = await _load_target(upload_id) if available() else None
+    if target is None or target["kind"] != "voice" or not target["transcription_enabled"]:
+        if target is None and available():
+            logger.warning("transcription: upload %s never became visible", upload_id)
+        if claimed:
+            # Don't leave the caller's claim spinning until it goes stale.
+            await _write(
+                upload_id,
+                transcript_status="failed",
+                transcript_error="transcription is no longer enabled",
+            )
         return
-    if target["kind"] != "voice" or not target["transcription_enabled"]:
+    if not claimed and not await _claim(upload_id):
         return
 
     provider_name = settings.transcription_provider
     provider = _PROVIDERS[provider_name]
     try:
-        await _write(upload_id, transcript_status="pending", transcript_error=None)
         path = storage.resolve_within_upload_dir(target["storage_path"])
         audio = await asyncio.to_thread(path.read_bytes)
         # No DB session is open across the provider call.
