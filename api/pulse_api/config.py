@@ -1,8 +1,12 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Values the Messages API accepts for ``output_config.effort``; "" omits it.
+REACTIVE_EFFORT_LEVELS = frozenset({"", "low", "medium", "high", "xhigh", "max"})
 
 
 class Settings(BaseSettings):
@@ -207,6 +211,17 @@ class Settings(BaseSettings):
             ``<issuer base>/api/mcp``.
         """
         return f"{self.mcp_issuer_base}/api/mcp"
+
+    @field_validator("reactive_effort")
+    @classmethod
+    def _check_reactive_effort(cls, value: str) -> str:
+        # Fail at startup: a typo here would otherwise 400 every generation,
+        # which only shows up as silently `failed` rows.
+        effort = value.strip().lower()
+        if effort not in REACTIVE_EFFORT_LEVELS:
+            allowed = ", ".join(sorted(REACTIVE_EFFORT_LEVELS - {""}))
+            raise ValueError(f"REACTIVE_EFFORT must be one of {allowed}, or blank")
+        return effort
 
 
 settings = Settings()
