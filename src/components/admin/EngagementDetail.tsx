@@ -66,6 +66,7 @@ import {
   rcKey,
   recipientLabel,
   ResponseBody,
+  isTranscribing,
   StateBadge,
   type TranscriptionControls,
 } from "./detail/parts";
@@ -404,7 +405,7 @@ export function EngagementDetail(): React.ReactElement {
     queryFn: () => adminApi.getEngagement(id),
     // Poll while any voice answer is still being transcribed.
     refetchInterval: (query) =>
-      query.state.data?.uploads.some((u) => u.transcript_status === "pending")
+      query.state.data?.uploads.some((u) => isTranscribing(u))
         ? 2000
         : false,
   });
@@ -452,8 +453,24 @@ export function EngagementDetail(): React.ReactElement {
   });
   const transcribeMut = useMutation({
     mutationFn: (uploadId: string) => adminApi.transcribeUpload(uploadId),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["engagement", id] });
+    // The server claimed the row, but a refetch can race its commit. Mark
+    // it pending locally so the spinner shows and polling starts at once.
+    onSuccess: (_res, uploadId) => {
+      qc.setQueryData<EngagementDetailData>(["engagement", id], (d) =>
+        d && {
+          ...d,
+          uploads: d.uploads.map((u) =>
+            u.id === uploadId
+              ? {
+                  ...u,
+                  transcript_status: "pending",
+                  transcript_error: null,
+                  transcribed_at: new Date().toISOString(),
+                }
+              : u,
+          ),
+        },
+      );
     },
     onError: (err) =>
       toast.error(

@@ -278,6 +278,17 @@ async def pulse_add_recipient(
             session, engagement_id=engagement_id, email=clean
         ):
             raise ValueError("recipient already added")
+        # Check before writing anything: failing after the add committed
+        # would report an error for a recipient that now exists, and a
+        # retry would then hit "recipient already added".
+        if send_invite and not await cards_repo.list_for_engagement(
+            session, engagement_id
+        ):
+            raise ValueError(
+                "the deck has no cards yet, so there's nothing to invite "
+                "anyone to — add a card first, or add the recipient with "
+                "send_invite=false"
+            )
         row = await recipients_repo.add(
             session,
             engagement_id=engagement_id,
@@ -305,11 +316,6 @@ async def pulse_add_recipient(
         )
         await session.commit()
         if send_invite:
-            if not await cards_repo.list_for_engagement(session, engagement_id):
-                raise ValueError(
-                    "recipient added, but the deck has no cards yet — "
-                    "add a card before sending the invite"
-                )
             await _send_invites(
                 session,
                 engagement=engagement,

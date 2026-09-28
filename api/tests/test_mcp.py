@@ -915,6 +915,51 @@ async def test_mcp_add_recipient_audits_and_sends_only_when_asked(
     assert row["invited_at"] is not None
 
 
+async def test_mcp_add_recipient_send_invite_on_empty_deck_adds_nothing(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    captured_emails: list[Any],
+) -> None:
+    """``send_invite=True`` on a deck with no cards fails BEFORE the add, so
+    the error doesn't leave a half-done recipient behind and a retry after
+    adding a card works."""
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    eid = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Empty Co"}),
+            api_key=raw,
+        )
+    )["id"]
+
+    resp = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_recipient",
+            {"engagement_id": eid, "email": "early@example.com", "send_invite": True},
+        ),
+        api_key=raw,
+    )
+    assert resp["result"].get("isError") is True, resp
+    assert "no cards" in str(resp["result"])
+    assert captured_emails == []
+    count = (
+        await db.execute(
+            text(
+                "select count(*) from public.recipients "
+                "where engagement_id = cast(:e as uuid)"
+            ),
+            {"e": eid},
+        )
+    ).scalar()
+    assert count == 0
+
+
 async def test_mcp_card_lifecycle_writes_audit_rows(
     mcp_client: AsyncClient,
     db: AsyncSession,

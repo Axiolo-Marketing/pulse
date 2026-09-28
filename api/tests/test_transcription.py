@@ -288,3 +288,90 @@ async def test_transcribe_route_rejects_non_voice_and_unknown(
     assert r.status_code == 400
     r = await admin_authed.post(f"/api/admin/uploads/{uuid.uuid4()}/transcribe")
     assert r.status_code == 404
+
+
+async def test_transcribe_route_claims_up_front_and_rejects_a_double_click(
+    enabled: None,
+    client_authed: AsyncClient,
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry route marks the row ``pending`` before the job starts, so a
+    second click while it runs is a 409 and the recording reaches the
+    provider once."""
+    await _set_flags(db, seed_client["id"], transcribe=False)
+    up = await _upload(client_authed, seed_cards[0]["id"])
+    await transcription.wait_for_pending_transcriptions()
+    await _set_flags(db, seed_client["id"], transcribe=True)
+
+    release = asyncio.Event()
+    calls: list[int] = []
+
+    async def _slow(audio: bytes, mime: str | None) -> transcription.TranscriptResult:
+        calls.append(1)
+        await release.wait()
+        return transcription.TranscriptResult(text="hello")
+
+    monkeypatch.setitem(transcription._PROVIDERS, "fake", _slow)
+
+    first = await admin_authed.post(f"/api/admin/uploads/{up['id']}/transcribe")
+    assert first.status_code == 202
+    assert (await _row(db, up["id"]))["transcript_status"] == "pending"
+
+    second = await admin_authed.post(f"/api/admin/uploads/{up['id']}/transcribe")
+    assert second.status_code == 409
+
+    release.set()
+    await transcription.wait_for_pending_transcriptions()
+    row = await _row(db, up["id"])
+    assert row["transcript_status"] == "done"
+    assert row["transcript"] == "hello"
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(
+    ("claim_age", "expect_run"),
+    [(1, False), (20, True)],
+    ids=["live-claim-skipped", "stale-claim-retaken"],
+)
+async def test_job_respects_a_live_claim_and_retakes_a_stale_one(
+    enabled: None,
+    client_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+    tmp_uploads_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claim_age: int,
+    expect_run: bool,
+) -> None:
+    await _set_flags(db, seed_client["id"], transcribe=False)
+    up = await _upload(client_authed, seed_cards[0]["id"])
+    await transcription.wait_for_pending_transcriptions()
+    await _set_flags(db, seed_client["id"], transcribe=True)
+    # Another attempt claimed it `claim_age` minutes ago.
+    await db.execute(
+        text(
+            "update public.uploads set transcript_status = 'pending', "
+            "transcribed_at = now() - make_interval(mins => :age) "
+            "where id = cast(:u as uuid)"
+        ),
+        {"age": claim_age, "u": up["id"]},
+    )
+
+    calls: list[int] = []
+
+    async def _count(audio: bytes, mime: str | None) -> transcription.TranscriptResult:
+        calls.append(1)
+        return transcription.TranscriptResult(text="hi")
+
+    monkeypatch.setitem(transcription._PROVIDERS, "fake", _count)
+    await transcription.run_transcription(up["id"])
+
+    row = await _row(db, up["id"])
+    assert bool(calls) is expect_run
+    assert row["transcript_status"] == ("done" if expect_run else "pending")

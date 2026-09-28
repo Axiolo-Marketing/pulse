@@ -911,7 +911,11 @@ async def transcribe_upload(
     made before transcription was turned on. Runs in the background; poll
     the engagement detail for the result. 404 outside the active org; 400
     for a non-voice upload, when this server can't transcribe, or when the
-    engagement hasn't opted in."""
+    engagement hasn't opted in; 409 while another attempt is running.
+
+    The row is claimed (``pending``) here, before the job starts, so the
+    response already reflects it and a double click can't send the same
+    recording to the provider twice."""
     user, membership = org_member
     row = await uploads_repo.admin_get_by_id(session, upload_id)
     if row is None:
@@ -928,6 +932,10 @@ async def transcribe_upload(
             status_code=400,
             detail="turn on transcription for this engagement first",
         )
+    if not await uploads_repo.claim_transcription(session, upload_id):
+        raise HTTPException(
+            status_code=409, detail="this answer is already being transcribed"
+        )
     await record_audit(
         session,
         org_id=membership.org_id,
@@ -938,7 +946,7 @@ async def transcribe_upload(
         metadata={"engagement_id": row["engagement_id"]},
     )
     await session.commit()
-    transcription.schedule_transcription(upload_id)
+    transcription.schedule_transcription(upload_id, claimed=True)
     return {"status": "pending"}
 
 

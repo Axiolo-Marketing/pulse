@@ -13,9 +13,10 @@ import hashlib
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from pulse_api import reactive
-from pulse_api.config import settings
+from pulse_api.config import Settings, settings
 
 # ── extract_trigger_text ────────────────────────────────────────────────────
 
@@ -564,6 +565,20 @@ def test_output_config_omits_effort_when_blank(
     monkeypatch.setattr(reactive.settings, "reactive_model", "claude-sonnet-5")
     monkeypatch.setattr(reactive.settings, "reactive_effort", "  ")
     assert "effort" not in reactive._output_config()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("low", "low"), (" High ", "high"), ("xhigh", "xhigh"), ("", "")],
+)
+def test_reactive_effort_setting_is_normalized(raw: str, expected: str) -> None:
+    assert Settings(_env_file=None, reactive_effort=raw).reactive_effort == expected
+
+
+@pytest.mark.parametrize("raw", ["lo", "extreme", "none"])
+def test_reactive_effort_setting_rejects_typos(raw: str) -> None:
+    with pytest.raises(ValidationError, match="REACTIVE_EFFORT"):
+        Settings(_env_file=None, reactive_effort=raw)
 
 
 # ── prompt builder ───────────────────────────────────────────────────────────
