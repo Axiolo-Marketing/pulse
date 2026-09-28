@@ -33,15 +33,17 @@ export interface FontOption {
 const PLUS_JAKARTA_STACK =
   '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
-/** Ordered font catalogue. The first entry is the product default;
- * `applyBranding` resolves an absent/unknown slug to `plus-jakarta-sans`. */
+/** Ordered font catalogue. `applyBranding` resolves an absent/unknown slug
+ * to {@link BRANDING_DEFAULTS}.font (the system stack). */
 export const FONT_OPTIONS: readonly FontOption[] = [
   {
     slug: "plus-jakarta-sans",
     label: "Plus Jakarta Sans",
     cssFamily: PLUS_JAKARTA_STACK,
-    // Already linked in both index.astro and admin.astro <head>.
-    googleParam: null,
+    // v1 page shells link it in <head> too; loading it here as well keeps
+    // it working on shells that don't (the v2 deck defaults to the system
+    // font and only loads Plus Jakarta when an org picks it).
+    googleParam: "Plus+Jakarta+Sans:wght@400;500;600;700;800",
   },
   {
     slug: "inter",
@@ -79,16 +81,18 @@ export const FONT_OPTIONS: readonly FontOption[] = [
   },
 ];
 
-/** Exact `:root` values from `src/styles/pulse.css`. `applyBranding`
- * falls back to these for any unset field so switching orgs (or clearing
- * branding) resets the theme cleanly. */
+/** The Pulse neutral theme — what a deck looks like for an org with no
+ * custom branding. Must equal the `:root` defaults in `src/styles/pulse.css`
+ * (v1) and `src/styles/theme.css` (v2). `applyBranding` falls back to these
+ * for any unset field so switching orgs (or clearing branding) resets the
+ * theme cleanly. */
 export const BRANDING_DEFAULTS = {
-  brand_color: "#2960F6",
-  brand_dark: "#020F82",
-  brand_soft: "#E8EEFE",
-  background_color: "#F4F4F6",
-  text_color: "#0A0F2E",
-  font: "plus-jakarta-sans",
+  brand_color: "#171717",
+  brand_dark: "#0A0A0A",
+  brand_soft: "#F5F5F5",
+  background_color: "#FFFFFF",
+  text_color: "#0A0A0A",
+  font: "system-ui",
 } as const;
 
 // ── Colour math ────────────────────────────────────────────────────────────
@@ -155,11 +159,15 @@ export function ensureFontLoaded(slug: string): void {
 
 // ── Apply branding to the live document ──────────────────────────────────────
 
-/** Resolve a font slug to its catalogue entry, defaulting to Plus Jakarta
- * Sans when the slug is absent or unrecognized. */
-function resolveFont(slug: string | null | undefined): FontOption {
+/** Resolve a font slug to its catalogue entry, defaulting to
+ * {@link BRANDING_DEFAULTS}.font when the slug is absent or unrecognized. */
+export function resolveFont(slug: string | null | undefined): FontOption {
   const found = slug ? FONT_OPTIONS.find((o) => o.slug === slug) : undefined;
-  return found ?? FONT_OPTIONS[0];
+  return (
+    found ??
+    FONT_OPTIONS.find((o) => o.slug === BRANDING_DEFAULTS.font) ??
+    FONT_OPTIONS[0]
+  );
 }
 
 /** Push a `BrandingSettings` object onto the document's `:root` custom

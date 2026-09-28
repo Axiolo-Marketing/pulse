@@ -365,6 +365,51 @@ async def test_create_org_validation_matrix(
         assert match is not None, msg.body
 
 
+async def test_create_org_without_owner_email_makes_caller_owner(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    captured_emails: list[OutboundEmail],
+    seed_admin_user: dict[str, str],
+) -> None:
+    """No ``owner_email``: the superadmin owns the new org directly — no
+    invite row, no email, and the org shows up in their own org list."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    await db.flush()
+
+    r = await admin_authed.post(
+        "/api/superadmin/orgs", json={"name": "Solo Co", "slug": "solo-co"}
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["invite"] is None
+    assert captured_emails == []
+
+    org_id = body["org"]["id"]
+    role = (
+        await db.execute(
+            text(
+                "select role from public.organization_memberships "
+                "where org_id = cast(:o as uuid) and user_id = cast(:u as uuid)"
+            ),
+            {"o": org_id, "u": seed_admin_user["id"]},
+        )
+    ).scalar()
+    assert role == "owner"
+    invites = (
+        await db.execute(
+            text(
+                "select count(*) from public.organization_invites "
+                "where org_id = cast(:o as uuid)"
+            ),
+            {"o": org_id},
+        )
+    ).scalar()
+    assert invites == 0
+
+    mine = (await admin_authed.get("/api/me/orgs")).json()
+    assert any(o["id"] == org_id for o in mine)
+
+
 async def test_create_org_duplicate_slug_409(
     admin_authed: AsyncClient,
     db: AsyncSession,

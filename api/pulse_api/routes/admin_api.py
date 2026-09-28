@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
-from pulse_api import reactive, reminders, storage
+from pulse_api import reactive, reminders, storage, transcription
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (
@@ -27,6 +27,7 @@ from pulse_api.card_import import CardImportError, parse_markdown
 from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
+from pulse_api.repos import client_contacts as contacts_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import recipients as recipients_repo
@@ -75,6 +76,7 @@ class UpdateEngagementRequest(BaseModel):
     voice_enabled: bool | None = None
     reminders_enabled: bool | None = None
     reactive_cards_enabled: bool | None = None
+    transcription_enabled: bool | None = None
 
 
 class AddRecipientRequest(BaseModel):
@@ -84,6 +86,22 @@ class AddRecipientRequest(BaseModel):
 
     email: str = Field(min_length=3, max_length=320)
     name: str | None = Field(default=None, max_length=200)
+
+
+class SendInvitesRequest(BaseModel):
+    """Email the deck link to these recipients of the engagement (a send or
+    a resend). Nothing is emailed until an operator asks for it."""
+
+    recipient_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class ClientContactRequest(BaseModel):
+    """Save a person on a client. Re-saving an existing email (any case)
+    updates it; an omitted name/role keeps what's on file."""
+
+    email: str = Field(min_length=3, max_length=320)
+    name: str | None = Field(default=None, max_length=200)
+    role: str | None = Field(default=None, max_length=200)
 
 
 RESPONSE_TYPES = (
@@ -165,6 +183,9 @@ async def get_engagement(
         "cards": await cards_repo.list_for_engagement(session, engagement_id),
         "responses": await responses_repo.list_for_engagement(session, engagement_id),
         "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
+        # Whether this deployment can transcribe voice answers at all — the
+        # UI hides/disables the per-engagement toggle when it can't.
+        "transcription_available": transcription.available(),
     }
 
 
@@ -271,6 +292,11 @@ async def update_engagement(
                     "ask an Axiolo admin to turn them on first"
                 ),
             )
+    if fields.get("transcription_enabled") is True and not transcription.available():
+        raise HTTPException(
+            status_code=400,
+            detail="voice transcription isn't set up on this server",
+        )
     row = await engagements_repo.update_engagement(session, engagement_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="engagement not found")
@@ -425,8 +451,10 @@ async def add_recipient(
         get_current_org_member
     ),
 ) -> dict[str, Any]:
-    """Add a respondent, mint their private deck token, and email them the
-    invite right away (when the deck has at least one card). 404 if the
+    """Add a respondent and mint their private deck token. Nothing is
+    emailed — the operator copies the link or sends the invite explicitly
+    (``POST …/invites``). The person is also saved as a contact on the
+    engagement's client, for the respondent type-ahead. 404 if the
     engagement isn't in the active org; 409 if the email is already a
     recipient of this engagement."""
     user, membership = org_member
@@ -447,6 +475,13 @@ async def add_recipient(
     )
     if row is None:
         raise HTTPException(status_code=400, detail="could not add recipient")
+    await contacts_repo.upsert(
+        session,
+        org_id=str(membership.org_id),
+        client_id=str(engagement["client_id"]),
+        email=email,
+        name=row.get("name"),
+    )
     await record_audit(
         session,
         org_id=membership.org_id,
@@ -457,15 +492,43 @@ async def add_recipient(
         metadata={"engagement_id": engagement_id, "email": email},
     )
     await session.commit()
-    # Send the invite immediately (no-op when the deck has no cards yet — the
-    # first card picks them up). The frontend re-fetches the list after add,
-    # so the returned row's pre-invite invited_at is fine here. Runs AFTER
-    # the recipient-add commit above so the email network call never holds
-    # that write's transaction open (audit finding M7).
-    await _send_pending_invites(
-        session, engagement=engagement, org_id=membership.org_id, user=user
-    )
     return row
+
+
+@router.post("/engagements/{engagement_id}/invites")
+async def send_invites(
+    engagement_id: str,
+    req: SendInvitesRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    """Email the deck link to the chosen recipients (first send or resend)
+    and stamp their ``invited_at``. Recipients who unsubscribed, or have no
+    email, are skipped and reported back. 404 if the engagement isn't in
+    the active org; 400 if the deck has no cards yet (nothing to answer)."""
+    user, membership = org_member
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    if not await cards_repo.list_for_engagement(session, engagement_id):
+        raise HTTPException(
+            status_code=400, detail="add at least one card before sending invites"
+        )
+    chosen = await recipients_repo.list_by_ids(
+        session, engagement_id=engagement_id, recipient_ids=req.recipient_ids
+    )
+    sendable = [r for r in chosen if r["email"] and r["unsubscribed_at"] is None]
+    skipped = [r["id"] for r in chosen if r not in sendable]
+    sent = await _send_invites(
+        session,
+        engagement=engagement,
+        org_id=membership.org_id,
+        user=user,
+        recipients=sendable,
+    )
+    return {"sent": sent, "skipped": skipped}
 
 
 @router.delete(
@@ -505,39 +568,32 @@ async def remove_recipient(
         storage.delete_upload(path)
 
 
-async def _send_pending_invites(
+async def _send_invites(
     session: AsyncSession,
     *,
     engagement: dict[str, Any],
     org_id: Any,
     user: User,
+    recipients: list[dict[str, Any]],
 ) -> int:
-    """Email the deck link to every recipient of this engagement who has an
-    email but hasn't been invited yet, then stamp ``invited_at``. Returns the
-    count emailed; a no-op (0) when the deck has no cards yet or nobody is
-    pending. Sends are best-effort (``send_email`` never raises) — a recipient
-    is marked invited once the attempt is made.
+    """Email the deck link to ``recipients`` (each ``{id, email, name,
+    token}``), stamp their ``invited_at``, and write one
+    ``engagement.invites_sent`` audit row. Returns the count emailed; 0 (and
+    no audit row) for an empty list. Sends are best-effort (``send_email``
+    never raises) — a recipient is marked invited once the attempt is made.
 
-    Commits its own short transaction (the ``mark_invited`` stamp +
-    ``engagement.invites_sent`` audit row) once the emails are sent. The
-    caller MUST have already committed its own write (the recipient/card
-    creation that triggered this) before calling here — that way the
-    network-bound email calls never run while that write's transaction is
-    still open (see audit finding M7).
+    Commits its own short transaction once the emails are sent. The caller
+    MUST have already committed (or closed) its own transaction first, so the
+    network-bound email calls never run while a write is open (audit finding
+    M7).
 
-    Invites are sent automatically: adding a respondent invites them right
-    away (this fires from ``add_recipient``), and adding the first card
-    invites anyone who was added before the deck had questions (it fires from
-    the card-creation routes). There is no manual "send" step.
+    Invites only go out when an operator asks: the admin ``POST …/invites``
+    route, or MCP ``pulse_add_recipient(send_invite=True)``. Adding a
+    respondent or a card never emails anyone.
     """
+    if not recipients:
+        return 0
     engagement_id = str(engagement["id"])
-    cards = await cards_repo.list_for_engagement(session, engagement_id)
-    if not cards:
-        return 0
-    pending = await recipients_repo.list_pending_invites(session, engagement_id)
-    if not pending:
-        return 0
-
     org_name = (
         await session.execute(
             text("select name from public.organizations where id = cast(:o as uuid)"),
@@ -545,7 +601,7 @@ async def _send_pending_invites(
         )
     ).scalar_one_or_none() or "Your consultant"
 
-    for r in pending:
+    for r in recipients:
         subject, body = engagement_invite_email(
             deck_url=reminders.deck_url(r["token"]),
             org_name=str(org_name),
@@ -555,7 +611,7 @@ async def _send_pending_invites(
         )
         await email_module.send_email(r["email"], subject, body)
 
-    await recipients_repo.mark_invited(session, [r["id"] for r in pending])
+    await recipients_repo.mark_invited(session, [r["id"] for r in recipients])
     await record_audit(
         session,
         org_id=org_id,
@@ -563,10 +619,13 @@ async def _send_pending_invites(
         action="engagement.invites_sent",
         target_type="engagement",
         target_id=engagement_id,
-        metadata={"count": len(pending)},
+        metadata={
+            "count": len(recipients),
+            "emails": [r["email"] for r in recipients],
+        },
     )
     await session.commit()
-    return len(pending)
+    return len(recipients)
 
 
 # ── Clients (real clients/companies) ───────────────────────────────────────
@@ -585,6 +644,84 @@ async def list_clients(
     ``client_name``), so there is no create/update/delete route here.
     """
     return await clients_repo.list_for_org(session)
+
+
+@router.get("/clients/{client_id}/contacts")
+async def list_client_contacts(
+    client_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    _: tuple[User, OrganizationMembership] = Depends(get_current_org_member),
+) -> list[dict[str, Any]]:
+    """A client's saved contacts — the respondent type-ahead source. 404 if
+    the client isn't in the active org (RLS hides other tenants' clients)."""
+    if (await clients_repo.get_by_id(session, client_id)) is None:
+        raise HTTPException(status_code=404, detail="client not found")
+    return await contacts_repo.list_for_client(session, client_id)
+
+
+@router.post("/clients/{client_id}/contacts", status_code=201)
+async def save_client_contact(
+    client_id: str,
+    req: ClientContactRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    """Save (or update, matched on email) a person on a client."""
+    user, membership = org_member
+    if (await clients_repo.get_by_id(session, client_id)) is None:
+        raise HTTPException(status_code=404, detail="client not found")
+    email = req.email.strip()
+    row = await contacts_repo.upsert(
+        session,
+        org_id=str(membership.org_id),
+        client_id=client_id,
+        email=email,
+        name=(req.name.strip() or None) if req.name else None,
+        role=(req.role.strip() or None) if req.role else None,
+    )
+    if row is None:
+        raise HTTPException(status_code=400, detail="could not save contact")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.contact_save",
+        target_type="client",
+        target_id=client_id,
+        metadata={"email": email},
+    )
+    await session.commit()
+    return row
+
+
+@router.delete("/clients/{client_id}/contacts/{contact_id}", status_code=204)
+async def remove_client_contact(
+    client_id: str,
+    contact_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> None:
+    """Remove a saved contact. Doesn't touch any engagement's recipients."""
+    user, membership = org_member
+    removed = await contacts_repo.remove(
+        session, client_id=client_id, contact_id=contact_id
+    )
+    if removed is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="client.contact_remove",
+        target_type="client",
+        target_id=client_id,
+        metadata={"email": removed.get("email")},
+    )
+    await session.commit()
 
 
 # ── Cards ──────────────────────────────────────────────────────────────────
@@ -636,13 +773,6 @@ async def add_card(
         },
     )
     await session.commit()
-    # A deck that just gained its first card invites any respondents added
-    # before there were questions to answer (no-op once everyone's invited).
-    # Runs after the card-create commit above so email I/O never holds that
-    # write's transaction open (audit finding M7).
-    await _send_pending_invites(
-        session, engagement=engagement, org_id=membership.org_id, user=user
-    )
     return row
 
 
@@ -705,12 +835,6 @@ async def import_cards_markdown(
         metadata={"count": len(created)},
     )
     await session.commit()
-    # First cards on the deck invite any respondents added beforehand. Runs
-    # after the import commit above so email I/O never holds that write's
-    # transaction open (audit finding M7).
-    await _send_pending_invites(
-        session, engagement=engagement, org_id=membership.org_id, user=user
-    )
     return {"created": created}
 
 
@@ -770,6 +894,60 @@ async def delete_card(
         metadata={"title": snapshot_title},
     )
     await session.commit()
+
+
+# ── Voice transcription (retry / transcribe an existing recording) ─────────
+
+
+@router.post("/uploads/{upload_id}/transcribe", status_code=202)
+async def transcribe_upload(
+    upload_id: str,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, str]:
+    """(Re)transcribe one voice answer — for a failed attempt, or a recording
+    made before transcription was turned on. Runs in the background; poll
+    the engagement detail for the result. 404 outside the active org; 400
+    for a non-voice upload, when this server can't transcribe, or when the
+    engagement hasn't opted in; 409 while another attempt is running.
+
+    The row is claimed (``pending``) here, before the job starts, so the
+    response already reflects it and a double click can't send the same
+    recording to the provider twice."""
+    user, membership = org_member
+    row = await uploads_repo.admin_get_by_id(session, upload_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="upload not found")
+    if row["kind"] != "voice":
+        raise HTTPException(status_code=400, detail="only voice answers can be transcribed")
+    if not transcription.available():
+        raise HTTPException(
+            status_code=400, detail="voice transcription isn't set up on this server"
+        )
+    engagement = await engagements_repo.get_by_id(session, row["engagement_id"])
+    if not (engagement and engagement.get("transcription_enabled")):
+        raise HTTPException(
+            status_code=400,
+            detail="turn on transcription for this engagement first",
+        )
+    if not await uploads_repo.claim_transcription(session, upload_id):
+        raise HTTPException(
+            status_code=409, detail="this answer is already being transcribed"
+        )
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="upload.transcribe",
+        target_type="upload",
+        target_id=upload_id,
+        metadata={"engagement_id": row["engagement_id"]},
+    )
+    await session.commit()
+    transcription.schedule_transcription(upload_id, claimed=True)
+    return {"status": "pending"}
 
 
 # ── Admin downloads (org-scoped via RLS) ───────────────────────────────────

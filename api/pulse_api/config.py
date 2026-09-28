@@ -1,8 +1,12 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Values the Messages API accepts for ``output_config.effort``; "" omits it.
+REACTIVE_EFFORT_LEVELS = frozenset({"", "low", "medium", "high", "xhigh", "max"})
 
 
 class Settings(BaseSettings):
@@ -130,13 +134,25 @@ class Settings(BaseSettings):
     # `reactive_fake_mode` true in production.
     anthropic_api_key: str = ""
     reactive_cards_enabled: bool = False
-    reactive_model: str = "claude-opus-4-8"
-    reactive_max_output_tokens: int = 2048
+    reactive_model: str = "claude-sonnet-5"
+    # low | medium | high | xhigh | max; empty = omit (API default). Never
+    # sent to Haiku models, which reject it (see reactive._output_config).
+    reactive_effort: str = "low"
+    # Headroom for any brief reasoning on models that think by default.
+    reactive_max_output_tokens: int = 4096
     reactive_timeout_seconds: float = 60.0
     reactive_max_cards_per_generation: int = 2
     reactive_max_generated_per_recipient: int = 10
     reactive_max_trigger_chars: int = 4000
     reactive_fake_mode: bool = False
+
+    # Voice transcription (``pulse_api/transcription.py``). Two gates, both
+    # default-off: this deployment switch + a configured provider, and the
+    # per-engagement ``engagements.transcription_enabled`` opt-in. Providers:
+    # ``fake`` (dev only — canned text, no network, never in production).
+    # Real providers (e.g. Deepgram) plug in behind the same interface.
+    transcription_enabled: bool = False
+    transcription_provider: str = "fake"
     # SDK-level retry count for transient errors (429/5xx/connection).
     # 2 matches the `anthropic` package's own default — set explicitly
     # (rather than relying on the SDK default) so tests can dial it to 0
@@ -195,6 +211,17 @@ class Settings(BaseSettings):
             ``<issuer base>/api/mcp``.
         """
         return f"{self.mcp_issuer_base}/api/mcp"
+
+    @field_validator("reactive_effort")
+    @classmethod
+    def _check_reactive_effort(cls, value: str) -> str:
+        # Fail at startup: a typo here would otherwise 400 every generation,
+        # which only shows up as silently `failed` rows.
+        effort = value.strip().lower()
+        if effort not in REACTIVE_EFFORT_LEVELS:
+            allowed = ", ".join(sorted(REACTIVE_EFFORT_LEVELS - {""}))
+            raise ValueError(f"REACTIVE_EFFORT must be one of {allowed}, or blank")
+        return effort
 
 
 settings = Settings()

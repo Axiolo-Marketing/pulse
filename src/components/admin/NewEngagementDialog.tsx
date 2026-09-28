@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 import { adminApi, ApiError, clientsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -22,8 +23,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+
+import { Field, ToggleList, ToggleRow } from "./form-parts";
+import { RespondentPicker, type PickedRespondent } from "./RespondentPicker";
 
 export function NewEngagementDialog({
   open,
@@ -38,6 +40,7 @@ export function NewEngagementDialog({
   const [clientName, setClientName] = useState("");
   const [engagementName, setEngagementName] = useState("");
   const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [respondents, setRespondents] = useState<PickedRespondent[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Fresh form every time the dialog opens (it stays mounted while closed).
@@ -46,6 +49,7 @@ export function NewEngagementDialog({
       setClientName("");
       setEngagementName("");
       setVoiceEnabled(false);
+      setRespondents([]);
       setError(null);
     }
   }, [open]);
@@ -55,6 +59,15 @@ export function NewEngagementDialog({
     queryFn: () => clientsApi.list(),
   });
   const clients = clientsQ.data ?? [];
+  const matchedClient = clients.find(
+    (c) => c.name.toLowerCase() === clientName.trim().toLowerCase(),
+  );
+  // Suggest the chosen client's saved people; a brand-new client has none.
+  const contactsQ = useQuery({
+    queryKey: ["client-contacts", matchedClient?.id],
+    queryFn: () => clientsApi.listContacts(matchedClient!.id),
+    enabled: open && !!matchedClient,
+  });
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -70,11 +83,30 @@ export function NewEngagementDialog({
       if (voiceEnabled) {
         await adminApi.updateEngagement(created.id, { voice_enabled: true });
       }
-      return created;
+      // Add respondents one by one — nobody is emailed. A failure on one
+      // (e.g. a malformed address the server rejects) doesn't stop the rest.
+      const failed: string[] = [];
+      for (const r of respondents) {
+        try {
+          await adminApi.addRecipient(created.id, {
+            email: r.email,
+            name: r.name ?? undefined,
+          });
+        } catch {
+          failed.push(r.email);
+        }
+      }
+      return { created, failed };
     },
-    onSuccess: (created) => {
+    onSuccess: ({ created, failed }) => {
       void queryClient.invalidateQueries({ queryKey: ["engagements"] });
       void queryClient.invalidateQueries({ queryKey: ["clients"] });
+      void queryClient.invalidateQueries({ queryKey: ["client-contacts"] });
+      if (failed.length) {
+        toast.error(`Couldn't add ${failed.join(", ")}.`, {
+          description: "You can add them from the engagement page.",
+        });
+      }
       onOpenChange(false);
       navigate(`/client/${created.id}`);
     },
@@ -107,23 +139,21 @@ export function NewEngagementDialog({
         <DialogHeader>
           <DialogTitle>New engagement</DialogTitle>
           <DialogDescription>
-            Create an engagement for a client. A new client is created if the
-            name doesn&apos;t match an existing one.
+            Pick an existing client or type a new name to create one.
           </DialogDescription>
         </DialogHeader>
         <form
-          className="flex flex-col gap-4"
+          className="flex flex-col gap-5"
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
           noValidate
         >
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-eng-client">Client</Label>
+          <Field id="new-eng-client" label="Client">
             <Command
               shouldFilter={false}
-              className="rounded-md border border-input"
+              className="rounded-md border border-input shadow-xs"
             >
               <CommandInput
                 id="new-eng-client"
@@ -150,7 +180,7 @@ export function NewEngagementDialog({
                       >
                         {c.name}
                         {exact?.id === c.id ? (
-                          <Check className="ml-auto size-4 text-primary" />
+                          <Check className="ml-auto size-4" />
                         ) : null}
                       </CommandItem>
                     ))}
@@ -166,25 +196,45 @@ export function NewEngagementDialog({
                 ) : null}
               </CommandList>
             </Command>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-eng-name">Engagement name</Label>
+          </Field>
+          <Field
+            id="new-eng-name"
+            label="Engagement name"
+            optional
+            hint="What respondents are weighing in on. You can change it later."
+          >
             <Input
               id="new-eng-name"
               value={engagementName}
               onChange={(e) => setEngagementName(e.target.value)}
               disabled={submitting}
+              placeholder="e.g. Q3 brand refresh"
             />
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch
+          </Field>
+          <Field
+            id="new-eng-respondents"
+            label="Respondents"
+            optional
+            hint="Nobody is emailed yet. Send invites or copy links from the engagement page."
+          >
+            <RespondentPicker
+              id="new-eng-respondents"
+              contacts={contactsQ.data ?? []}
+              value={respondents}
+              onChange={setRespondents}
+              disabled={submitting}
+            />
+          </Field>
+          <ToggleList>
+            <ToggleRow
               id="new-eng-voice"
+              label="Voice answers"
+              description="Respondents can record a voice note on any card."
               checked={voiceEnabled}
               onCheckedChange={setVoiceEnabled}
               disabled={submitting}
             />
-            <Label htmlFor="new-eng-voice">Enable voice answers</Label>
-          </div>
+          </ToggleList>
           {error ? (
             <p className="text-sm font-medium text-destructive" role="alert">
               {error}

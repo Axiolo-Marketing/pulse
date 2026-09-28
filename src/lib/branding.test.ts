@@ -38,7 +38,7 @@ describe("applyBranding live theming", () => {
   const read = (name: string): string =>
     document.documentElement.style.getPropertyValue(name).trim();
 
-  it("falls back to Axiolo defaults when branding is null", () => {
+  it("falls back to the Pulse neutral defaults when branding is null", () => {
     applyBranding(null);
     expect(read("--primary")).toBe(BRANDING_DEFAULTS.brand_color);
     expect(read("--primary-dark")).toBe(BRANDING_DEFAULTS.brand_dark);

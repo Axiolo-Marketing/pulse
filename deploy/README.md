@@ -134,7 +134,7 @@ you opt in. The playbook templates the env vars from `group_vars/all.yml`
    Paste the `!vault` block over the `vault_pulse_anthropic_api_key: ""`
    placeholder in `group_vars/all.yml`, flip
    `pulse_reactive_cards_enabled: true`, and deploy. `pulse_reactive_model`
-   selects the Claude model (default `claude-opus-4-8`; any id priced in
+   selects the Claude model (default `claude-sonnet-5`; any id priced in
    `api/pulse_api/reactive.py`'s `MODEL_PRICING` keeps the superadmin cost
    estimates populated). `REACTIVE_FAKE_MODE` is deliberately not templated —
    it is a dev-only stub that fabricates follow-up cards without calling the
@@ -147,7 +147,7 @@ you opt in. The playbook templates the env vars from `group_vars/all.yml`
 
 Cost visibility: every generation records tokens + `cost_usd` on
 `card_generations`; the superadmin "Reactive cards usage" panel aggregates
-per org (≈ $0.01–0.015 per generation on the default `claude-opus-4-8`).
+per org (≈ $0.005–0.01 per generation on the default `claude-sonnet-5` at `low` effort).
 Spend is bounded per respondent (attempt cap) and per correction (dedup +
 2-card cap) — see SPEC §15.6.
 

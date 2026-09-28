@@ -176,33 +176,40 @@ async def remove(
     return dict(row) if row else None
 
 
-async def list_pending_invites(
-    session: AsyncSession, engagement_id: str
+async def list_by_ids(
+    session: AsyncSession, *, engagement_id: str, recipient_ids: list[str]
 ) -> list[dict]:
-    """Recipients on this engagement who can be invited but haven't been —
-    a non-null email and ``invited_at is null``. Returns ``{id, email,
-    name, token}`` for each, for the auto-invite helper to email + stamp."""
+    """The given recipients of one engagement, for an explicit invite send.
+    Ids that aren't on this engagement (or aren't in the active org — RLS)
+    are silently absent from the result. Returns ``{id, email, name, token,
+    unsubscribed_at}`` in the order they were added."""
+    ids = [i for i in recipient_ids if _valid_uuid(i)]
+    if not (ids and _valid_uuid(engagement_id)):
+        return []
     result = await session.execute(
         text(
-            "select id::text, email, name, token from public.recipients "
+            "select id::text, email, name, token, unsubscribed_at "
+            "from public.recipients "
             "where engagement_id = cast(:eid as uuid) "
-            "  and email is not null and invited_at is null "
+            "  and id = any(cast(:ids as uuid[])) "
             "order by created_at"
         ),
-        {"eid": engagement_id},
+        {"eid": engagement_id, "ids": ids},
     )
     return [dict(r) for r in result.mappings().all()]
 
 
 async def mark_invited(session: AsyncSession, recipient_ids: list[str]) -> None:
-    """Stamp ``invited_at = now()`` on the given recipients (idempotent —
-    only sets it where still null, so a re-run never moves the timestamp)."""
+    """Stamp ``invited_at = now()`` on the given recipients. Every send —
+    including a resend — moves the stamp, so the reminder job's inactivity
+    clock (``coalesce(last_active_at, invited_at)``) restarts from the most
+    recent invite."""
     if not recipient_ids:
         return
     await session.execute(
         text(
             "update public.recipients set invited_at = now() "
-            "where id = any(cast(:ids as uuid[])) and invited_at is null"
+            "where id = any(cast(:ids as uuid[]))"
         ),
         {"ids": recipient_ids},
     )

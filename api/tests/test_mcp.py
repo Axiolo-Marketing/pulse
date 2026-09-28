@@ -821,15 +821,14 @@ async def test_mcp_create_update_delete_engagement_write_audit_rows(
     assert any(r["target_id"] == eid for r in delete_rows)
 
 
-async def test_mcp_add_recipient_writes_audit_row_and_sends_invite(
+async def test_mcp_add_recipient_audits_and_sends_only_when_asked(
     mcp_client: AsyncClient,
     db: AsyncSession,
     seed_admin_user: dict[str, str],
     captured_emails: list[Any],
 ) -> None:
-    """``pulse_add_recipient`` must both audit AND fire the pending-invite
-    send, exactly like the REST twin — the deck already has a card so the
-    invite isn't a no-op."""
+    """``pulse_add_recipient`` audits like the REST twin and never emails on
+    its own; ``send_invite=True`` sends (the deck already has a card)."""
     raw = await _insert_admin_key(
         db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
     )
@@ -845,7 +844,7 @@ async def test_mcp_add_recipient_writes_audit_row_and_sends_invite(
     )
     eid = eng["id"]
 
-    # A card must exist for _send_pending_invites to actually send anything.
+    # A card must exist before an invite can be sent.
     await _mcp_call(
         mcp_client,
         "tools/call",
@@ -877,9 +876,28 @@ async def test_mcp_add_recipient_writes_audit_row_and_sends_invite(
 
     audit_rows = await _fetch_audit_rows(db, org_id=org_id, action="recipient.add")
     assert any(r["target_id"] == recipient["id"] for r in audit_rows)
+    # Adding alone never emails.
+    assert captured_emails == []
+    assert recipient["invited_at"] is None
+
+    send_resp = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_recipient",
+            {
+                "engagement_id": eid,
+                "email": "second@example.com",
+                "send_invite": True,
+            },
+        ),
+        api_key=raw,
+    )
+    assert send_resp["result"].get("isError") is not True, send_resp
+    recipient = _structured(send_resp)
 
     # The invite was actually sent (not just audited).
-    assert any(e.to == "invitee@example.com" for e in captured_emails)
+    assert [e.to for e in captured_emails] == ["second@example.com"]
     invites_sent_rows = await _fetch_audit_rows(
         db, org_id=org_id, action="engagement.invites_sent"
     )
@@ -895,6 +913,51 @@ async def test_mcp_add_recipient_writes_audit_row_and_sends_invite(
         )
     ).mappings().one()
     assert row["invited_at"] is not None
+
+
+async def test_mcp_add_recipient_send_invite_on_empty_deck_adds_nothing(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    captured_emails: list[Any],
+) -> None:
+    """``send_invite=True`` on a deck with no cards fails BEFORE the add, so
+    the error doesn't leave a half-done recipient behind and a retry after
+    adding a card works."""
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    eid = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Empty Co"}),
+            api_key=raw,
+        )
+    )["id"]
+
+    resp = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_add_recipient",
+            {"engagement_id": eid, "email": "early@example.com", "send_invite": True},
+        ),
+        api_key=raw,
+    )
+    assert resp["result"].get("isError") is True, resp
+    assert "no cards" in str(resp["result"])
+    assert captured_emails == []
+    count = (
+        await db.execute(
+            text(
+                "select count(*) from public.recipients "
+                "where engagement_id = cast(:e as uuid)"
+            ),
+            {"e": eid},
+        )
+    ).scalar()
+    assert count == 0
 
 
 async def test_mcp_card_lifecycle_writes_audit_rows(

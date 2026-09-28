@@ -7,7 +7,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 UPLOAD_COLS = (
     "id::text, card_id::text, engagement_id::text, recipient_id::text, file_name, "
-    "file_size_bytes, storage_path, mime_type, kind, uploaded_at"
+    "file_size_bytes, storage_path, mime_type, kind, uploaded_at, "
+    "transcript, transcript_status, transcript_provider, transcript_error, "
+    "transcribed_at"
+)
+
+# A ``pending`` claim older than this is treated as abandoned (the worker
+# died mid-run) and can be claimed again. Mirrored in the admin UI
+# (``TRANSCRIPT_STALE_MS`` in ``detail/parts.tsx``).
+STALE_CLAIM_SECONDS = 600
+
+# Take the transcription claim on one voice upload: ``pending`` + claim time,
+# only when no live attempt already holds it. Shared by the job and the admin
+# retry route (``claim_transcription`` below). A row that returns from
+# it is claimed by the caller; no row means someone else is on it.
+CLAIM_SQL = (
+    "update public.uploads "
+    "set transcript_status = 'pending', transcript_error = null, "
+    "    transcribed_at = now() "
+    "where id = cast(:uid as uuid) and kind = 'voice' "
+    "  and (transcript_status is distinct from 'pending' "
+    "       or coalesce(transcribed_at, uploaded_at) "
+    "          < now() - make_interval(secs => :stale)) "
+    "returning id::text"
 )
 
 
@@ -151,6 +173,18 @@ async def admin_get_by_id(session: AsyncSession, upload_id: str) -> dict | None:
     )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
+
+
+async def claim_transcription(session: AsyncSession, upload_id: str) -> bool:
+    """Take the transcription claim on one voice upload (org-scoped via RLS):
+    ``pending`` now, unless a live attempt already holds it. False when
+    someone else has it (or the row isn't a visible voice upload)."""
+    if not _valid_uuid(upload_id):
+        return False
+    result = await session.execute(
+        text(CLAIM_SQL), {"uid": upload_id, "stale": STALE_CLAIM_SECONDS}
+    )
+    return result.scalar_one_or_none() is not None
 
 
 # ── Helpers used by both modes ─────────────────────────────────────────────

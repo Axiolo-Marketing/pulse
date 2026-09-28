@@ -24,16 +24,14 @@ export function OrgSwitcher({
   // Single org — a non-interactive label.
   if (orgs.length <= 1) {
     return (
-      <span className="rounded-md border border-border px-2.5 py-1 text-sm font-medium text-foreground">
-        {active.name}
-      </span>
+      <span className="text-sm font-medium text-foreground">{active.name}</span>
     );
   }
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
+        <Button variant="ghost" size="sm" className="gap-1.5 px-2">
           {active.name}
           <ChevronDown className="size-4 text-muted-foreground" />
         </Button>

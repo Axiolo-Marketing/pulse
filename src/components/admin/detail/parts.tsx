@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react";
+import { LoaderCircle, RotateCw, Sparkles, TextQuote } from "lucide-react";
 
 import {
   adminApi,
@@ -8,6 +8,7 @@ import {
   type UploadRow,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export function rcKey(recipientId: string, cardId: string): string {
@@ -91,19 +92,19 @@ export function StateBadge({
   response?: ClientResponse;
 }): React.ReactElement {
   const map: Record<string, { label: string; cls: string }> = {
-    answered: { label: "Answered", cls: "bg-secondary text-secondary-foreground" },
-    needs_edit: { label: "Needs edit", cls: "bg-warning-soft text-warning" },
-    skipped: { label: "Skipped", cls: "bg-warning-soft text-warning" },
-    viewed: { label: "Viewed", cls: "bg-muted text-muted-foreground" },
+    answered: { label: "Answered", cls: "border-success/20 bg-success-soft text-success" },
+    needs_edit: { label: "Needs edit", cls: "border-warning/30 bg-warning-soft text-amber-700" },
+    skipped: { label: "Skipped", cls: "border-border bg-muted text-muted-foreground" },
+    viewed: { label: "Viewed", cls: "border-border bg-background text-muted-foreground" },
   };
   const { label, cls } = map[response?.state ?? ""] ?? {
     label: "Not viewed",
-    cls: "bg-muted text-muted-foreground",
+    cls: "border-dashed border-border bg-background text-muted-foreground",
   };
   return (
     <span
       className={cn(
-        "whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        "whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[11px] font-medium leading-none",
         cls,
       )}
     >
@@ -130,14 +131,103 @@ function Muted({ children }: { children: React.ReactNode }): React.ReactElement 
 
 /** One recipient's answer to one card — value per response_type, plus any
  * file/voice uploads (downloaded through the admin session cookie). */
+/** A `pending` transcript older than this was abandoned (the worker died
+ * mid-run); the server lets it be claimed again. Mirrors
+ * `STALE_CLAIM_SECONDS` in `api/pulse_api/repos/uploads.py`. */
+const TRANSCRIPT_STALE_MS = 600_000;
+
+/** Still being transcribed: `pending` with a live claim. While pending,
+ * `transcribed_at` holds the claim time. */
+export function isTranscribing(upload: UploadRow, now = Date.now()): boolean {
+  if (upload.transcript_status !== "pending") return false;
+  const since = Date.parse(upload.transcribed_at ?? upload.uploaded_at);
+  return Number.isNaN(since) || now - since < TRANSCRIPT_STALE_MS;
+}
+
+/** Operator controls for voice-answer transcripts. `enabled` = this
+ * engagement opted in AND the server can transcribe; only then are the
+ * Transcribe / Retry actions offered. */
+export interface TranscriptionControls {
+  enabled: boolean;
+  onTranscribe: (uploadId: string) => void;
+}
+
+function VoiceTranscript({
+  upload,
+  controls,
+}: {
+  upload: UploadRow;
+  controls?: TranscriptionControls;
+}): React.ReactElement | null {
+  const status =
+    upload.transcript_status === "pending" && !isTranscribing(upload)
+      ? "failed" // abandoned claim — offer Retry instead of spinning forever
+      : (upload.transcript_status ?? null);
+  const canAct = !!controls?.enabled;
+
+  if (status === "done" && upload.transcript) {
+    return (
+      <div className="mt-2 rounded-md border border-border bg-background px-3 py-2.5">
+        <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <TextQuote className="size-3.5" aria-hidden="true" />
+          Transcript
+        </p>
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+          {upload.transcript}
+        </p>
+      </div>
+    );
+  }
+  if (status === "pending") {
+    return (
+      <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground" role="status">
+        <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+        Transcribing…
+      </p>
+    );
+  }
+  if (status === "failed") {
+    return (
+      <p className="mt-2 flex items-center gap-2 text-xs text-destructive">
+        Transcription failed.
+        {canAct ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 gap-1 px-1.5 text-xs text-foreground"
+            onClick={() => controls!.onTranscribe(upload.id)}
+          >
+            <RotateCw className="size-3" />
+            Retry
+          </Button>
+        ) : null}
+      </p>
+    );
+  }
+  if (!canAct) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="mt-2 h-7 gap-1.5 text-xs"
+      onClick={() => controls!.onTranscribe(upload.id)}
+    >
+      <TextQuote className="size-3.5" />
+      Transcribe
+    </Button>
+  );
+}
+
 export function ResponseBody({
   card,
   response,
   uploads,
+  transcription,
 }: {
   card: CardModel;
   response?: ClientResponse;
   uploads: UploadRow[];
+  transcription?: TranscriptionControls;
 }): React.ReactElement {
   const files = uploads.filter((u) => u.kind === "file");
   const voices = uploads.filter((u) => u.kind === "voice");
@@ -262,6 +352,7 @@ export function ResponseBody({
             src={adminApi.uploadDownloadUrl(u.id)}
             className="w-full max-w-sm"
           />
+          <VoiceTranscript upload={u} controls={transcription} />
         </div>
       ))}
     </div>

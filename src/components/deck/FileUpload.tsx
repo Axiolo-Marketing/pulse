@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Paperclip, X } from "lucide-react";
 
 import {
@@ -8,6 +8,7 @@ import {
   type UploadRow,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { FINE_POINTER_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
 import { NoteField } from "./chrome";
@@ -52,6 +53,23 @@ export function FileUploadInput({
   const [pending, setPending] = useState<Pending[]>([]);
   const [removing, setRemoving] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const hasMouse = useMediaQuery(FINE_POINTER_QUERY);
+
+  // A file dropped anywhere else on the page would otherwise make the
+  // browser open it and leave the deck. Swallow stray drops while this
+  // card is on screen; the drop zone handles its own.
+  useEffect(() => {
+    const block = (e: DragEvent): void => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    window.addEventListener("dragover", block);
+    window.addEventListener("drop", block);
+    return () => {
+      window.removeEventListener("dragover", block);
+      window.removeEventListener("drop", block);
+    };
+  }, []);
 
   async function removeFile(uploadId: string): Promise<void> {
     setRemoving((s) => new Set(s).add(uploadId));
@@ -109,14 +127,38 @@ export function FileUploadInput({
         </div>
       ) : (
         <label
+          // Drag-and-drop: without these handlers a file dropped here makes
+          // the browser navigate away to the file itself.
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            if (!dragging) setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setDragging(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            if (!saving && e.dataTransfer.files.length) {
+              void handleFiles(e.dataTransfer.files);
+            }
+          }}
           className={cn(
-            "flex min-h-28 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-primary/40 bg-secondary px-4 py-6 text-center",
+            "flex min-h-28 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-border bg-muted/40 px-4 py-6 text-center transition-colors hover:border-foreground/30 lg:min-h-40",
+            dragging && "border-primary bg-primary/5",
             saving && "pointer-events-none opacity-60",
           )}
         >
-          <Paperclip className="size-5 text-primary" aria-hidden="true" />
+          <Paperclip className="size-5 text-muted-foreground" aria-hidden="true" />
           <span className="text-sm font-medium text-foreground">
-            Tap to upload or drop files here
+            {dragging
+              ? "Drop to upload"
+              : hasMouse
+                ? "Drag files here, or click to browse"
+                : "Tap to upload files"}
           </span>
           <span className="text-xs text-muted-foreground">
             Up to {remaining} more file{remaining === 1 ? "" : "s"}, max 25MB

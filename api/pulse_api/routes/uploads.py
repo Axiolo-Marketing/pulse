@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse_api import storage
+from pulse_api import storage, transcription
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
 from pulse_api.observability import limiter
@@ -110,6 +110,10 @@ async def upload_file(
         raise HTTPException(status_code=404, detail="card not found")
 
     await session.commit()
+    if kind == "voice" and transcription.available():
+        # Detached task (not BackgroundTasks) — see transcription.py. The
+        # job itself checks the engagement's opt-in.
+        transcription.schedule_transcription(row["id"])
     return row
 
 

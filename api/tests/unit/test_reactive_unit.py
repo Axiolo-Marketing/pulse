@@ -13,9 +13,10 @@ import hashlib
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from pulse_api import reactive
-from pulse_api.config import settings
+from pulse_api.config import Settings, settings
 
 # ── extract_trigger_text ────────────────────────────────────────────────────
 
@@ -498,9 +499,12 @@ def test_estimate_cost_unknown_model_returns_none() -> None:
 @pytest.mark.parametrize(
     "model,expected",
     [
-        ("claude-fable-5", Decimal("60.000000")),   # 10 + 50
-        ("claude-sonnet-5", Decimal("18.000000")),  # 3 + 15
-        ("claude-haiku-4-5", Decimal("6.000000")),  # 1 + 5
+        ("claude-fable-5", Decimal("60.000000")),    # 10 + 50
+        ("claude-fable-5-1", Decimal("60.000000")),  # 10 + 50
+        ("claude-opus-5-5", Decimal("24.000000")),   # 4 + 20
+        ("claude-opus-5", Decimal("30.000000")),     # 5 + 25
+        ("claude-sonnet-5", Decimal("12.000000")),   # 2 + 10
+        ("claude-haiku-4-5", Decimal("6.000000")),   # 1 + 5
     ],
 )
 def test_estimate_cost_covers_every_switchable_model(
@@ -524,6 +528,57 @@ def test_estimate_cost_none_when_missing_data(
     model: str | None, input_tokens: int | None, output_tokens: int | None
 ) -> None:
     assert reactive._estimate_cost(model, input_tokens, output_tokens) is None
+
+
+def test_default_model_is_sonnet_5_and_priced() -> None:
+    from pulse_api.config import Settings
+
+    default = Settings.model_fields["reactive_model"].default
+    assert default == "claude-sonnet-5"
+    assert default in reactive.MODEL_PRICING
+
+
+# ── _output_config (effort) ──────────────────────────────────────────────────
+
+
+def test_output_config_sends_low_effort_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reactive.settings, "reactive_model", "claude-sonnet-5")
+    monkeypatch.setattr(reactive.settings, "reactive_effort", "low")
+    config = reactive._output_config()
+    assert config["effort"] == "low"
+    assert config["format"]["type"] == "json_schema"
+
+
+def test_output_config_never_sends_effort_to_haiku(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reactive.settings, "reactive_model", "claude-haiku-4-5")
+    monkeypatch.setattr(reactive.settings, "reactive_effort", "low")
+    assert "effort" not in reactive._output_config()
+
+
+def test_output_config_omits_effort_when_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reactive.settings, "reactive_model", "claude-sonnet-5")
+    monkeypatch.setattr(reactive.settings, "reactive_effort", "  ")
+    assert "effort" not in reactive._output_config()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("low", "low"), (" High ", "high"), ("xhigh", "xhigh"), ("", "")],
+)
+def test_reactive_effort_setting_is_normalized(raw: str, expected: str) -> None:
+    assert Settings(_env_file=None, reactive_effort=raw).reactive_effort == expected
+
+
+@pytest.mark.parametrize("raw", ["lo", "extreme", "none"])
+def test_reactive_effort_setting_rejects_typos(raw: str) -> None:
+    with pytest.raises(ValidationError, match="REACTIVE_EFFORT"):
+        Settings(_env_file=None, reactive_effort=raw)
 
 
 # ── prompt builder ───────────────────────────────────────────────────────────

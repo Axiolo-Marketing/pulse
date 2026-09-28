@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy } from "lucide-react";
+import { Copy, KeyRound, Plus, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -40,6 +40,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+import { SettingsSection } from "./parts";
+
 export function ApiKeysManager({
   activeOrgName,
 }: {
@@ -72,32 +74,41 @@ export function ApiKeysManager({
   const keys = keysQuery.data ?? [];
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-foreground">API keys</h2>
-          {keys.length > 0 ? (
-            <span className="text-xs text-muted-foreground">{keys.length}</span>
-          ) : null}
-        </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
+    <SettingsSection
+      title="API keys"
+      description={
+        <>
+          Let scripts and the Pulse MCP server act as you in{" "}
+          <span className="font-medium text-foreground">{activeOrgName}</span>.
+        </>
+      }
+      action={
+        <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+          <Plus />
           Create key
         </Button>
-      </div>
-
+      }
+      flush
+    >
       {keysQuery.isLoading ? (
-        <p className="py-2 text-sm text-muted-foreground">Loading…</p>
+        <p className="px-5 py-4 text-sm text-muted-foreground">Loading…</p>
       ) : keys.length === 0 ? (
-        <p className="py-2 text-sm text-muted-foreground">No API keys yet.</p>
+        <div className="flex flex-col items-center gap-1 px-5 py-8 text-center">
+          <KeyRound className="mb-1 size-5 text-muted-foreground" />
+          <p className="text-sm font-medium text-foreground">No API keys yet</p>
+          <p className="text-sm text-muted-foreground">
+            Create one to connect a script or Claude via MCP.
+          </p>
+        </div>
       ) : (
         <Table>
-          <TableHeader>
+          <TableHeader className="bg-muted/40">
             <TableRow>
-              <TableHead>Label</TableHead>
+              <TableHead className="pl-5">Label</TableHead>
               <TableHead>Key</TableHead>
-              <TableHead>Last used</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead className="w-0">
+              <TableHead className="hidden sm:table-cell">Last used</TableHead>
+              <TableHead className="hidden sm:table-cell">Created</TableHead>
+              <TableHead className="w-0 pr-5">
                 <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
@@ -105,19 +116,19 @@ export function ApiKeysManager({
           <TableBody>
             {keys.map((k) => (
               <TableRow key={k.id}>
-                <TableCell className="font-medium text-foreground">
+                <TableCell className="pl-5 font-medium text-foreground">
                   {k.label}
                 </TableCell>
-                <TableCell className="font-mono text-muted-foreground">
+                <TableCell className="font-mono text-xs text-muted-foreground">
                   pulse_{k.prefix}…
                 </TableCell>
-                <TableCell className="text-muted-foreground">
+                <TableCell className="hidden text-muted-foreground sm:table-cell">
                   {k.last_used_at ? formatTimestamp(k.last_used_at) : "Never"}
                 </TableCell>
-                <TableCell className="text-muted-foreground">
+                <TableCell className="hidden text-muted-foreground sm:table-cell">
                   {formatTimestamp(k.created_at)}
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell className="pr-5 text-right">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -159,14 +170,14 @@ export function ApiKeysManager({
                 if (revoking) revokeMut.mutate(revoking.id);
               }}
               disabled={revokeMut.isPending}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              variant="destructive"
             >
               Revoke
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -242,8 +253,12 @@ function CreateKeyDialog({
                   {copied ? "Copied!" : "Copy"}
                 </Button>
               </div>
-              <p className="text-sm text-warning">
-                You won't see this key again.
+              <p className="mt-2 flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-sm text-amber-800">
+                <TriangleAlert
+                  className="mt-0.5 size-4 shrink-0"
+                  aria-hidden="true"
+                />
+                You won't be able to see this key again. Copy it now.
               </p>
             </div>
             <DialogFooter>
@@ -260,6 +275,9 @@ function CreateKeyDialog({
           >
             <DialogHeader>
               <DialogTitle>Create API key</DialogTitle>
+              <DialogDescription>
+                The key acts as you in {activeOrgName}.
+              </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ak-label">Label</Label>
@@ -272,8 +290,8 @@ function CreateKeyDialog({
                 autoFocus
                 placeholder="e.g. CI deploy bot"
               />
-              <p className="text-sm text-muted-foreground">
-                Will be created in {activeOrgName}.
+              <p className="text-xs text-muted-foreground">
+                A name to recognise it by later.
               </p>
             </div>
             {error ? (

@@ -105,7 +105,11 @@ class CreateOrgRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=_SLUG_MIN_LEN, max_length=_SLUG_MAX_LEN)
-    owner_email: EmailStr
+    # Omit to create an org the calling superadmin manages alone: they're
+    # added as its owner directly and nobody is invited or emailed. Pass an
+    # email to invite someone else as owner — that emails them a join link
+    # and, once accepted, gives them their own admin-console login.
+    owner_email: EmailStr | None = None
     owner_role: str = Field(default="owner", pattern=r"^owner$")
 
 
@@ -135,7 +139,8 @@ class CreateOrgResponse(BaseModel):
     """``POST /api/superadmin/orgs`` body."""
 
     org: OrgRow
-    invite: CreatedInviteSummary
+    # None when no owner was invited (the superadmin owns the org).
+    invite: CreatedInviteSummary | None = None
 
 
 class SuperadminMemberRow(BaseModel):
@@ -327,7 +332,11 @@ async def create_org(
     user: User = Depends(get_current_superadmin),
     session: AsyncSession = Depends(get_admin_session),
 ) -> CreateOrgResponse:
-    """Create a new org and send an invite to the owner.
+    """Create a new org, owned either by the caller or by an invited owner.
+
+    Without ``owner_email`` the calling superadmin is added as the org's
+    owner and nothing is emailed — for tenants the operator runs alone.
+    With it, the sequence below invites that person as owner.
 
     Sequenced writes:
 
@@ -366,6 +375,29 @@ async def create_org(
         session, name=req.name.strip(), slug=slug
     )
     org_id = uuid.UUID(str(org_row["id"]))
+    org_out = OrgRow(
+        id=str(org_row["id"]),
+        name=str(org_row["name"]),
+        slug=str(org_row["slug"]),
+        created_at=org_row["created_at"],
+    )
+
+    if req.owner_email is None:
+        # Operator-managed org: the superadmin owns it; no invite, no email.
+        await memberships_repo.add_membership(
+            session, org_id=org_id, user_id=user.id, role="owner"
+        )
+        await record_audit(
+            session,
+            org_id=org_id,
+            user_id=user.id,
+            action="org.create",
+            target_type="org",
+            target_id=str(org_id),
+            metadata={"name": req.name.strip(), "slug": slug, "owner": "self"},
+        )
+        await session.commit()
+        return CreateOrgResponse(org=org_out, invite=None)
 
     # Create the owner invite. RLS WITH CHECK on ``organization_invites``
     # would normally enforce ``org_id = pulse.org_id``, but pulse_admin
@@ -420,12 +452,7 @@ async def create_org(
     await email_module.send_email(owner_email, subject, body)
 
     return CreateOrgResponse(
-        org=OrgRow(
-            id=str(org_row["id"]),
-            name=str(org_row["name"]),
-            slug=str(org_row["slug"]),
-            created_at=org_row["created_at"],
-        ),
+        org=org_out,
         invite=CreatedInviteSummary(
             id=str(invite_row["id"]),
             email=str(invite_row["email"]),

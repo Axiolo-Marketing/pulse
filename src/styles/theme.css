@@ -3,7 +3,8 @@
  *
  * This is a FRESH design token scale (not a copy of v1's pulse.css). It keeps
  * two things deliberately:
- *   1. The Axiolo brand as the default theme (brand blue, Plus Jakarta Sans, navy ink).
+ *   1. A default theme (Pulse neutral: near-black, white, system font) that
+ *      orgs override with their own branding.
  *   2. The runtime CSS-variable seam: the customizable brand tokens below
  *      (--primary, --primary-dark, --primary-soft, --surface-muted, --ink,
  *      --font-sans) are exactly the properties `src/lib/branding.ts:applyBranding()`
@@ -15,27 +16,33 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* No dark theme ships yet, so `dark:` utilities must not follow the OS
+   setting (Tailwind's default) — they'd restyle individual shadcn parts
+   (grey inputs, etc.) on top of light-only tokens. Class-based until a real
+   dark palette exists. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   /* ── Customizable brand tokens (branding.ts overrides these at runtime) ──
      Defaults MUST match BRANDING_DEFAULTS in src/lib/branding.ts so an org with
      no custom branding renders the Axiolo defaults. */
-  --primary: #2960f6;
-  --primary-dark: #020f82;
-  --primary-soft: #e8eefe;
-  --surface-muted: #f4f4f6;
-  --ink: #0a0f2e;
+  --primary: #171717;
+  --primary-dark: #0a0a0a;
+  --primary-soft: #f5f5f5;
+  --surface-muted: #ffffff;
+  --ink: #0a0a0a;
   --font-sans:
-    "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
 
   /* ── Fresh neutral + radius scale (v2 redesign — not org-customizable) ── */
   --radius: 0.75rem;
-  --neutral-50: #f8f9fb;
-  --neutral-100: #f1f2f5;
-  --neutral-200: #e6e8ee;
-  --neutral-400: #9aa1b1;
-  --neutral-500: #6b7280;
-  --neutral-900: #0a0f2e;
+  --neutral-50: #fafafa;
+  --neutral-100: #f5f5f5;
+  --neutral-200: #e5e5e5;
+  --neutral-400: #a3a3a3;
+  --neutral-500: #737373;
+  --neutral-900: #0a0a0a;
 
   /* ── shadcn semantic tokens → mapped onto the brand + neutral scale ──
      Names that overlap a brand token (e.g. --primary) intentionally reuse the
@@ -73,6 +80,48 @@
   --warning-soft: #fef3c7;
   --success: #047857;
   --success-soft: #d1fae5;
+
+  /* Pulse product accent (wordmark). Not org-customizable. */
+  --brand: #4f39f6;
+}
+
+/* ── Operator console theme (v2 admin only) ──
+   The admin is Pulse's own product chrome, not a client-facing surface, so it
+   uses a fixed neutral palette + system font (shadcn "neutral", matching the
+   other Axiolo tools like quickhost.ing) instead of the org's brand colours.
+   Scoped to <body class="admin-theme">: body sits below :root, so these win
+   over the inline :root vars applyBranding() writes, and Radix portals (which
+   mount on body) pick them up too. Semantic tokens are redefined directly —
+   a var() chain declared on :root is already resolved by the time it
+   inherits down to body. */
+body.admin-theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --radius: 0.5rem;
+
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #a3a3a3;
+
+  /* Pulse product accent — the wordmark + small highlights only. */
+  --brand: #4f39f6;
 }
 
 /* Expose the tokens as Tailwind utilities (bg-primary, text-muted-foreground,
@@ -101,6 +150,8 @@
   --color-warning-soft: var(--warning-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-brand: var(--brand);
+  --font-display: "Epilogue", var(--font-sans);
 
   --font-sans: var(--font-sans);
 

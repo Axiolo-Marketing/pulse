@@ -113,8 +113,10 @@ def _stub_provider(
 
 @pytest.mark.parametrize("provider", ["google", "microsoft"])
 async def test_authorize_redirects_to_provider_with_state(
-    client: AsyncClient, provider: str
+    client: AsyncClient, provider: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Don't depend on the developer's .env having real OAuth credentials.
+    monkeypatch.setattr(settings, f"{provider}_client_id", "test-client-id")
     r = await client.get(f"/api/auth/{provider}/authorize", follow_redirects=False)
     assert r.status_code == 302
     loc = r.headers["location"]

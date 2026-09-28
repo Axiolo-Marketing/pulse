@@ -192,6 +192,8 @@ async def test_me_branding_and_logo_default_to_null(
     body = me.json()
     assert body["org_branding"] is None
     assert body["org_logo_path"] is None
+    # The consultant org's name rides along for the deck's no-logo header.
+    assert body["org_name"] == "Axiolo"
 
 
 # ── GET /api/me/logo ──────────────────────────────────────────────────────
@@ -301,6 +303,7 @@ async def test_me_logo_is_org_scoped(
     a_me = await client.get("/api/me")
     assert a_me.status_code == 200, a_me.text
     assert a_me.json()["org_logo_path"] is None
+    assert a_me.json()["org_name"] == "Alpha Inc"  # never org B's name
 
     # Sanity: org B's own token DOES get its logo (the policy isn't just
     # globally denying).

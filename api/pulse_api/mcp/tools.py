@@ -34,10 +34,11 @@ Every mutating tool also writes the same ``audit_logs`` row its REST
 twin writes, via ``pulse_api.audit.record_audit`` on the same
 member-scoped session, before the commit — an MCP-driven mutation must
 show up in the org's Activity feed exactly like its REST equivalent
-does. ``pulse_add_recipient`` additionally fires the pending-invite
-send (``routes.admin_api._send_pending_invites``, imported rather than
-duplicated) so a respondent added via MCP gets the same auto-invite
-email a respondent added through the admin UI gets.
+does. ``pulse_add_recipient`` never emails on its own — like the admin
+UI, sending is explicit: pass ``send_invite=True`` to email the deck link
+(``routes.admin_api._send_invites``, imported rather than duplicated).
+It also saves the person on the engagement's client contact list, same as
+the REST route.
 """
 from __future__ import annotations
 
@@ -57,12 +58,13 @@ from pulse_api.mcp.server import (
     mcp,
 )
 from pulse_api.repos import cards as cards_repo
+from pulse_api.repos import client_contacts as contacts_repo
 from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
 from pulse_api.repos import uploads as uploads_repo
-from pulse_api.routes.admin_api import _send_pending_invites
+from pulse_api.routes.admin_api import _send_invites
 
 # ── Engagements ──────────────────────────────────────────────────────────
 
@@ -254,6 +256,8 @@ async def pulse_list_recipients(
         "Add a respondent to an engagement and mint their private deck link. "
         "Pass `email` (required) and optional `name`. Returns the recipient "
         "row including `token`; the deck URL is `{frontend_base_url}/?t={token}`. "
+        "Nothing is emailed unless `send_invite` is true (the deck must have "
+        "at least one card to send). "
         "Errors if the email is already a recipient of this engagement."
     ),
 )
@@ -262,6 +266,7 @@ async def pulse_add_recipient(
     engagement_id: str,
     email: str,
     name: str | None = None,
+    send_invite: bool = False,
 ) -> dict[str, Any]:
     user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
@@ -273,6 +278,17 @@ async def pulse_add_recipient(
             session, engagement_id=engagement_id, email=clean
         ):
             raise ValueError("recipient already added")
+        # Check before writing anything: failing after the add committed
+        # would report an error for a recipient that now exists, and a
+        # retry would then hit "recipient already added".
+        if send_invite and not await cards_repo.list_for_engagement(
+            session, engagement_id
+        ):
+            raise ValueError(
+                "the deck has no cards yet, so there's nothing to invite "
+                "anyone to — add a card first, or add the recipient with "
+                "send_invite=false"
+            )
         row = await recipients_repo.add(
             session,
             engagement_id=engagement_id,
@@ -282,6 +298,13 @@ async def pulse_add_recipient(
         )
         if row is None:
             raise ValueError("could not add recipient")
+        await contacts_repo.upsert(
+            session,
+            org_id=org_id,
+            client_id=str(engagement["client_id"]),
+            email=clean,
+            name=row.get("name"),
+        )
         await record_audit(
             session,
             org_id=org_id,
@@ -292,12 +315,14 @@ async def pulse_add_recipient(
             metadata={"engagement_id": engagement_id, "email": clean},
         )
         await session.commit()
-        # Send the invite immediately, same as the REST twin — runs AFTER
-        # the recipient-add commit above so the email network call never
-        # holds that write's transaction open (audit finding M7).
-        await _send_pending_invites(
-            session, engagement=engagement, org_id=org_id, user=user
-        )
+        if send_invite:
+            await _send_invites(
+                session,
+                engagement=engagement,
+                org_id=org_id,
+                user=user,
+                recipients=[row],
+            )
         return row
 
 

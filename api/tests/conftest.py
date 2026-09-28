@@ -658,6 +658,14 @@ def tmp_uploads_dir(
     return upload_dir
 
 
+@pytest.fixture(autouse=True)
+def _transcription_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's .env may turn voice transcription on; keep it off in the
+    suite so voice-upload tests don't spawn jobs against the real admin
+    engine. ``tests/test_transcription.py`` turns it back on explicitly."""
+    monkeypatch.setattr(settings, "transcription_enabled", False)
+
+
 @pytest.fixture
 def captured_emails(monkeypatch: pytest.MonkeyPatch) -> list[OutboundEmail]:
     """Replace email_module.send_email with an in-memory capture.

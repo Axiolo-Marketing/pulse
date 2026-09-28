@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2, Users } from "lucide-react";
+import { MoreHorizontal, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -12,17 +12,23 @@ import {
   type SuperadminOrgRow,
 } from "@/lib/api";
 import { formatTimestamp } from "@/lib/format-time";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -33,14 +39,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+
+import { cn } from "@/lib/utils";
 
 import { ConfirmDialog } from "../detail/EngagementDialogs";
+import { Field } from "../form-parts";
+import { PersonAvatar, Pill, SettingsSection } from "../settings/parts";
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -51,7 +55,12 @@ interface FieldErrors {
   ownerEmail?: string;
 }
 
-function validate(name: string, slug: string, ownerEmail: string): FieldErrors {
+function validate(
+  name: string,
+  slug: string,
+  ownerEmail: string,
+  inviteOwner: boolean,
+): FieldErrors {
   const errs: FieldErrors = {};
 
   const n = name.trim();
@@ -65,14 +74,20 @@ function validate(name: string, slug: string, ownerEmail: string): FieldErrors {
   else if (!SLUG_RE.test(s))
     errs.slug = "Use lowercase letters, numbers, and single hyphens.";
 
-  const e = ownerEmail.trim();
-  if (!e) errs.ownerEmail = "Owner email is required.";
-  else if (!EMAIL_RE.test(e)) errs.ownerEmail = "Enter a valid email address.";
+  if (inviteOwner) {
+    const e = ownerEmail.trim();
+    if (!e) errs.ownerEmail = "Owner email is required.";
+    else if (!EMAIL_RE.test(e)) errs.ownerEmail = "Enter a valid email address.";
+  }
 
   return errs;
 }
 
-function FieldError({ message }: { message?: string }): React.ReactElement | null {
+function FieldError({
+  message,
+}: {
+  message?: string;
+}): React.ReactElement | null {
   if (!message) return null;
   return (
     <p className="text-xs text-destructive" role="alert">
@@ -81,26 +96,59 @@ function FieldError({ message }: { message?: string }): React.ReactElement | nul
   );
 }
 
-function CreateOrgCard(): React.ReactElement {
+/** Lowercase, hyphenated slug suggestion from an org name. */
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+}
+
+function CreateOrgDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}): React.ReactElement {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  // Slug follows the name until the operator edits it by hand.
+  const [slugTouched, setSlugTouched] = useState(false);
   const [ownerEmail, setOwnerEmail] = useState("");
+  const [inviteOwner, setInviteOwner] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [apiError, setApiError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
-  const mut = useMutation({
-    mutationFn: (args: { name: string; slug: string; owner_email: string }) =>
-      superadminApi.createOrg(args),
-    onSuccess: (res) => {
-      setSuccess(`Invite sent to ${res.invite.email}`);
+  useEffect(() => {
+    if (open) {
       setName("");
       setSlug("");
+      setSlugTouched(false);
       setOwnerEmail("");
+      setInviteOwner(true);
       setFieldErrors({});
+      setApiError(null);
+    }
+  }, [open]);
+
+  const mut = useMutation({
+    mutationFn: (args: { name: string; slug: string; owner_email?: string }) =>
+      superadminApi.createOrg(args),
+    onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["superadmin", "orgs"] });
-      toast.success("Organization created.");
+      // You may now own it — refresh the org switcher.
+      void qc.invalidateQueries({ queryKey: ["orgs", "mine"] });
+      toast.success(
+        "Organization created.",
+        res.invite
+          ? { description: `Invite emailed to ${res.invite.email}.` }
+          : { description: "You're its owner. Switch to it from the org menu." },
+      );
+      onOpenChange(false);
     },
     onError: (err) =>
       setApiError(
@@ -108,103 +156,154 @@ function CreateOrgCard(): React.ReactElement {
       ),
   });
 
-  // Clearing stale feedback the moment the operator edits keeps the success
-  // banner from lingering over a form they've started changing again.
-  function clearFeedback(): void {
-    if (success) setSuccess(null);
-    if (apiError) setApiError(null);
-  }
-
   function submit(): void {
     setApiError(null);
-    setSuccess(null);
-    const errs = validate(name, slug, ownerEmail);
+    const errs = validate(name, slug, ownerEmail, inviteOwner);
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) return;
     mut.mutate({
       name: name.trim(),
       slug: slug.trim(),
-      owner_email: ownerEmail.trim(),
+      ...(inviteOwner ? { owner_email: ownerEmail.trim() } : {}),
     });
   }
 
   return (
-    <section className="mb-8 rounded-lg border border-border bg-card p-4">
-      <h2 className="mb-3 text-sm font-semibold text-foreground">
-        Create organization
-      </h2>
-      <form
-        className="flex flex-col gap-4"
-        noValidate
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="so-name">Organization name</Label>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New organization</DialogTitle>
+          <DialogDescription>
+            A separate space with its own engagements, branding and people.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id="create-org-form"
+          className="flex flex-col gap-4"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <Field id="so-name" label="Organization name">
             <Input
               id="so-name"
               value={name}
               maxLength={200}
+              autoFocus
               onChange={(e) => {
                 setName(e.target.value);
-                clearFeedback();
+                if (!slugTouched) setSlug(slugify(e.target.value));
+                setApiError(null);
               }}
               aria-invalid={fieldErrors.name ? true : undefined}
               placeholder="Acme, Inc."
             />
             <FieldError message={fieldErrors.name} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="so-slug">Slug</Label>
+          </Field>
+          <Field
+            id="so-slug"
+            label="Slug"
+            hint={
+              fieldErrors.slug
+                ? undefined
+                : "Lowercase letters, numbers and hyphens."
+            }
+          >
             <Input
               id="so-slug"
               value={slug}
               maxLength={40}
               onChange={(e) => {
                 setSlug(e.target.value);
-                clearFeedback();
+                setSlugTouched(true);
+                setApiError(null);
               }}
               aria-invalid={fieldErrors.slug ? true : undefined}
               placeholder="acme"
+              className="font-mono text-sm"
             />
             <FieldError message={fieldErrors.slug} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="so-owner">Owner email</Label>
-            <Input
-              id="so-owner"
-              type="email"
-              value={ownerEmail}
-              onChange={(e) => {
-                setOwnerEmail(e.target.value);
-                clearFeedback();
-              }}
-              aria-invalid={fieldErrors.ownerEmail ? true : undefined}
-              placeholder="owner@acme.com"
-            />
-            <FieldError message={fieldErrors.ownerEmail} />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={mut.isPending}>
-            Create organization
-          </Button>
-          {success ? (
-            <p className="text-sm text-success" role="status">
-              {success}
-            </p>
+          </Field>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-2 text-sm font-medium text-foreground">
+              Who manages it?
+            </legend>
+            {(
+              [
+                {
+                  value: true,
+                  title: "Invite an owner by email",
+                  body: "Emails them a join link. Once accepted they get their own login to this organization's admin.",
+                },
+                {
+                  value: false,
+                  title: "Just me (no email)",
+                  body: "You're the owner. Nobody else is invited or emailed.",
+                },
+              ] as const
+            ).map((opt) => (
+              <label
+                key={String(opt.value)}
+                className={cn(
+                  "flex cursor-pointer items-start gap-3 rounded-lg border px-3.5 py-3 transition-colors",
+                  inviteOwner === opt.value
+                    ? "border-foreground bg-muted/40"
+                    : "border-border hover:bg-muted/30",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="org-owner"
+                  className="mt-1 accent-foreground"
+                  checked={inviteOwner === opt.value}
+                  onChange={() => {
+                    setInviteOwner(opt.value);
+                    setFieldErrors((f) => ({ ...f, ownerEmail: undefined }));
+                  }}
+                />
+                <span>
+                  <span className="block text-sm font-medium text-foreground">
+                    {opt.title}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">{opt.body}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          {inviteOwner ? (
+            <Field id="so-owner" label="Owner email">
+              <Input
+                id="so-owner"
+                type="email"
+                value={ownerEmail}
+                onChange={(e) => {
+                  setOwnerEmail(e.target.value);
+                  setApiError(null);
+                }}
+                aria-invalid={fieldErrors.ownerEmail ? true : undefined}
+                placeholder="owner@acme.com"
+              />
+              <FieldError message={fieldErrors.ownerEmail} />
+            </Field>
           ) : null}
           {apiError ? (
             <p className="text-sm text-destructive" role="alert">
               {apiError}
             </p>
           ) : null}
-        </div>
-      </form>
-    </section>
+        </form>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" form="create-org-form" disabled={mut.isPending}>
+            Create organization
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -249,6 +348,7 @@ function MembersDialog({
           <ul className="flex flex-col divide-y divide-border">
             {members.map((m) => (
               <li key={m.user_id} className="flex items-center gap-3 py-2.5">
+                <PersonAvatar label={m.name || m.email} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-foreground">
                     {m.name || m.email}
@@ -257,9 +357,9 @@ function MembersDialog({
                     {m.email}
                   </div>
                 </div>
-                <Badge variant="secondary" className="capitalize">
-                  {m.role}
-                </Badge>
+                <Pill tone={m.role === "owner" ? "strong" : "default"}>
+                  {m.role === "owner" ? "Owner" : "Member"}
+                </Pill>
               </li>
             ))}
           </ul>
@@ -278,6 +378,7 @@ function OrgsTableSection(): React.ReactElement {
 
   const [membersOrg, setMembersOrg] = useState<SuperadminOrgRow | null>(null);
   const [deletingOrg, setDeletingOrg] = useState<SuperadminOrgRow | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const deleteMut = useMutation({
     mutationFn: (org: SuperadminOrgRow) => superadminApi.deleteOrg(org.id),
@@ -300,39 +401,51 @@ function OrgsTableSection(): React.ReactElement {
     onSuccess: (_data, args) => {
       void qc.invalidateQueries({ queryKey: ["superadmin", "orgs"] });
       toast.success(
-        `Reactive cards ${args.allowed ? "enabled" : "disabled"} for ${args.org.name}.`,
+        `AI follow-ups ${args.allowed ? "enabled" : "disabled"} for ${args.org.name}.`,
       );
     },
     onError: (_err, args) => {
-      toast.error(`Couldn't update reactive cards for ${args.org.name}.`);
+      toast.error(`Couldn't update AI follow-ups for ${args.org.name}.`);
     },
   });
 
   const orgs = orgsQ.data ?? [];
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-card">
+    <SettingsSection
+      title="Organizations"
+      description="Every tenant on this Pulse deployment."
+      action={
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus />
+          New organization
+        </Button>
+      }
+      flush
+    >
       <Table>
-        <TableHeader>
+        <TableHeader className="bg-muted/40">
           <TableRow>
-            <TableHead>Organization</TableHead>
-            <TableHead>Members</TableHead>
-            <TableHead>Pending invites</TableHead>
-            <TableHead>Owners</TableHead>
-            <TableHead>Reactive cards</TableHead>
-            <TableHead>Created</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead className="pl-5">Organization</TableHead>
+            <TableHead className="text-right">Members</TableHead>
+            <TableHead className="hidden text-right sm:table-cell">
+              Invites
+            </TableHead>
+            <TableHead className="hidden md:table-cell">Owners</TableHead>
+            <TableHead>AI follow-ups</TableHead>
+            <TableHead className="hidden lg:table-cell">Created</TableHead>
+            <TableHead className="w-0 pr-5">
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {orgsQ.isPending ? (
             Array.from({ length: 4 }).map((_, i) => (
               <TableRow key={i}>
-                {Array.from({ length: 7 }).map((__, j) => (
-                  <TableCell key={j}>
-                    <Skeleton className="h-5 w-full" />
-                  </TableCell>
-                ))}
+                <TableCell colSpan={7} className="px-5">
+                  <Skeleton className="h-8 w-full" />
+                </TableCell>
               </TableRow>
             ))
           ) : orgsQ.isError ? (
@@ -350,7 +463,7 @@ function OrgsTableSection(): React.ReactElement {
                 colSpan={7}
                 className="py-10 text-center text-sm text-muted-foreground"
               >
-                No organizations.
+                No organizations yet.
               </TableCell>
             </TableRow>
           ) : (
@@ -358,15 +471,28 @@ function OrgsTableSection(): React.ReactElement {
               const canDelete = org.member_count <= 1;
               return (
                 <TableRow key={org.id}>
-                  <TableCell>
-                    <div className="font-medium text-foreground">{org.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {org.slug}
+                  <TableCell className="pl-5">
+                    <div className="flex items-center gap-3">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-xs font-semibold text-muted-foreground">
+                        {(org.name[0] ?? "?").toUpperCase()}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-foreground">
+                          {org.name}
+                        </div>
+                        <div className="font-mono text-xs text-muted-foreground">
+                          {org.slug}
+                        </div>
+                      </div>
                     </div>
                   </TableCell>
-                  <TableCell>{org.member_count}</TableCell>
-                  <TableCell>{org.pending_invite_count}</TableCell>
-                  <TableCell className="max-w-56 truncate text-muted-foreground">
+                  <TableCell className="text-right tabular-nums">
+                    {org.member_count}
+                  </TableCell>
+                  <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">
+                    {org.pending_invite_count}
+                  </TableCell>
+                  <TableCell className="hidden max-w-56 truncate text-muted-foreground md:table-cell">
                     {org.owner_emails.length > 0
                       ? org.owner_emails.join(", ")
                       : "—"}
@@ -381,54 +507,45 @@ function OrgsTableSection(): React.ReactElement {
                       onCheckedChange={(allowed) =>
                         reactiveMut.mutate({ org, allowed })
                       }
-                      aria-label={`Reactive cards for ${org.name}`}
+                      aria-label={`AI follow-ups for ${org.name}`}
                     />
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
+                  <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">
                     {formatTimestamp(org.created_at)}
                   </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={() => setMembersOrg(org)}
-                      >
-                        <Users />
-                        Members
-                      </Button>
-                      {canDelete ? (
+                  <TableCell className="pr-5">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
                         <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-1.5 text-destructive hover:text-destructive"
-                          onClick={() => setDeletingOrg(org)}
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-foreground"
+                          aria-label={`Actions for ${org.name}`}
+                        >
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-52">
+                        <DropdownMenuItem onSelect={() => setMembersOrg(org)}>
+                          <Users />
+                          View members
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={!canDelete}
+                          onSelect={() => setDeletingOrg(org)}
                         >
                           <Trash2 />
-                          Delete
-                        </Button>
-                      ) : (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1.5"
-                                disabled
-                              >
-                                <Trash2 />
-                                Delete
-                              </Button>
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            Remove members before deleting
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                    </div>
+                          Delete organization
+                        </DropdownMenuItem>
+                        {!canDelete ? (
+                          <p className="px-2 pb-1.5 text-xs text-muted-foreground">
+                            Remove its members before deleting.
+                          </p>
+                        ) : null}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               );
@@ -436,6 +553,8 @@ function OrgsTableSection(): React.ReactElement {
           )}
         </TableBody>
       </Table>
+
+      <CreateOrgDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       <MembersDialog
         org={membersOrg}
@@ -449,7 +568,9 @@ function OrgsTableSection(): React.ReactElement {
         onOpenChange={(o) => {
           if (!o) setDeletingOrg(null);
         }}
-        title={deletingOrg ? `Delete ${deletingOrg.name}?` : "Delete organization?"}
+        title={
+          deletingOrg ? `Delete ${deletingOrg.name}?` : "Delete organization?"
+        }
         description="This permanently removes the organization. This cannot be undone."
         confirmLabel="Delete organization"
         destructive
@@ -458,7 +579,7 @@ function OrgsTableSection(): React.ReactElement {
           if (deletingOrg) deleteMut.mutate(deletingOrg);
         }}
       />
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -486,11 +607,11 @@ function EngagementUsageTable({
 }): React.ReactElement {
   return (
     <div className="border-t border-border">
-      <div className="p-4 pb-0">
+      <div className="px-5 pt-5 pb-3">
         <h3 className="text-sm font-semibold text-foreground">By engagement</h3>
-        <p className="text-xs text-muted-foreground">
-          Same window as above, broken down per engagement — only engagements
-          with at least one generation appear.
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Same window, per engagement. Only engagements with at least one
+          generation appear.
         </p>
       </div>
       <Table>
@@ -529,7 +650,7 @@ function EngagementUsageTable({
                 colSpan={5}
                 className="py-10 text-center text-sm text-muted-foreground"
               >
-                No engagements with reactive-cards activity in the last {days}{" "}
+                No engagements with AI follow-up activity in the last {days}{" "}
                 days.
               </TableCell>
             </TableRow>
@@ -544,7 +665,8 @@ function EngagementUsageTable({
                 </TableCell>
                 <TableCell className="text-right">{e.generations}</TableCell>
                 <TableCell className="text-right text-muted-foreground">
-                  {formatTokens(e.input_tokens)} / {formatTokens(e.output_tokens)}
+                  {formatTokens(e.input_tokens)} /{" "}
+                  {formatTokens(e.output_tokens)}
                 </TableCell>
                 <TableCell className="text-right">
                   {formatCost(e.cost_usd)}
@@ -568,16 +690,14 @@ function MonthlyUsagePanel({
   isError: boolean;
 }): React.ReactElement {
   return (
-    <section className="mt-8 overflow-hidden rounded-lg border border-border bg-card">
-      <div className="p-4">
-        <h2 className="text-sm font-semibold text-foreground">
-          Monthly cost by org
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          Trailing 6 calendar months, most recent first — independent of the
-          window above.
-        </p>
-      </div>
+    <SettingsSection
+      title="Monthly cost by organization"
+      description="Trailing 6 calendar months, most recent first. Not affected by the window above."
+      flush
+      className={
+        "[&_td:first-child]:pl-5 [&_th:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th:last-child]:pr-5 [&_thead]:bg-muted/40"
+      }
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -614,7 +734,7 @@ function MonthlyUsagePanel({
                 colSpan={5}
                 className="py-10 text-center text-sm text-muted-foreground"
               >
-                No reactive-cards activity in the last 6 months.
+                No AI follow-up activity in the last 6 months.
               </TableCell>
             </TableRow>
           ) : (
@@ -628,7 +748,8 @@ function MonthlyUsagePanel({
                 </TableCell>
                 <TableCell className="text-right">{m.generations}</TableCell>
                 <TableCell className="text-right text-muted-foreground">
-                  {formatTokens(m.input_tokens)} / {formatTokens(m.output_tokens)}
+                  {formatTokens(m.input_tokens)} /{" "}
+                  {formatTokens(m.output_tokens)}
                 </TableCell>
                 <TableCell className="text-right">
                   {formatCost(m.cost_usd)}
@@ -638,7 +759,7 @@ function MonthlyUsagePanel({
           )}
         </TableBody>
       </Table>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -656,31 +777,39 @@ function ReactiveUsagePanel(): React.ReactElement {
 
   return (
     <>
-      <section className="mt-8 overflow-hidden rounded-lg border border-border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">
-              Reactive cards usage
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              LLM calls, tokens, and estimated cost per org — monitoring only,
-              not a billing surface.
-            </p>
-          </div>
-          <div className="flex gap-1.5">
+      <SettingsSection
+        title="AI follow-up usage"
+        description="LLM calls, tokens and estimated cost per organization. For monitoring, not billing."
+        action={
+          <div
+            role="radiogroup"
+            aria-label="Time window"
+            className="inline-flex rounded-md border border-border p-0.5"
+          >
             {USAGE_WINDOWS.map((w) => (
-              <Button
+              <button
                 key={w}
                 type="button"
-                size="sm"
-                variant={days === w ? "default" : "outline"}
+                role="radio"
+                aria-checked={days === w}
                 onClick={() => setDays(w)}
+                className={cn(
+                  "rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors",
+                  days === w
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
               >
-                {w}d
-              </Button>
+                {w} days
+              </button>
             ))}
           </div>
-        </div>
+        }
+        flush
+        className={
+          "[&_td:first-child]:pl-5 [&_th:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th:last-child]:pr-5 [&_thead]:bg-muted/40"
+        }
+      >
         <Table>
           <TableHeader>
             <TableRow>
@@ -710,7 +839,7 @@ function ReactiveUsagePanel(): React.ReactElement {
                   colSpan={7}
                   className="py-10 text-center text-sm text-destructive"
                 >
-                  Couldn't load reactive-cards usage.
+                  Couldn't load AI follow-up usage.
                 </TableCell>
               </TableRow>
             ) : orgs.length === 0 ? (
@@ -719,7 +848,7 @@ function ReactiveUsagePanel(): React.ReactElement {
                   colSpan={7}
                   className="py-10 text-center text-sm text-muted-foreground"
                 >
-                  No reactive-cards activity in the last {days} days.
+                  No AI follow-up activity in the last {days} days.
                 </TableCell>
               </TableRow>
             ) : (
@@ -729,7 +858,9 @@ function ReactiveUsagePanel(): React.ReactElement {
                     <TableCell className="font-medium text-foreground">
                       {o.org_name}
                     </TableCell>
-                    <TableCell className="text-right">{o.generations}</TableCell>
+                    <TableCell className="text-right">
+                      {o.generations}
+                    </TableCell>
                     <TableCell className="text-right">{o.completed}</TableCell>
                     <TableCell className="text-right">{o.skipped}</TableCell>
                     <TableCell className="text-right">{o.failed}</TableCell>
@@ -743,14 +874,20 @@ function ReactiveUsagePanel(): React.ReactElement {
                   </TableRow>
                 ))}
                 {totals ? (
-                  <TableRow className="bg-muted/40 font-semibold">
+                  <TableRow className="bg-muted/40 font-medium">
                     <TableCell>All organizations</TableCell>
                     <TableCell className="text-right">
                       {totals.generations}
                     </TableCell>
-                    <TableCell className="text-right">{totals.completed}</TableCell>
-                    <TableCell className="text-right">{totals.skipped}</TableCell>
-                    <TableCell className="text-right">{totals.failed}</TableCell>
+                    <TableCell className="text-right">
+                      {totals.completed}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {totals.skipped}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {totals.failed}
+                    </TableCell>
                     <TableCell className="text-right text-muted-foreground">
                       {formatTokens(totals.input_tokens)} /{" "}
                       {formatTokens(totals.output_tokens)}
@@ -770,7 +907,7 @@ function ReactiveUsagePanel(): React.ReactElement {
           isPending={usageQ.isPending}
           isError={usageQ.isError}
         />
-      </section>
+      </SettingsSection>
       <MonthlyUsagePanel
         monthly={monthly}
         isPending={usageQ.isPending}
@@ -780,20 +917,66 @@ function ReactiveUsagePanel(): React.ReactElement {
   );
 }
 
+function SummaryStats(): React.ReactElement {
+  // Same query keys as the sections below, so these are shared, not refetched.
+  const orgsQ = useQuery({
+    queryKey: ["superadmin", "orgs"],
+    queryFn: () => superadminApi.listOrgs({ limit: 100 }),
+  });
+  const usageQ = useQuery({
+    queryKey: ["superadmin", "reactiveUsage", 30],
+    queryFn: () => superadminApi.reactiveUsage({ days: 30 }),
+  });
+  const orgs = orgsQ.data ?? [];
+  const sum = (f: (o: SuperadminOrgRow) => number): number =>
+    orgs.reduce((n, o) => n + f(o), 0);
+  const stats: { label: string; value: string }[] = [
+    { label: "Organizations", value: orgsQ.data ? String(orgs.length) : "—" },
+    {
+      label: "Members",
+      value: orgsQ.data ? String(sum((o) => o.member_count)) : "—",
+    },
+    {
+      label: "Pending invites",
+      value: orgsQ.data ? String(sum((o) => o.pending_invite_count)) : "—",
+    },
+    {
+      label: "AI cost, last 30 days",
+      value: usageQ.data?.totals
+        ? formatCost(usageQ.data.totals.cost_usd)
+        : "—",
+    },
+  ];
+  return (
+    <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-4">
+      {stats.map((st) => (
+        <div key={st.label} className="bg-background px-4 py-3">
+          <div className="text-xs text-muted-foreground">{st.label}</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-foreground">
+            {st.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SuperadminPage(): React.ReactElement {
   return (
-    <TooltipProvider>
-      <main className="mx-auto w-full max-w-5xl px-4 py-6">
-        <div className="mb-6">
-          <h1 className="text-xl font-bold text-foreground">Superadmin</h1>
-          <p className="text-sm text-muted-foreground">
-            Tools across all organizations.
-          </p>
-        </div>
-        <CreateOrgCard />
+    <main className="mx-auto w-full max-w-6xl px-4 py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+          Superadmin
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Organizations and usage across the whole deployment.
+        </p>
+      </div>
+      <SummaryStats />
+      <div className="flex flex-col gap-6">
         <OrgsTableSection />
         <ReactiveUsagePanel />
-      </main>
-    </TooltipProvider>
+      </div>
+    </main>
   );
 }

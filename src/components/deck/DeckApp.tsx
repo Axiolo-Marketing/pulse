@@ -584,9 +584,15 @@ function DeckRunner({
         showResume={ui.showResume}
         existing={responses.get(card.id)}
         orgLogoSrc={boot.orgLogoSrc}
-        orgName={engagement.name}
+        orgName={engagement.org_name ?? null}
         handlers={handlers}
         media={media}
+        outline={{
+          cards,
+          responses,
+          currentIndex: ui.index,
+          onJump: handlers.onNavJumpTo,
+        }}
       />
       {ui.pickerOpen ? (
         <CardPicker

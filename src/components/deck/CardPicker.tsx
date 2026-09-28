@@ -9,13 +9,13 @@ import { useModalA11y } from "./use-modal-a11y";
 function badgeFor(resp?: ClientResponse): { label: string; cls: string } {
   switch (resp?.state) {
     case "answered":
-      return { label: "Answered", cls: "bg-secondary text-secondary-foreground" };
+      return { label: "Answered", cls: "border-success/20 bg-success-soft text-success" };
     case "skipped":
-      return { label: "Skipped", cls: "bg-warning-soft text-warning" };
+      return { label: "Skipped", cls: "border-border bg-muted text-muted-foreground" };
     case "viewed":
-      return { label: "Viewed", cls: "bg-muted text-muted-foreground" };
+      return { label: "Viewed", cls: "border-border text-muted-foreground" };
     default:
-      return { label: "Not viewed", cls: "bg-muted text-muted-foreground" };
+      return { label: "Not viewed", cls: "border-dashed border-border text-muted-foreground" };
   }
 }
 
@@ -40,27 +40,27 @@ export function CardPicker({
       role="dialog"
       aria-modal="true"
       aria-label="Jump to card"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
     >
       <button
         type="button"
         aria-label="Close"
         tabIndex={-1}
-        className="absolute inset-0 cursor-default bg-black/45"
+        className="absolute inset-0 cursor-default bg-black/40 backdrop-blur-[2px]"
         onClick={onClose}
       />
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl bg-card shadow-lg outline-none"
+        className="relative flex max-h-[80dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-border bg-card pb-[env(safe-area-inset-bottom)] shadow-xl outline-none sm:max-h-[calc(100dvh-2rem)] sm:rounded-xl sm:pb-0"
       >
-        <header className="flex items-center justify-between bg-foreground px-4 py-3 text-[color:var(--card)]">
-          <span className="font-semibold">Jump to card</span>
+        <header className="flex items-center justify-between border-b border-border px-5 py-3.5">
+          <span className="text-base font-semibold text-foreground">Jump to card</span>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="flex size-8 items-center justify-center rounded-md hover:bg-white/10 [&_svg]:size-5"
+            className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground [&_svg]:size-4"
           >
             <X aria-hidden="true" />
           </button>
@@ -74,16 +74,15 @@ export function CardPicker({
                 type="button"
                 onClick={() => onJump(i)}
                 className={cn(
-                  "grid w-full grid-cols-[28px_1fr_auto] items-center gap-2 rounded-md px-2 py-3 text-left text-sm transition-colors hover:bg-muted",
-                  i === currentIndex &&
-                    "bg-secondary font-semibold text-secondary-foreground",
+                  "grid w-full grid-cols-[28px_1fr_auto] items-center gap-2 rounded-lg px-3 py-3 text-left text-sm text-foreground transition-colors hover:bg-muted",
+                  i === currentIndex && "bg-muted font-medium",
                 )}
               >
-                <span className="text-muted-foreground">{i + 1}.</span>
+                <span className="tabular-nums text-muted-foreground">{i + 1}</span>
                 <span className="truncate">{c.title}</span>
                 <span
                   className={cn(
-                    "whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    "whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[11px] font-medium leading-none",
                     badge.cls,
                   )}
                 >

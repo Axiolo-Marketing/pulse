@@ -12,6 +12,9 @@ export interface UploadInfo {
    * as a separate "Voice answer" link. Omitted (legacy) uploads are treated
    * as files. */
   kind?: "file" | "voice";
+  /** Voice answers: the transcript, when one exists. Exported as a quote
+   * under the recording link so the words travel with the Markdown. */
+  transcript?: string | null;
 }
 
 export interface ExportArgs {
@@ -94,7 +97,17 @@ function renderResponseBody(
   const voiceSuffix = voices.length
     ? `\n\n**Voice answer:** ${voices
         .map((u) => (u.url ? `[${u.name}](${u.url})` : u.name))
-        .join(", ")}`
+        .join(", ")}${voices
+        .filter((u) => u.transcript?.trim())
+        .map(
+          (u) =>
+            `\n\n**Transcript:**\n${u
+              .transcript!.trim()
+              .split("\n")
+              .map((line) => `> ${line}`)
+              .join("\n")}`,
+        )
+        .join("")}`
     : "";
 
   if (response.state === "skipped") {

@@ -1,16 +1,63 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 
 import type { Card as CardModel, ClientResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { FINE_POINTER_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { cn } from "@/lib/utils";
 
 import { NoteField } from "./chrome";
 import { VOICE_PLACEHOLDER } from "./constants";
 
 // ── shared helpers ──────────────────────────────────────────────────────────
+
+/** Number keys 1–9 pick the matching option on devices with a keyboard.
+ * Ignored while typing in a field (e.g. the notes box) or with a modifier.
+ * Returns whether hints should be shown (mouse + keyboard present). */
+function useOptionKeys(
+  count: number,
+  onPick: (index: number) => void,
+  disabled: boolean,
+): boolean {
+  const hasKeyboard = useMediaQuery(FINE_POINTER_QUERY);
+  useEffect(() => {
+    if (!hasKeyboard || disabled) return;
+    function onKey(e: KeyboardEvent): void {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.isContentEditable ||
+          t.closest('[role="dialog"]') ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))
+      ) {
+        return;
+      }
+      const n = Number.parseInt(e.key, 10);
+      if (Number.isInteger(n) && n >= 1 && n <= Math.min(count, 9)) {
+        e.preventDefault();
+        onPick(n - 1);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hasKeyboard, disabled, count, onPick]);
+  return hasKeyboard;
+}
+
+function OptionKey({ n }: { n: number }): React.ReactElement | null {
+  if (n > 9) return null;
+  return (
+    <kbd
+      aria-hidden="true"
+      className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1 font-sans text-[11px] font-medium text-muted-foreground"
+    >
+      {n}
+    </kbd>
+  );
+}
 
 function priorValue(existing?: ClientResponse): Record<string, unknown> {
   return (existing?.response_value ?? {}) as Record<string, unknown>;
@@ -54,7 +101,12 @@ function Actions({
 }: {
   children: React.ReactNode;
 }): React.ReactElement {
-  return <div className="mt-6 flex flex-col gap-2.5">{children}</div>;
+  // h-11: comfortable thumb targets on a phone.
+  return (
+    <div className="mt-6 flex flex-col gap-2 [&>button]:h-11 [&>button]:text-[0.95rem]">
+      {children}
+    </div>
+  );
 }
 
 // ── confirm-edit (view) ─────────────────────────────────────────────────────
@@ -75,9 +127,12 @@ export function ConfirmEditView({
   return (
     <>
       {card.default_value ? (
-        <p className="rounded-lg border border-border bg-muted px-4 py-3 text-[0.95rem] font-medium text-foreground">
-          {card.default_value}
-        </p>
+        <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
+          <p className="text-xs text-muted-foreground">What we have</p>
+          <p className="mt-1 whitespace-pre-wrap text-[0.95rem] font-medium text-foreground">
+            {card.default_value}
+          </p>
+        </div>
       ) : null}
       <Actions>
         <Button type="button" disabled={saving} onClick={onConfirm}>
@@ -174,6 +229,11 @@ export function SingleSelectInput({
   );
   const selected = typeof prior.selected === "string" ? prior.selected : null;
   const options = card.options ?? [];
+  const showKeys = useOptionKeys(
+    options.length,
+    (i) => onSelect(options[i], note.trim() || undefined),
+    saving,
+  );
   return (
     <>
       <div
@@ -181,7 +241,7 @@ export function SingleSelectInput({
         role="radiogroup"
         aria-label={card.question}
       >
-        {options.map((option) => {
+        {options.map((option, idx) => {
           const isSel = option === selected;
           return (
             <button
@@ -192,13 +252,23 @@ export function SingleSelectInput({
               disabled={saving}
               onClick={() => onSelect(option, note.trim() || undefined)}
               className={cn(
-                "min-h-12 rounded-lg border-[1.5px] border-border bg-card px-4 py-3.5 text-left text-[0.95rem] font-medium transition-colors disabled:opacity-60",
+                "flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-left text-[0.95rem] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60",
                 isSel
-                  ? "border-primary bg-secondary font-semibold text-secondary-foreground"
-                  : "hover:border-primary/50",
+                  ? "border-primary font-medium text-foreground ring-1 ring-primary"
+                  : "text-foreground hover:border-foreground/30 hover:bg-muted/40",
               )}
             >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "flex size-5 shrink-0 items-center justify-center rounded-full border-[1.5px] border-border",
+                  isSel && "border-primary",
+                )}
+              >
+                {isSel ? <span className="size-2.5 rounded-full bg-primary" /> : null}
+              </span>
               {option}
+              {showKeys ? <OptionKey n={idx + 1} /> : null}
             </button>
           );
         })}
@@ -248,6 +318,11 @@ export function MultiSelectInput({
     () => new Set(Array.isArray(prior.selected) ? (prior.selected as string[]) : []),
   );
   const options = card.options ?? [];
+  const showKeys = useOptionKeys(
+    options.length,
+    (i) => toggle(options[i]),
+    saving,
+  );
 
   function toggle(option: string): void {
     setSelected((prev) => {
@@ -265,7 +340,7 @@ export function MultiSelectInput({
         role="group"
         aria-label={card.question}
       >
-        {options.map((option) => {
+        {options.map((option, idx) => {
           const isSel = selected.has(option);
           return (
             <button
@@ -276,21 +351,22 @@ export function MultiSelectInput({
               disabled={saving}
               onClick={() => toggle(option)}
               className={cn(
-                "flex min-h-12 items-center gap-3 rounded-lg border-[1.5px] border-border bg-card px-4 py-3.5 text-left text-[0.95rem] font-medium transition-colors disabled:opacity-60",
+                "flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-left text-[0.95rem] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60",
                 isSel
-                  ? "border-primary bg-secondary font-semibold text-secondary-foreground"
-                  : "hover:border-primary/50",
+                  ? "border-primary font-medium text-foreground ring-1 ring-primary"
+                  : "text-foreground hover:border-foreground/30 hover:bg-muted/40",
               )}
             >
               <span
                 className={cn(
-                  "flex size-5 shrink-0 items-center justify-center rounded border-[1.5px] border-border [&_svg]:size-3.5",
+                  "flex size-5 shrink-0 items-center justify-center rounded-[5px] border-[1.5px] border-border [&_svg]:size-3.5",
                   isSel && "border-primary bg-primary text-primary-foreground",
                 )}
               >
                 {isSel ? <Check aria-hidden="true" /> : null}
               </span>
               {option}
+              {showKeys ? <OptionKey n={idx + 1} /> : null}
             </button>
           );
         })}
@@ -463,9 +539,10 @@ export function ContactShareInput({
   const valid = name.trim() !== "" && email.trim() !== "";
   return (
     <>
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5">
         <Input
           type="text"
+          aria-label="Name"
           autoComplete="name"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -474,6 +551,7 @@ export function ContactShareInput({
         />
         <Input
           type="email"
+          aria-label="Email"
           inputMode="email"
           autoComplete="email"
           value={email}
@@ -486,7 +564,8 @@ export function ContactShareInput({
           value={role}
           onChange={(e) => setRole(e.target.value)}
           disabled={saving}
-          placeholder="Role"
+          aria-label="Role"
+          placeholder="Role (optional)"
         />
       </div>
       <NoteField value={note} onChange={setNote} disabled={saving} />

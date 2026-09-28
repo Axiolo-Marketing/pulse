@@ -50,23 +50,42 @@ from pulse_api.repos import cards as cards_repo
 
 logger = logging.getLogger(__name__)
 
-# USD per million tokens, (input, output). Looked up at call time so a
-# later price change never rewrites a past generation's recorded cost.
-# Covers every model REACTIVE_MODEL can reasonably point at (list
-# prices — Sonnet 5's temporary intro discount is ignored so estimates
-# stay conservative). Unknown models still generate fine and record
-# token counts, just with no cost estimate (the dev-fake "fake" model
-# is handled separately in `run_generation` — it always records
-# `Decimal("0")`, not `None`, since it's a known no-cost stand-in).
+# USD per million tokens, (input, output) — Anthropic list prices, checked
+# 2026-09-26 against platform.claude.com/docs/en/about-claude/pricing
+# (Sonnet 5's $2/$10 launch price became its standard price; the planned
+# rise to $3/$15 was cancelled). Looked up at call time so a later price
+# change never rewrites a past generation's recorded cost. Covers every
+# model REACTIVE_MODEL can reasonably point at. Unknown models still
+# generate fine and record token counts, just with no cost estimate (the
+# dev-fake "fake" model is handled separately in `run_generation` — it
+# always records `Decimal("0")`, not `None`, since it's a known no-cost
+# stand-in).
 MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "claude-fable-5-1": (10.00, 50.00),
     "claude-fable-5": (10.00, 50.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-opus-5": (5.00, 25.00),
     "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-4-7": (5.00, 25.00),
     "claude-opus-4-6": (5.00, 25.00),
-    "claude-sonnet-5": (3.00, 15.00),
+    "claude-sonnet-5": (2.00, 10.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
+
+
+def _output_config() -> dict:
+    """Structured-output schema, plus ``effort`` when configured. Writing one
+    or two short follow-up questions is a light task, so the default is
+    ``low`` (fast — the deck only waits a few seconds — and cheap; on models
+    that think by default, like Sonnet 5, it keeps reasoning brief). Haiku
+    doesn't accept ``effort``, so it's never sent there; an empty
+    ``REACTIVE_EFFORT`` omits it everywhere (the API default)."""
+    config: dict = {"format": {"type": "json_schema", "schema": REACTIVE_SCHEMA}}
+    effort = settings.reactive_effort.strip()
+    if effort and not settings.reactive_model.startswith("claude-haiku"):
+        config["effort"] = effort
+    return config
 
 _VALID_RESPONSE_TYPES = {"single-select", "multi-select", "short-text", "long-text"}
 _SELECT_TYPES = {"single-select", "multi-select"}
@@ -383,9 +402,7 @@ async def _call_anthropic(
                             ),
                         }
                     ],
-                    output_config={
-                        "format": {"type": "json_schema", "schema": REACTIVE_SCHEMA},
-                    },
+                    output_config=_output_config(),
                 ),
                 timeout=90,
             )

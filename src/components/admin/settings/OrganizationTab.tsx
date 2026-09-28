@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Trash2, Upload } from "lucide-react";
+import {
+  Mail,
+  MoreHorizontal,
+  Send,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
+  Upload,
+} from "lucide-react";
 
 import {
   ApiError,
@@ -12,8 +20,14 @@ import {
   type OrgDetails,
 } from "@/lib/api";
 import { formatTimestamp } from "@/lib/format-time";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -26,7 +40,7 @@ import {
 
 import { ConfirmDialog } from "../detail/EngagementDialogs";
 import { BrandingSettings } from "./BrandingSettings";
-import { FormMessage, SettingsSection } from "./parts";
+import { FormMessage, PersonAvatar, Pill, SettingsSection } from "./parts";
 
 type Msg = { kind: "success" | "error"; text: string } | null;
 
@@ -57,31 +71,36 @@ function OrgNameForm({
   });
 
   return (
-    <SettingsSection title="Organization name">
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setMsg(null);
-          mut.mutate();
-        }}
-      >
-        <Input
-          value={name}
-          maxLength={200}
-          disabled={!isOwner}
-          onChange={(e) => setName(e.target.value)}
-          aria-label="Organization name"
-        />
-        {isOwner ? (
-          <div className="flex items-center gap-3">
-            <Button type="submit" disabled={mut.isPending}>
-              Save
-            </Button>
-            <FormMessage message={msg} />
-          </div>
-        ) : null}
-      </form>
+    <SettingsSection
+      title="Organization name"
+      description="Shown to your team and in emails sent to respondents."
+      onSubmit={
+        isOwner
+          ? () => {
+              setMsg(null);
+              mut.mutate();
+            }
+          : undefined
+      }
+      footerHint={
+        isOwner ? <FormMessage message={msg} /> : "Only owners can change this."
+      }
+      footer={
+        isOwner ? (
+          <Button type="submit" size="sm" disabled={mut.isPending}>
+            Save
+          </Button>
+        ) : null
+      }
+    >
+      <Input
+        value={name}
+        maxLength={200}
+        disabled={!isOwner}
+        onChange={(e) => setName(e.target.value)}
+        aria-label="Organization name"
+        className="sm:max-w-md"
+      />
     </SettingsSection>
   );
 }
@@ -122,7 +141,8 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
   return (
     <SettingsSection
       title="Logo"
-      description="Shown in the header and on client decks. PNG, JPG, SVG or WebP, up to 500 KB."
+      description="Shown to respondents at the top of their deck."
+      footerHint="PNG, JPG, SVG or WebP, up to 500 KB. Square works best."
     >
       <div className="flex items-center gap-4">
         <span className="flex size-16 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted text-xl font-semibold text-muted-foreground">
@@ -137,7 +157,7 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
             <input
               type="file"
               accept="image/png,image/jpeg,image/svg+xml,image/webp"
-              className="hidden"
+              className="peer sr-only"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 e.target.value = "";
@@ -149,7 +169,7 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
                 uploadMut.mutate(file);
               }}
             />
-            <span className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-input px-3 text-sm font-semibold hover:bg-accent">
+            <span className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50">
               <Upload className="size-4" />
               {logoUrl ? "Replace logo" : "Upload logo"}
             </span>
@@ -157,6 +177,7 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
           {logoUrl ? (
             <Button
               variant="ghost"
+              size="sm"
               onClick={() => setRemoving(true)}
               className="text-muted-foreground hover:text-destructive"
             >
@@ -236,21 +257,32 @@ function MembersSection({
   };
 
   return (
-    <SettingsSection title="Members">
+    <SettingsSection
+      title="Members"
+      description="People who can sign in and manage engagements."
+      flush
+      footerHint={
+        isOwner && ownerCount <= 1
+          ? "Promote another member before changing your own role."
+          : undefined
+      }
+    >
       {q.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="px-5 py-4 text-sm text-muted-foreground">Loading…</p>
       ) : (
-        <ul className="flex flex-col divide-y divide-border">
+        <ul className="divide-y divide-border">
           {members.map((m) => {
             const isSelf = m.user_id === currentUserId;
             const isLastOwner = m.role === "owner" && ownerCount <= 1;
+            const display = m.name?.trim() || m.email;
             return (
-              <li key={m.user_id} className="flex items-center gap-3 py-2.5">
+              <li key={m.user_id} className="flex items-center gap-3 px-5 py-3">
+                <PersonAvatar label={display} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-foreground">
-                    {m.name?.trim() || m.email}
+                    {display}
                     {isSelf ? (
-                      <span className="ml-1 text-xs text-muted-foreground">
+                      <span className="ml-1.5 font-normal text-muted-foreground">
                         (you)
                       </span>
                     ) : null}
@@ -259,48 +291,55 @@ function MembersSection({
                     {m.email}
                   </div>
                 </div>
-                <Badge variant={m.role === "owner" ? "default" : "secondary"}>
-                  {m.role}
-                </Badge>
-                {isOwner && !isLastOwner ? (
-                  <div className="flex gap-1">
-                    {m.role === "member" ? (
+                <Pill tone={m.role === "owner" ? "strong" : "default"}>
+                  {m.role === "owner" ? "Owner" : "Member"}
+                </Pill>
+                {isOwner ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        onClick={() => setPending({ kind: "promote", member: m })}
+                        size="icon"
+                        className="-mr-2 size-8 text-muted-foreground hover:text-foreground"
+                        disabled={isLastOwner}
+                        aria-label={`Actions for ${display}`}
+                        title={isLastOwner ? "The last owner can't be changed" : undefined}
                       >
-                        Make owner
+                        <MoreHorizontal />
                       </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setPending({ kind: "demote", member: m })}
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-44">
+                      {m.role === "member" ? (
+                        <DropdownMenuItem
+                          onSelect={() => setPending({ kind: "promote", member: m })}
+                        >
+                          <ShieldCheck />
+                          Make owner
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          onSelect={() => setPending({ kind: "demote", member: m })}
+                        >
+                          <ShieldOff />
+                          Demote to member
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => setPending({ kind: "remove", member: m })}
                       >
-                        Demote
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setPending({ kind: "remove", member: m })}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      Remove
-                    </Button>
-                  </div>
+                        <Trash2 />
+                        Remove
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 ) : null}
               </li>
             );
           })}
         </ul>
       )}
-      {isOwner && ownerCount <= 1 ? (
-        <p className="mt-3 text-xs text-muted-foreground">
-          Promote another member before changing your own role.
-        </p>
-      ) : null}
 
       <ConfirmDialog
         open={pending !== null}
@@ -363,17 +402,21 @@ function InvitesSection(): React.ReactElement {
 
   return (
     <SettingsSection
-      title="Invite teammate"
+      title="Invite teammates"
       description="Invited people get an email link to join this organization."
+      onSubmit={() => {
+        setMsg(null);
+        inviteMut.mutate();
+      }}
+      footerHint={<FormMessage message={msg} />}
+      footer={
+        <Button type="submit" size="sm" disabled={inviteMut.isPending}>
+          <Send />
+          Send invite
+        </Button>
+      }
     >
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setMsg(null);
-          inviteMut.mutate();
-        }}
-      >
+      <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-1.5">
           <Label htmlFor="inv-email">Email</Label>
           <Input
@@ -381,6 +424,7 @@ function InvitesSection(): React.ReactElement {
             type="email"
             required
             autoComplete="off"
+            placeholder="teammate@company.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
@@ -397,35 +441,39 @@ function InvitesSection(): React.ReactElement {
             </SelectContent>
           </Select>
         </div>
-        <Button type="submit" disabled={inviteMut.isPending}>
-          Send invite
-        </Button>
-        <FormMessage message={msg} />
-      </form>
+      </div>
 
       {invites.length > 0 ? (
-        <ul className="mt-4 flex flex-col divide-y divide-border border-t border-border pt-2">
-          {invites.map((inv) => (
-            <li key={inv.id} className="flex items-center gap-3 py-2.5">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground">
-                  {inv.email}
+        <div className="mt-5">
+          <h3 className="mb-1 text-xs font-medium text-muted-foreground">
+            Pending invites
+          </h3>
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {invites.map((inv) => (
+              <li key={inv.id} className="flex items-center gap-3 px-3 py-2.5">
+                <Mail className="size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground">
+                    {inv.email}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Expires {formatTimestamp(inv.expires_at)}
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {inv.role} · expires {formatTimestamp(inv.expires_at)}
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setRevoking(inv)}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                Revoke
-              </Button>
-            </li>
-          ))}
-        </ul>
+                <Pill>{inv.role === "owner" ? "Owner" : "Member"}</Pill>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setRevoking(inv)}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  Revoke
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       <ConfirmDialog
@@ -455,19 +503,15 @@ export function OrganizationTab({
 }): React.ReactElement {
   const isOwner = org.role === "owner";
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       {!isOwner ? (
-        <p className="rounded-lg border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
+        <p className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
           Only owners can change organization settings.
         </p>
       ) : null}
       <OrgNameForm org={org} isOwner={isOwner} />
       {isOwner ? <LogoSettings org={org} /> : null}
-      {isOwner ? (
-        <div className="rounded-lg border border-border bg-card p-5">
-          <BrandingSettings org={org} />
-        </div>
-      ) : null}
+      {isOwner ? <BrandingSettings org={org} /> : null}
       <MembersSection isOwner={isOwner} currentUserId={currentUserId} />
       {isOwner ? <InvitesSection /> : null}
     </div>

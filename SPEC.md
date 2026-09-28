@@ -304,7 +304,7 @@ per-org LLM cost ledger (migration 0017)
 | engagement_id / recipient_id / response_id / card_id | uuid FKs | all on delete cascade; `card_id` is the *triggering* card |
 | trigger_hash | text not null | SHA-256 of the normalized correction text |
 | status | text check | `pending` → `completed` / `skipped` / `failed` |
-| model | text | e.g. `claude-opus-4-8`, or `fake` in dev fake mode |
+| model | text | e.g. `claude-sonnet-5`, or `fake` in dev fake mode |
 | input_tokens, output_tokens | integer | from the API response usage object |
 | cost_usd | numeric(10,6) | stamped at call time from the model price map |
 | created_card_ids | uuid[] | the AI cards this generation inserted |
@@ -614,7 +614,7 @@ Reactive cards (§15; all default to off/safe):
 - `ANTHROPIC_API_KEY` — empty disables generation (unless fake mode)
 - `REACTIVE_CARDS_ENABLED` — deployment-wide master switch, default `false`
 - `REACTIVE_FAKE_MODE` — dev-only canned generations, no key, zero outbound HTTP
-- `REACTIVE_MODEL` (default `claude-opus-4-8`), `REACTIVE_MAX_CARDS_PER_GENERATION` (2), `REACTIVE_MAX_GENERATED_PER_RECIPIENT` (10), `REACTIVE_MAX_TRIGGER_CHARS`, `REACTIVE_TIMEOUT_SECONDS`, `REACTIVE_MAX_RETRIES`
+- `REACTIVE_MODEL` (default `claude-sonnet-5`), `REACTIVE_EFFORT` (default `low`; never sent to Haiku), `REACTIVE_MAX_CARDS_PER_GENERATION` (2), `REACTIVE_MAX_GENERATED_PER_RECIPIENT` (10), `REACTIVE_MAX_TRIGGER_CHARS`, `REACTIVE_TIMEOUT_SECONDS`, `REACTIVE_MAX_RETRIES`
 
 Misc:
 - `UPLOAD_DIR` (`/var/lib/pulse/uploads/` in prod)
@@ -1074,7 +1074,7 @@ stand on their own.
 ### 15.6 Cost posture
 
 One generation ≈ 1.3k input + 100–300 output tokens ≈ $0.01–0.015 on the
-default `claude-opus-4-8`. Spend is bounded by: the narrow trigger, the
+default `claude-sonnet-5`. Spend is bounded by: the narrow trigger, the
 dedup claim, the 2-cards-per-generation cap, and the 10-attempts-per-
 recipient lifetime cap — a hostile token holder cannot generate unbounded
 calls.

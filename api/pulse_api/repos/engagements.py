@@ -36,14 +36,17 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
     the org's logo + branding alongside the engagement. The anon SELECT
     policy on ``organizations`` (added in migration 0007) admits exactly
     the row whose ``id`` matches the ``pulse.org_id`` GUC the request set,
-    so the join stays tenant-scoped. ``org_logo_path`` / ``org_branding``
-    are ``None`` when the org has no logo / branding configured.
+    so the join stays tenant-scoped. ``org_name`` is the consultant org's
+    name (the deck shows it when there's no logo); ``org_logo_path`` /
+    ``org_branding`` are ``None`` when the org has no logo / branding
+    configured.
     """
     result = await session.execute(
         text(
             "select c.id::text, cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.reactive_cards_enabled, c.created_at, "
             "r.last_active_at, r.name as recipient_name, "
+            "o.name as org_name, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.engagements c "
             "join public.clients cl on cl.id = c.client_id "
@@ -172,7 +175,8 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               cl.name                                            as client_name,
               c.created_by::text                                 as created_by,
               c.engagement_name, c.brief, c.voice_enabled,
-              c.reminders_enabled, c.reactive_cards_enabled, c.created_at,
+              c.reminders_enabled, c.reactive_cards_enabled,
+              c.transcription_enabled, c.created_at,
               (select count(*) from public.cards cd
                  where cd.engagement_id = c.id)::int             as total_cards,
               (select count(*) from public.cards cda
@@ -272,7 +276,7 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
             "select c.id::text, c.client_id::text as client_id, "
             "cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.reminders_enabled, "
-            "c.reactive_cards_enabled, "
+            "c.reactive_cards_enabled, c.transcription_enabled, "
             "c.created_by::text as created_by, c.created_at "
             "from public.engagements c "
             "join public.clients cl on cl.id = c.client_id "
@@ -322,13 +326,14 @@ async def create_engagement(
             "          cast(:by as uuid)) "
             "  returning id, client_id, engagement_name, brief, "
             "            voice_enabled, reminders_enabled, reactive_cards_enabled, "
+            "            transcription_enabled, "
             "            created_by, created_at"
             ") "
             "select ins.id::text, ins.client_id::text as client_id, "
             "cl.name as name, cl.name as client_name, "
             "ins.engagement_name, "
             "ins.brief, ins.voice_enabled, ins.reminders_enabled, "
-            "ins.reactive_cards_enabled, "
+            "ins.reactive_cards_enabled, ins.transcription_enabled, "
             "ins.created_by::text as created_by, ins.created_at "
             "from ins join public.clients cl on cl.id = ins.client_id"
         ),
@@ -349,8 +354,9 @@ async def update_engagement(
     responsible for restricting which keys it forwards (so the wire body
     can't sneak in a token rotation by sending {'token': '...'}).
 
-    All writable fields (``engagement_name``, ``brief``, ``voice_enabled``)
-    are plain columns. The customer-facing name lives
+    All writable fields (``engagement_name``, ``brief``, ``voice_enabled``,
+    ``reminders_enabled``, ``reactive_cards_enabled``,
+    ``transcription_enabled``) are plain columns. The customer-facing name lives
     on ``clients`` now and is NOT mutable through this path. The returned
     row joins ``clients`` so ``name`` + ``client_id`` stay present."""
     if not fields:
