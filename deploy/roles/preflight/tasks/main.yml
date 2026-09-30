@@ -13,6 +13,10 @@
       - acl
       - git
       - python3-psycopg2
+      # Needed by Ansible's own `pip` module (backend role: "Install uv into
+      # the venv") on the target's system Python. Older hosts happened to
+      # have it; a fresh Debian 13 box does not.
+      - python3-packaging
       # Off-box backup push (H2): Debian's `restic` package is old but
       # workable for `backup`/`forget`/`restore` against an S3-compatible
       # (R2) repo — state=present only, no third-party repo, per the
