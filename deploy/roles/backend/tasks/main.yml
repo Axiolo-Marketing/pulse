@@ -72,6 +72,16 @@
   notify: Restart pulse-api
 
 # ── 3. Migrations ─────────────────────────────────────────────────────────
+# pgpass for the pre-migration snapshot below and the daily backup cron (§6).
+# Must land BEFORE the snapshot: on a fresh host it doesn't exist yet.
+- name: Drop pgpass for the Pulse DB snapshot + backup cron
+  ansible.builtin.template:
+    src: pulse.pgpass.j2
+    dest: "{{ pulse_env_dir }}/pgpass"
+    owner: "{{ pulse_user }}"
+    group: "{{ pulse_group }}"
+    mode: "0600"
+
 # Fresh DB snapshot immediately before `alembic upgrade head`, so any deploy
 # that applies a destructive migration has a same-minute rollback point (the
 # 03:15 daily dump can be hours stale). Pulse-scoped: same DB, pgpass, and
@@ -168,14 +178,6 @@
 
 # ── 6. Backup cron (Pulse-scoped — separate file in /etc/cron.d so it
 # never collides with other apps' crontabs)
-- name: Drop pgpass for Pulse backup cron
-  ansible.builtin.template:
-    src: pulse.pgpass.j2
-    dest: "{{ pulse_env_dir }}/pgpass"
-    owner: "{{ pulse_user }}"
-    group: "{{ pulse_group }}"
-    mode: "0600"
-
 - name: Drop /etc/cron.d/pulse-backup
   ansible.builtin.template:
     src: pulse-backup.cron.j2

@@ -38,7 +38,7 @@ only the pieces that require credentials, DNS, or intentional global config:
 
 ```bash
 # 1. Point DNS before the first TLS run.
-#    pulse.axiolo.com -> 198.27.127.130
+#    pulse.axiolo.com -> 40.160.142.16
 
 # 2. If Python 3.13 is not available from the host's configured apt repos,
 #    install it deliberately before running the playbook. The playbook will
@@ -46,7 +46,7 @@ only the pieces that require credentials, DNS, or intentional global config:
 python3.13 --version
 
 # 3. Ensure the SSH user in inventory can sudo. For the shared VPS this is
-#    currently ansible_user=gabriel at 198.27.127.130.
+#    currently ansible_user=debian at 40.160.142.16 ("atlas").
 
 # 4. The playbook uses the same SSH key as the other Axiolo deploys
 #    (image-compressor, sitechecker, octoping) — `~/.ssh/github_deploy_key`
@@ -227,7 +227,8 @@ ansible-playbook deploy.yml --vault-password-file vault_secret --ask-become-pass
 
 2. **Verify the four health checks:**
    - `https://<domain>/` returns the Pulse landing page.
-   - `https://<domain>/api/healthz` returns `{"status":"ok"}`.
+   - `curl -s http://127.0.0.1:8421/healthz` on the VPS returns `{"status":"ok"}`
+     (the app serves it at its root, which nginx does not proxy — `/api/healthz` 404s).
    - `systemctl status pulse-api` is active + running.
    - `journalctl -u pulse-api -n 50` shows uvicorn startup, no errors.
 
