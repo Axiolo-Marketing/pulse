@@ -1080,6 +1080,19 @@ export interface SuperadminOrgPayload {
   created_at: string;
 }
 
+export interface OrgDeleteImpact {
+  name: string;
+  clients: number;
+  engagements: number;
+  questions: number;
+  respondents: number;
+  answers: number;
+  files: number;
+  members: number;
+  pending_invites: number;
+  api_keys: number;
+}
+
 export interface CreateOrgResult {
   org: SuperadminOrgPayload;
   /** Null when no owner was invited — the calling superadmin owns it. */
@@ -1114,10 +1127,18 @@ export const superadminApi = {
       body: JSON.stringify(args),
     }),
 
-  deleteOrg: (orgId: string): Promise<void> =>
-    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}`, {
-      method: "DELETE",
-    }),
+  /** Delete an org and everything in it. An org with any data needs
+   * `confirm` = its name (else 409). Irreversible. */
+  deleteOrg: (orgId: string, confirm?: string): Promise<void> =>
+    request(
+      `/api/superadmin/orgs/${encodeURIComponent(orgId)}` +
+        (confirm ? `?confirm=${encodeURIComponent(confirm)}` : ""),
+      { method: "DELETE" },
+    ),
+
+  /** What deleting this org would erase (for the confirm dialog). */
+  orgDeleteImpact: (orgId: string): Promise<OrgDeleteImpact> =>
+    request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}/delete-impact`),
 
   listOrgMembers: (orgId: string): Promise<SuperadminMemberRow[]> =>
     request(`/api/superadmin/orgs/${encodeURIComponent(orgId)}/members`),
