@@ -42,7 +42,6 @@ import {
 
 import { cn } from "@/lib/utils";
 
-import { ConfirmDialog } from "../detail/EngagementDialogs";
 import { Field } from "../form-parts";
 import { PersonAvatar, Pill, SettingsSection } from "../settings/parts";
 
@@ -369,6 +368,138 @@ function MembersDialog({
   );
 }
 
+/** Delete an organization. Shows exactly what will be erased; an org with
+ * any data must be confirmed by typing its name (the server enforces the
+ * same rule). */
+function DeleteOrgDialog({
+  org,
+  onOpenChange,
+}: {
+  org: SuperadminOrgRow | null;
+  onOpenChange: (o: boolean) => void;
+}): React.ReactElement {
+  const qc = useQueryClient();
+  const [typed, setTyped] = useState("");
+  useEffect(() => setTyped(""), [org?.id]);
+
+  const impactQ = useQuery({
+    queryKey: ["superadmin", "delete-impact", org?.id],
+    queryFn: () => superadminApi.orgDeleteImpact(org!.id),
+    enabled: org !== null,
+  });
+  const impact = impactQ.data;
+  const hasData =
+    !!impact &&
+    (impact.clients > 0 ||
+      impact.engagements > 0 ||
+      impact.api_keys > 0 ||
+      impact.members > 1);
+  const nameMatches =
+    !!org && typed.trim().toLowerCase() === org.name.trim().toLowerCase();
+
+  const mut = useMutation({
+    mutationFn: () =>
+      superadminApi.deleteOrg(org!.id, hasData ? typed.trim() : undefined),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["superadmin"] });
+      void qc.invalidateQueries({ queryKey: ["orgs", "mine"] });
+      toast.success(`${org?.name} deleted.`);
+      onOpenChange(false);
+    },
+    onError: (err) => {
+      // The server says why (e.g. the name didn't match) — show it.
+      toast.error("Couldn't delete that organization.", {
+        description: err instanceof ApiError ? err.detail : undefined,
+      });
+    },
+  });
+
+  const rows: [string, number][] = impact
+    ? [
+        ["Clients", impact.clients],
+        ["Engagements", impact.engagements],
+        ["Questions", impact.questions],
+        ["Respondents", impact.respondents],
+        ["Answers", impact.answers],
+        ["Uploaded files", impact.files],
+        ["Members", impact.members],
+        ["Pending invites", impact.pending_invites],
+        ["API keys", impact.api_keys],
+      ]
+    : [];
+
+  return (
+    <Dialog open={org !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete {org?.name}?</DialogTitle>
+          <DialogDescription>
+            This permanently erases the organization and everything in it.
+            Member accounts are kept, but lose access. It can't be undone;
+            only a server backup could bring it back.
+          </DialogDescription>
+        </DialogHeader>
+        {impactQ.isPending ? (
+          <Skeleton className="h-40 w-full" />
+        ) : impactQ.isError ? (
+          <p className="text-sm text-destructive" role="alert">
+            Couldn't load what this would delete. Close and try again.
+          </p>
+        ) : (
+          <>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg border border-border px-4 py-3 text-sm sm:grid-cols-3">
+              {rows.map(([label, n]) => (
+                <div key={label} className="flex items-baseline justify-between gap-2">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd
+                    className={cn(
+                      "tabular-nums",
+                      n > 0 ? "font-semibold text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {n}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {hasData ? (
+              <Field
+                id="delete-org-confirm"
+                label={`Type ${org?.name} to confirm`}
+              >
+                <Input
+                  id="delete-org-confirm"
+                  value={typed}
+                  autoComplete="off"
+                  onChange={(e) => setTyped(e.target.value)}
+                  placeholder={org?.name}
+                />
+              </Field>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This organization is empty.
+              </p>
+            )}
+          </>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!impact || (hasData && !nameMatches) || mut.isPending}
+            onClick={() => mut.mutate()}
+          >
+            <Trash2 />
+            Delete organization
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function OrgsTableSection(): React.ReactElement {
   const qc = useQueryClient();
   const orgsQ = useQuery({
@@ -379,19 +510,6 @@ function OrgsTableSection(): React.ReactElement {
   const [membersOrg, setMembersOrg] = useState<SuperadminOrgRow | null>(null);
   const [deletingOrg, setDeletingOrg] = useState<SuperadminOrgRow | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-
-  const deleteMut = useMutation({
-    mutationFn: (org: SuperadminOrgRow) => superadminApi.deleteOrg(org.id),
-    onSuccess: (_data, org) => {
-      void qc.invalidateQueries({ queryKey: ["superadmin", "orgs"] });
-      toast.success(`${org.name} deleted.`);
-      setDeletingOrg(null);
-    },
-    onError: () => {
-      toast.error("Couldn't delete that organization.");
-      setDeletingOrg(null);
-    },
-  });
 
   const reactiveMut = useMutation({
     mutationFn: (args: { org: SuperadminOrgRow; allowed: boolean }) =>
@@ -468,7 +586,6 @@ function OrgsTableSection(): React.ReactElement {
             </TableRow>
           ) : (
             orgs.map((org) => {
-              const canDelete = org.member_count <= 1;
               return (
                 <TableRow key={org.id}>
                   <TableCell className="pl-5">
@@ -533,17 +650,11 @@ function OrgsTableSection(): React.ReactElement {
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           variant="destructive"
-                          disabled={!canDelete}
                           onSelect={() => setDeletingOrg(org)}
                         >
                           <Trash2 />
-                          Delete organization
+                          Delete organization…
                         </DropdownMenuItem>
-                        {!canDelete ? (
-                          <p className="px-2 pb-1.5 text-xs text-muted-foreground">
-                            Remove its members before deleting.
-                          </p>
-                        ) : null}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -563,20 +674,10 @@ function OrgsTableSection(): React.ReactElement {
         }}
       />
 
-      <ConfirmDialog
-        open={deletingOrg !== null}
+      <DeleteOrgDialog
+        org={deletingOrg}
         onOpenChange={(o) => {
           if (!o) setDeletingOrg(null);
-        }}
-        title={
-          deletingOrg ? `Delete ${deletingOrg.name}?` : "Delete organization?"
-        }
-        description="This permanently removes the organization. This cannot be undone."
-        confirmLabel="Delete organization"
-        destructive
-        pending={deleteMut.isPending}
-        onConfirm={() => {
-          if (deletingOrg) deleteMut.mutate(deletingOrg);
         }}
       />
     </SettingsSection>

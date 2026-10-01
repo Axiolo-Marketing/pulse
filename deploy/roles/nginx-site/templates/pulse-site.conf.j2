@@ -23,6 +23,41 @@ proxy_request_buffering off;
 proxy_read_timeout 120s;
 {% endmacro %}
 
+{#
+  Security headers. nginx drops server-level add_header directives inside
+  any location that sets its own add_header, so every such location
+  re-includes this block.
+#}
+{% macro security_headers() %}
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+{% endmacro %}
+
+{#
+  Static site caching. HTML must revalidate on every visit so a deploy is
+  seen immediately — with no Cache-Control, browsers reused pre-deploy pages
+  whose hashed bundles no longer exist. Hashed /_astro/ bundles are
+  immutable, and a missing one is a real 404: the SPA fallback used to
+  answer it with index.html (200), which the stale page then failed to run
+  as code, leaving the admin stuck on "Loading...".
+#}
+{% macro static_site_locations() %}
+location ^~ /_astro/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+{{ security_headers() | trim | indent(4, true) }}
+}
+
+location / {
+    try_files $uri $uri/ /index.html;
+    add_header Cache-Control "no-cache" always;
+{{ security_headers() | trim | indent(4, true) }}
+}
+{% endmacro %}
+
 {% macro oauth_root_locations() %}
 # ── OAuth 2.1 endpoints for the MCP connector (Claude Desktop) ──────────────
 # The MCP server (/api/mcp/) doubles as an OAuth resource + authorization
@@ -96,9 +131,7 @@ server {
         log_not_found off;
     }
 
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
+{{ static_site_locations() | trim | indent(4, true) }}
 {% endif %}
 }
 
@@ -116,11 +149,7 @@ server {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+{{ security_headers() | trim | indent(4, true) }}
 
     # The body of POST /api/uploads has to fit through nginx before the
     # backend's MAX_UPLOAD_BYTES check fires.
@@ -166,8 +195,6 @@ server {
     }
 
     # Static Astro site
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
+{{ static_site_locations() | trim | indent(4, true) }}
 }
 {% endif %}
