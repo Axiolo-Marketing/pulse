@@ -155,3 +155,33 @@ def engagement_reminder_email(
         f"{_unsubscribe_footer(unsubscribe_url)}"
     )
     return subject, body
+
+
+def respondent_finished_email(
+    *,
+    respondent_name: str | None,
+    respondent_email: str | None,
+    engagement_name: str | None,
+    client_name: str | None,
+    answered: int,
+    skipped: int,
+    engagement_url: str,
+) -> tuple[str, str]:
+    """Returns ``(subject, body)`` for the operator alert sent when a
+    respondent finishes a deck (``pulse_api/completion.py``)."""
+    who = respondent_name or respondent_email or "A respondent"
+    if respondent_name and respondent_email:
+        who_full = f"{respondent_name} ({respondent_email})"
+    else:
+        who_full = who
+    deck = engagement_name or "their Pulse deck"
+    for_client = f" for {client_name}" if client_name else ""
+    tally = f"{answered} answered" + (f", {skipped} skipped" if skipped else "")
+    subject = f"{who} finished {deck}"
+    body = (
+        f"{who_full} just finished {deck}{for_client} ({tally}).\n\n"
+        f"Review their answers here:\n\n"
+        f"{engagement_url}\n\n"
+        f"You're getting this because you own this engagement in Pulse."
+    )
+    return subject, body

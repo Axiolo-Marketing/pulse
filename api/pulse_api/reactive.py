@@ -694,7 +694,7 @@ async def _load_generation_context(
 _pending_tasks: set[asyncio.Task] = set()
 
 
-def schedule_generation(**kwargs: Any) -> None:
+def schedule_generation(**kwargs: Any) -> asyncio.Task:
     """Schedule `run_generation` as a fire-and-forget `asyncio.Task`,
     NOT a FastAPI `BackgroundTasks` job — deliberately, to fix a circular
     wait that was proven live twice.
@@ -751,6 +751,7 @@ def schedule_generation(**kwargs: Any) -> None:
             logger.error("reactive: schedule_generation task escaped unexpectedly", exc_info=exc)
 
     task.add_done_callback(_log_if_failed)
+    return task
 
 
 async def wait_for_pending_generations() -> None:

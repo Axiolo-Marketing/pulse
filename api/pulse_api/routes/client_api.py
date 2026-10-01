@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse_api import reactive
+from pulse_api import completion, reactive
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
 from pulse_api.observability import limiter
@@ -229,14 +229,24 @@ async def save_response(
     trigger = reactive.extract_trigger_text(
         card_meta["response_type"], req.state, req.response_value
     )
+    generation = None
     if trigger is not None and reactive.is_candidate(card_source=card_meta["source"]):
-        reactive.schedule_generation(
+        generation = reactive.schedule_generation(
             response_id=row["id"],
             recipient_id=row["recipient_id"],
             engagement_id=row["engagement_id"],
             card_id=row["card_id"],
             trigger_text=trigger,
         )
+
+    # Completion alert: this session already sees the save above, so the
+    # cheap check decides whether the respondent just finished; the detached
+    # job (same scheduling rules as above) re-checks after the commit and
+    # after any AI follow-up from this save, then emails the owner once.
+    if req.state in ("answered", "skipped") and await completion.alert_due(
+        session, str(row["recipient_id"])
+    ):
+        completion.schedule_completion_check(str(row["recipient_id"]), after=generation)
 
     return row
 

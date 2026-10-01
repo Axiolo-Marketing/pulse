@@ -31,6 +31,8 @@ class Recipient(SQLModel, table=True):
         last_reminded_at: When the last reminder was sent.
         reminder_count: How many reminders have gone out.
         unsubscribed_at: Set when the recipient opts out of reminders.
+        completed_notified_at: When the engagement owner was emailed that
+            this recipient finished the deck (``pulse_api/completion.py``).
         created_at: Insert timestamp (naive UTC).
     """
 
@@ -47,4 +49,5 @@ class Recipient(SQLModel, table=True):
     last_reminded_at: datetime | None = None
     reminder_count: int = 0
     unsubscribed_at: datetime | None = None
+    completed_notified_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)
