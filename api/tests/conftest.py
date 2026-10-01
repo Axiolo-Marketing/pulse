@@ -23,6 +23,7 @@ from pathlib import Path  # noqa: F401  (used by tmp_uploads_dir fixture)
 import pytest
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
+from fastapi import Depends, Header, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -33,8 +34,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from fastapi import Depends, Header, HTTPException
-
+from pulse_api import completion
 from pulse_api import email as email_module
 from pulse_api.auth.middleware import get_org_scoped_session
 from pulse_api.auth.session import encode_session
@@ -664,6 +664,18 @@ def _transcription_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     suite so voice-upload tests don't spawn jobs against the real admin
     engine. ``tests/test_transcription.py`` turns it back on explicitly."""
     monkeypatch.setattr(settings, "transcription_enabled", False)
+
+
+@pytest.fixture(autouse=True)
+def _completion_alerts_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Any test whose respondent answers the last card would otherwise spawn
+    a completion-alert job against the real admin engine (which can't see the
+    rolled-back seed data). The route's in-request ``alert_due`` check still
+    runs everywhere; only the detached job is stubbed.
+    ``tests/test_completion_alerts.py`` restores it explicitly."""
+    monkeypatch.setattr(
+        completion, "schedule_completion_check", lambda *_a, **_k: None
+    )
 
 
 @pytest.fixture
