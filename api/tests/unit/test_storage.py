@@ -153,3 +153,16 @@ def test_delete_upload_swallows_traversal_paths() -> None:
     assert storage.delete_upload("../escape") is False
     assert storage.delete_upload("/etc/passwd") is False
     assert storage.delete_upload("") is False
+
+
+def test_delete_upload_swallows_os_errors(tmp_uploads_dir, monkeypatch) -> None:
+    """A filesystem error (e.g. permissions) after a committed delete must
+    not turn the request into a 500 — it logs and reports False."""
+    rel = f"{uuid.uuid4()}/{uuid.uuid4()}/locked.bin"
+    storage.write_upload(relative_path=rel, content=b"x")
+
+    def _deny(self, *args, **kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(storage.Path, "unlink", _deny)
+    assert storage.delete_upload(rel) is False

@@ -28,6 +28,7 @@ Two concrete operator workflows shape this surface:
 """
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 
@@ -36,6 +37,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api import storage
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import org_invite_email
 from pulse_api.auth.middleware import get_current_superadmin
@@ -47,6 +49,8 @@ from pulse_api.repos import card_generations as card_generations_repo
 from pulse_api.repos import invites as invites_repo
 from pulse_api.repos import memberships as memberships_repo
 from pulse_api.repos import orgs as orgs_repo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["superadmin"])
 
@@ -461,79 +465,138 @@ async def create_org(
     )
 
 
-@router.delete("/api/superadmin/orgs/{org_id}", status_code=204)
-async def delete_org(
-    org_id: str,
-    user: User = Depends(get_current_superadmin),
-    session: AsyncSession = Depends(get_admin_session),
-) -> None:
-    """Delete an empty organization.
+class OrgDeleteImpact(BaseModel):
+    """What ``DELETE /api/superadmin/orgs/{id}`` would erase."""
 
-    Refused with 409 when the org has clients (cascade would wipe
-    customer data) OR when the org has more than one member (use the
-    org's own owner-mediated remove-member flow to drain it first;
-    forcing this from the cross-tenant view is too easy to misclick).
+    name: str
+    clients: int
+    engagements: int
+    questions: int
+    respondents: int
+    answers: int
+    files: int
+    members: int
+    pending_invites: int
+    api_keys: int
 
-    The "active org" of the caller is irrelevant — a superadmin can
-    delete the Axiolo org if it has no clients. The product safety is
-    "no clients", not "not your active org".
 
-    Status codes:
+def _has_data(impact: dict[str, int]) -> bool:
+    """Anything beyond an empty shell (one or no member, nothing else)."""
+    return (
+        impact["clients"] > 0
+        or impact["engagements"] > 0
+        or impact["api_keys"] > 0
+        or impact["members"] > 1
+    )
 
-    * 204 — deleted.
-    * 404 — unknown org id (or malformed UUID).
-    * 409 — the org has clients, or more than one member.
-    """
+
+async def _load_org(session: AsyncSession, org_id: str) -> tuple[uuid.UUID, dict]:
     # Malformed UUID → 404 (same shape as "no such org") so a probing
     # client can't tell which.
     try:
         as_uuid = uuid.UUID(org_id)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="organization not found") from exc
-
     row = await orgs_repo.get_by_id(session, as_uuid)
     if row is None:
         raise HTTPException(status_code=404, detail="organization not found")
+    return as_uuid, row
 
-    clients = await orgs_repo.client_count(session, as_uuid)
-    if clients > 0:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"organization has {clients} client(s); delete those first"
-            ),
+
+@router.get(
+    "/api/superadmin/orgs/{org_id}/delete-impact", response_model=OrgDeleteImpact
+)
+async def org_delete_impact(
+    org_id: str,
+    user: User = Depends(get_current_superadmin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> OrgDeleteImpact:
+    """Counts of everything deleting this org would erase, for the confirm
+    dialog."""
+    as_uuid, row = await _load_org(session, org_id)
+    impact = await orgs_repo.delete_impact(session, as_uuid)
+    return OrgDeleteImpact(name=str(row["name"]), **impact)
+
+
+@router.delete("/api/superadmin/orgs/{org_id}", status_code=204)
+async def delete_org(
+    org_id: str,
+    confirm: str | None = None,
+    user: User = Depends(get_current_superadmin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> None:
+    """Delete an organization and everything in it.
+
+    An empty org (no clients, engagements or API keys; at most one member)
+    deletes outright. Anything more requires ``?confirm=<org name>``
+    (case-insensitive, surrounding whitespace ignored) — the UI makes the
+    superadmin type it after showing ``/delete-impact``. Then engagements,
+    questions, respondents, answers, uploaded files, clients, contacts,
+    memberships, invites, API keys and the org's activity log are all
+    erased; user accounts are kept. Irreversible (backups only).
+
+    The action is audited in one of the caller's own orgs — their last
+    active org, else their oldest other membership — since the deleted
+    org's log goes with it. A superadmin with no other membership leaves
+    only the warning log line.
+
+    Status codes:
+
+    * 204 — deleted.
+    * 404 — unknown org id (or malformed UUID).
+    * 409 — the org has data and ``confirm`` is missing or doesn't match.
+    """
+    as_uuid, row = await _load_org(session, org_id)
+    name = str(row.get("name"))
+    impact = await orgs_repo.delete_impact(session, as_uuid)
+
+    if _has_data(impact):
+        if (confirm or "").strip().casefold() != name.strip().casefold():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"organization has {impact['clients']} client(s), "
+                    f"{impact['engagements']} engagement(s) and "
+                    f"{impact['members']} member(s); confirm with the "
+                    "organization's name to delete everything"
+                ),
+            )
+
+    # Audit where it will survive: the caller's last active org, else any
+    # other org they belong to — never the org being deleted.
+    audit_org = user.last_active_org_id
+    if audit_org is None or audit_org == as_uuid:
+        audit_org = await memberships_repo.first_other_org_for_user(
+            session, user_id=user.id, exclude_org_id=as_uuid
+        )
+    if audit_org is not None:
+        await record_audit(
+            session,
+            org_id=audit_org,
+            user_id=user.id,
+            action="org.delete",
+            target_type="org",
+            target_id=str(as_uuid),
+            metadata={
+                "name": name,
+                "slug": str(row.get("slug")),
+                "erased": impact,
+            },
         )
 
-    members = await orgs_repo.member_count(session, as_uuid)
-    if members > 1:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"organization has {members} members; remove all but one "
-                "before deleting"
-            ),
-        )
-
-    # Audit the deletion BEFORE the cascade wipes everything tied to
-    # this org. The audit row references this org's id via a `cascade`
-    # FK, so committing this transaction also removes the audit row —
-    # the entry exists only inside the transaction window. We still
-    # write it so a side-channel (e.g. WAL replay, hooks, an external
-    # audit sink in the future) can observe the action.
-    await record_audit(
-        session,
-        org_id=as_uuid,
-        user_id=user.id,
-        action="org.delete",
-        target_type="org",
-        target_id=str(as_uuid),
-        metadata={"name": str(row.get("name")), "slug": str(row.get("slug"))},
-    )
-
-    deleted = await orgs_repo.delete_org(session, as_uuid)
-    if not deleted:  # pragma: no cover — get_by_id above guards
+    deleted, paths = await orgs_repo.delete_org_and_data(session, as_uuid)
+    if not deleted:  # pragma: no cover — _load_org above guards
         raise HTTPException(status_code=404, detail="organization not found")
     await session.commit()
+    logger.warning(
+        "superadmin %s deleted org %s (%s): %s%s",
+        user.id, as_uuid, name, impact,
+        "" if audit_org is not None else " (no org to audit in)",
+    )
+    # Files go after the commit: a failed unlink leaves an orphan file
+    # (cheap to clean up, and logged), never a dangling row.
+    for path in paths:
+        storage.delete_upload(path)
 
 
 @router.patch(

@@ -611,6 +611,203 @@ async def test_delete_org_with_multiple_members_returns_409(
     assert "member" in r.json()["detail"].lower()
 
 
+async def _make_org_with_data(db: AsyncSession, tmp_uploads_dir: Any) -> dict[str, Any]:
+    """An org with a client, an engagement, a card, a respondent, an answer,
+    an uploaded file on disk and an API key-free member."""
+    from pulse_api import storage
+
+    org_id = await _make_empty_org(db)
+    name = (
+        await db.execute(
+            text("select name from public.organizations where id = cast(:o as uuid)"),
+            {"o": org_id},
+        )
+    ).scalar_one()
+    ids = (
+        await db.execute(
+            text(
+                """
+                with c as (
+                  insert into public.clients (org_id, name)
+                  values (cast(:o as uuid), 'Gone Client') returning id
+                ), e as (
+                  insert into public.engagements (client_id, org_id)
+                  select id, cast(:o as uuid) from c returning id
+                ), k as (
+                  insert into public.cards (engagement_id, org_id, order_index,
+                    category, title, context, question, response_type)
+                  select id, cast(:o as uuid), 1, 'C', 'T', 'x', 'q?', 'short-text'
+                  from e returning id, engagement_id
+                ), r as (
+                  insert into public.recipients (engagement_id, org_id, token, email)
+                  select engagement_id, cast(:o as uuid), :t, 'gone@example.com'
+                  from k returning id, engagement_id
+                )
+                select k.id::text as card_id, r.id::text as recipient_id,
+                       r.engagement_id::text as engagement_id
+                from k, r
+                """
+            ),
+            {"o": org_id, "t": secrets.token_hex(8)},
+        )
+    ).mappings().one()
+    await db.execute(
+        text(
+            "insert into public.responses (card_id, engagement_id, recipient_id, "
+            "org_id, state, response_value) values (cast(:c as uuid), "
+            "cast(:e as uuid), cast(:r as uuid), cast(:o as uuid), 'answered', "
+            "'{\"text\": \"hi\"}'::jsonb)"
+        ),
+        {"c": ids["card_id"], "e": ids["engagement_id"], "r": ids["recipient_id"], "o": org_id},
+    )
+    rel = f"{ids['engagement_id']}/{ids['card_id']}/gone.txt"
+    storage.write_upload(relative_path=rel, content=b"bytes")
+    await db.execute(
+        text(
+            "insert into public.uploads (card_id, engagement_id, recipient_id, org_id, "
+            "file_name, file_size_bytes, storage_path) values (cast(:c as uuid), "
+            "cast(:e as uuid), cast(:r as uuid), cast(:o as uuid), 'gone.txt', 5, :p)"
+        ),
+        {"c": ids["card_id"], "e": ids["engagement_id"], "r": ids["recipient_id"], "o": org_id, "p": rel},
+    )
+    return {"id": org_id, "name": name, "file": rel}
+
+
+async def test_delete_impact_counts_everything(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    tmp_uploads_dir: Any,
+) -> None:
+    await _become_superadmin(db, seed_admin_user["id"])
+    org = await _make_org_with_data(db, tmp_uploads_dir)
+    await db.flush()
+
+    r = await admin_authed.get(f"/api/superadmin/orgs/{org['id']}/delete-impact")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == org["name"]
+    assert (body["clients"], body["engagements"], body["questions"]) == (1, 1, 1)
+    assert (body["respondents"], body["answers"], body["files"]) == (1, 1, 1)
+
+
+async def test_delete_org_with_data_needs_matching_name(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    tmp_uploads_dir: Any,
+) -> None:
+    await _become_superadmin(db, seed_admin_user["id"])
+    org = await _make_org_with_data(db, tmp_uploads_dir)
+    await db.flush()
+
+    r = await admin_authed.delete(
+        f"/api/superadmin/orgs/{org['id']}", params={"confirm": "wrong name"}
+    )
+    assert r.status_code == 409, r.text
+    assert "confirm" in r.json()["detail"]
+    still = (
+        await db.execute(
+            text("select 1 from public.organizations where id = cast(:o as uuid)"),
+            {"o": org["id"]},
+        )
+    ).scalar()
+    assert still == 1
+
+
+async def test_delete_org_with_data_erases_everything_when_confirmed(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    tmp_uploads_dir: Any,
+) -> None:
+    from pulse_api import storage
+
+    await _become_superadmin(db, seed_admin_user["id"])
+    org = await _make_org_with_data(db, tmp_uploads_dir)
+    await db.execute(
+        text(
+            "update public.users set last_active_org_id = cast(:o as uuid) "
+            "where id = cast(:u as uuid)"
+        ),
+        {"o": seed_admin_user["org_id"], "u": seed_admin_user["id"]},
+    )
+    await db.flush()
+    on_disk = storage.resolve_within_upload_dir(org["file"])
+    assert on_disk.exists()
+
+    # Case and surrounding whitespace don't matter.
+    r = await admin_authed.delete(
+        f"/api/superadmin/orgs/{org['id']}",
+        params={"confirm": f"  {org['name'].upper()} "},
+    )
+    assert r.status_code == 204, r.text
+
+    for table in ("organizations", "clients", "engagements", "cards",
+                  "recipients", "responses", "uploads"):
+        col = "id" if table == "organizations" else "org_id"
+        n = (
+            await db.execute(
+                text(f"select count(*) from public.{table} where {col} = cast(:o as uuid)"),
+                {"o": org["id"]},
+            )
+        ).scalar()
+        assert n == 0, table
+    assert not on_disk.exists()
+
+    # Audited in the caller's own org, where it survives.
+    audit = (
+        await db.execute(
+            text(
+                "select metadata->>'name' from public.audit_logs "
+                "where action = 'org.delete' and target_id = :t "
+                "and org_id = cast(:o as uuid)"
+            ),
+            {"t": org["id"], "o": seed_admin_user["org_id"]},
+        )
+    ).scalar()
+    assert audit == org["name"]
+
+
+
+@pytest.mark.parametrize("last_active", ["none", "deleted_org"])
+async def test_delete_org_audits_in_another_membership_when_last_active_unusable(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    tmp_uploads_dir: Any,
+    last_active: str,
+) -> None:
+    """With no usable last-active org, the audit falls back to another org
+    the superadmin belongs to instead of being silently skipped."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org = await _make_org_with_data(db, tmp_uploads_dir)
+    await db.execute(
+        text(
+            "update public.users set last_active_org_id = "
+            "  case when :mode = 'none' then null else cast(:o as uuid) end "
+            "where id = cast(:u as uuid)"
+        ),
+        {"mode": last_active, "o": org["id"], "u": seed_admin_user["id"]},
+    )
+    await db.flush()
+
+    r = await admin_authed.delete(
+        f"/api/superadmin/orgs/{org['id']}", params={"confirm": org["name"]}
+    )
+    assert r.status_code == 204, r.text
+
+    audit_org = (
+        await db.execute(
+            text(
+                "select org_id::text from public.audit_logs "
+                "where action = 'org.delete' and target_id = :t"
+            ),
+            {"t": org["id"]},
+        )
+    ).scalar()
+    assert audit_org == seed_admin_user["org_id"]
+
 # ── Org members (support workflow) ────────────────────────────────────────
 
 

@@ -591,3 +591,83 @@ async def delete_org(
         {"o": as_str},
     )
     return result.rowcount > 0
+
+
+async def delete_impact(
+    session: AsyncSession, org_id: uuid.UUID | str
+) -> dict[str, int]:
+    """What deleting this org would erase — shown to the superadmin before
+    they confirm. Runs on the BYPASSRLS session (counts across the org)."""
+    row = (
+        await session.execute(
+            text(
+                """
+                select
+                  (select count(*) from public.clients where org_id = cast(:o as uuid))      as clients,
+                  (select count(*) from public.engagements where org_id = cast(:o as uuid))  as engagements,
+                  (select count(*) from public.cards where org_id = cast(:o as uuid))        as questions,
+                  (select count(*) from public.recipients where org_id = cast(:o as uuid))   as respondents,
+                  (select count(*) from public.responses where org_id = cast(:o as uuid))    as answers,
+                  (select count(*) from public.uploads where org_id = cast(:o as uuid))      as files,
+                  (select count(*) from public.organization_memberships
+                     where org_id = cast(:o as uuid))                                        as members,
+                  (select count(*) from public.organization_invites
+                     where org_id = cast(:o as uuid) and accepted_at is null
+                       and revoked_at is null)                                               as pending_invites,
+                  (select count(*) from public.api_keys where org_id = cast(:o as uuid))     as api_keys
+                """
+            ),
+            {"o": str(org_id)},
+        )
+    ).mappings().one()
+    return {k: int(v) for k, v in row.items()}
+
+
+async def delete_org_and_data(
+    session: AsyncSession, org_id: uuid.UUID | str
+) -> tuple[bool, list[str]]:
+    """Erase an org and everything in it. Returns ``(deleted, file_paths)``
+    where ``file_paths`` are the on-disk uploads (answer files, voice notes,
+    the org logo) for the caller to remove AFTER committing.
+
+    Order matters because a few FKs to ``organizations`` are RESTRICT
+    (engagements, cards, responses, uploads, api_keys): engagements go
+    first — their cascade removes cards, recipients, responses, uploads and
+    card generations — then API keys, then :func:`delete_org`, whose own
+    cascade takes clients, contacts, memberships, invites, OAuth grants and
+    the org's audit log. User accounts are kept. Caller commits.
+    """
+    as_str = str(org_id)
+    paths = [
+        r[0]
+        for r in (
+            await session.execute(
+                text(
+                    "select storage_path from public.uploads "
+                    "where org_id = cast(:o as uuid)"
+                ),
+                {"o": as_str},
+            )
+        ).all()
+    ]
+    logo = (
+        await session.execute(
+            text(
+                "select logo_path from public.organizations "
+                "where id = cast(:o as uuid)"
+            ),
+            {"o": as_str},
+        )
+    ).scalar_one_or_none()
+    if logo:
+        paths.append(str(logo))
+    await session.execute(
+        text("delete from public.engagements where org_id = cast(:o as uuid)"),
+        {"o": as_str},
+    )
+    await session.execute(
+        text("delete from public.api_keys where org_id = cast(:o as uuid)"),
+        {"o": as_str},
+    )
+    deleted = await delete_org(session, org_id)
+    return deleted, paths
