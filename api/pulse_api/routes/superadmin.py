@@ -535,8 +535,10 @@ async def delete_org(
     memberships, invites, API keys and the org's activity log are all
     erased; user accounts are kept. Irreversible (backups only).
 
-    The action is audited in the caller's own current org (the deleted
-    org's log goes with it).
+    The action is audited in one of the caller's own orgs — their last
+    active org, else their oldest other membership — since the deleted
+    org's log goes with it. A superadmin with no other membership leaves
+    only the warning log line.
 
     Status codes:
 
@@ -560,10 +562,14 @@ async def delete_org(
                 ),
             )
 
-    # Audit where it will survive: the caller's current org, unless that's
-    # the org being deleted.
+    # Audit where it will survive: the caller's last active org, else any
+    # other org they belong to — never the org being deleted.
     audit_org = user.last_active_org_id
-    if audit_org is not None and audit_org != as_uuid:
+    if audit_org is None or audit_org == as_uuid:
+        audit_org = await memberships_repo.first_other_org_for_user(
+            session, user_id=user.id, exclude_org_id=as_uuid
+        )
+    if audit_org is not None:
         await record_audit(
             session,
             org_id=audit_org,
@@ -583,10 +589,12 @@ async def delete_org(
         raise HTTPException(status_code=404, detail="organization not found")
     await session.commit()
     logger.warning(
-        "superadmin %s deleted org %s (%s): %s", user.id, as_uuid, name, impact
+        "superadmin %s deleted org %s (%s): %s%s",
+        user.id, as_uuid, name, impact,
+        "" if audit_org is not None else " (no org to audit in)",
     )
     # Files go after the commit: a failed unlink leaves an orphan file
-    # (cheap to clean up), never a dangling row.
+    # (cheap to clean up, and logged), never a dangling row.
     for path in paths:
         storage.delete_upload(path)
 

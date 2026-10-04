@@ -769,6 +769,45 @@ async def test_delete_org_with_data_erases_everything_when_confirmed(
     assert audit == org["name"]
 
 
+
+@pytest.mark.parametrize("last_active", ["none", "deleted_org"])
+async def test_delete_org_audits_in_another_membership_when_last_active_unusable(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    tmp_uploads_dir: Any,
+    last_active: str,
+) -> None:
+    """With no usable last-active org, the audit falls back to another org
+    the superadmin belongs to instead of being silently skipped."""
+    await _become_superadmin(db, seed_admin_user["id"])
+    org = await _make_org_with_data(db, tmp_uploads_dir)
+    await db.execute(
+        text(
+            "update public.users set last_active_org_id = "
+            "  case when :mode = 'none' then null else cast(:o as uuid) end "
+            "where id = cast(:u as uuid)"
+        ),
+        {"mode": last_active, "o": org["id"], "u": seed_admin_user["id"]},
+    )
+    await db.flush()
+
+    r = await admin_authed.delete(
+        f"/api/superadmin/orgs/{org['id']}", params={"confirm": org["name"]}
+    )
+    assert r.status_code == 204, r.text
+
+    audit_org = (
+        await db.execute(
+            text(
+                "select org_id::text from public.audit_logs "
+                "where action = 'org.delete' and target_id = :t"
+            ),
+            {"t": org["id"]},
+        )
+    ).scalar()
+    assert audit_org == seed_admin_user["org_id"]
+
 # ── Org members (support workflow) ────────────────────────────────────────
 
 

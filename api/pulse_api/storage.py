@@ -17,11 +17,14 @@ per-test tempdir so disk artifacts can't leak across tests.
 """
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from pathlib import Path
 
 from pulse_api.config import settings
+
+logger = logging.getLogger(__name__)
 
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 _MAX_FILENAME_LENGTH = 200
@@ -156,7 +159,11 @@ def delete_upload(relative_path: str) -> bool:
         target = resolve_within_upload_dir(relative_path)
     except StoragePathError:
         return False
-    if not target.exists() or not target.is_file():
+    try:
+        if not target.exists() or not target.is_file():
+            return False
+        target.unlink()
+    except OSError:
+        logger.exception("could not delete upload %s", relative_path)
         return False
-    target.unlink()
     return True

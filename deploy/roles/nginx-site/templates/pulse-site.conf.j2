@@ -42,12 +42,14 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
   whose hashed bundles no longer exist. Hashed /_astro/ bundles are
   immutable, and a missing one is a real 404: the SPA fallback used to
   answer it with index.html (200), which the stale page then failed to run
-  as code, leaving the admin stuck on "Loading...".
+  as code, leaving the admin stuck on "Loading...". The immutable header
+  is deliberately NOT `always`: a 404 served mid-build (Astro empties the
+  dir first) must not be cached for a year.
 #}
 {% macro static_site_locations() %}
 location ^~ /_astro/ {
     try_files $uri =404;
-    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header Cache-Control "public, max-age=31536000, immutable";
 {{ security_headers() | trim | indent(4, true) }}
 }
 

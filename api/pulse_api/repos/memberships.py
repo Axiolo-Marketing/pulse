@@ -112,6 +112,35 @@ async def get_membership(
     return dict(row) if row else None
 
 
+async def first_other_org_for_user(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID | str,
+    exclude_org_id: uuid.UUID | str,
+) -> uuid.UUID | None:
+    """Return the user's oldest membership org other than ``exclude_org_id``.
+
+    Args:
+        session: ``pulse_admin`` session (crosses orgs).
+        user_id: UUID of the user.
+        exclude_org_id: Org to skip (e.g. one being deleted).
+
+    Returns:
+        The org UUID, or ``None`` if the user has no other membership.
+    """
+    result = await session.execute(
+        text(
+            "select org_id from public.organization_memberships "
+            "where user_id = cast(:u as uuid) "
+            "  and org_id <> cast(:x as uuid) "
+            "order by created_at limit 1"
+        ),
+        {"u": str(user_id), "x": str(exclude_org_id)},
+    )
+    org_id = result.scalar_one_or_none()
+    return uuid.UUID(str(org_id)) if org_id is not None else None
+
+
 async def count_owners(
     session: AsyncSession, org_id: uuid.UUID | str
 ) -> int:
