@@ -229,9 +229,10 @@ async def save_response(
     trigger = reactive.extract_trigger_text(
         card_meta["response_type"], req.state, req.response_value
     )
-    generation = None
+    generation_scheduled = False
     if trigger is not None and reactive.is_candidate(card_source=card_meta["source"]):
-        generation = reactive.schedule_generation(
+        generation_scheduled = True
+        reactive.schedule_generation(
             response_id=row["id"],
             recipient_id=row["recipient_id"],
             engagement_id=row["engagement_id"],
@@ -241,12 +242,16 @@ async def save_response(
 
     # Completion alert: this session already sees the save above, so the
     # cheap check decides whether the respondent just finished; the detached
-    # job (same scheduling rules as above) re-checks after the commit and
-    # after any AI follow-up from this save, then emails the owner once.
-    if req.state in ("answered", "skipped") and await completion.alert_due(
-        session, str(row["recipient_id"])
+    # job (same scheduling rules as above) re-checks after the commit, then
+    # emails the owner once. A save that scheduled a generation leaves it to
+    # `run_generation`, which runs the check once its follow-ups (if any)
+    # are in the deck.
+    if (
+        not generation_scheduled
+        and req.state in ("answered", "skipped")
+        and await completion.alert_due(session, str(row["recipient_id"]))
     ):
-        completion.schedule_completion_check(str(row["recipient_id"]), after=generation)
+        completion.schedule_completion_check(str(row["recipient_id"]))
 
     return row
 

@@ -94,7 +94,8 @@ An engagement is a shared deck of `cards`; each **recipient** (`recipients` tabl
 
 When a respondent's last visible card (shared deck + their own AI follow-ups) gets an `answered`/`skipped` response, the engagement owner is emailed once ("Jane finished 2027 Revenue Plan", link to `/admin/#/client/{id}`). Owner = `engagements.created_by` while still a member of the org, else every org owner. Code: `api/pulse_api/completion.py`; template `respondent_finished_email`.
 
-- **Trigger**: `save_response` runs the cheap `completion.alert_due` on the request session, then `schedule_completion_check` — the same detached-task pattern as reactive cards. If the save also scheduled a reactive generation, the job waits for it first: follow-ups make the respondent unfinished, so the alert waits until they answer those.
+- **Trigger**: `save_response` runs the cheap `completion.alert_due` on the request session, then `schedule_completion_check` — the same detached-task pattern as reactive cards. A save that schedules a reactive generation skips this; `reactive.schedule_generation` runs the check after every generation instead. A respondent with any `pending` generation (younger than 10 min) is never due — follow-ups would make the alert premature, and the deck may have stopped waiting on an earlier card's generation.
+- **Backfill**: migration `0020` stamps respondents who had already finished, so their first post-deploy edit doesn't send a late alert.
 - **Once-only**: `recipients.completed_notified_at` (migration `0020`) is claimed by a conditional UPDATE that re-checks completeness; it re-alerts only if a card was added after it and the respondent finished that too. Always on — no setting yet.
 - **Tests**: `tests/test_completion_alerts.py`. `conftest.py` stubs the scheduler by default so other tests that finish a deck don't spawn jobs against the real admin engine.
 

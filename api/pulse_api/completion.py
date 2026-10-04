@@ -14,10 +14,13 @@ Scheduling follows ``reactive.schedule_generation``: a detached
 ``BackgroundTasks`` — the response row only commits at ``get_anon_session``
 teardown, so the job retries its claim briefly while that commit lands.
 
-AI follow-ups: when the same save also scheduled a reactive generation, the
-job first waits for it. If it adds cards to the respondent's deck they are no
-longer finished, the claim doesn't match, and no email goes out until they
-answer those too.
+AI follow-ups: a respondent with a reactive generation still ``pending``
+(from this save or an earlier one the deck stopped waiting for) is not due —
+the follow-ups it may add would make the alert premature. Instead
+``reactive.run_generation`` re-runs this check once it finishes, whatever the
+outcome: if it added cards the respondent is no longer finished and no email
+goes out until they answer those too. A pending row older than
+``_STALE_GENERATION`` (a crashed worker) stops blocking.
 
 Claim: ``recipients.completed_notified_at`` (migration 0020), set by a
 conditional UPDATE that re-checks completeness, so a recipient is alerted
@@ -51,8 +54,9 @@ logger = logging.getLogger(__name__)
 # few ms) — same budget as the reactive engine's context-load retry.
 _CLAIM_MAX_ATTEMPTS = 10
 _CLAIM_RETRY_SECONDS = 0.3
-# Upper bound on waiting for a reactive generation scheduled by the same save.
-_GENERATION_WAIT_SECONDS = 120.0
+# A generation still `pending` after this is presumed dead (worker restart
+# mid-call) and no longer holds the alert back.
+_STALE_GENERATION = "interval '10 minutes'"
 
 _pending_tasks: set[asyncio.Task] = set()
 
@@ -71,10 +75,14 @@ _DONE_CARDS = (
     "    and (c.recipient_id is null or c.recipient_id = r.id))"
 )
 
-# Finished, and not already alerted for the cards they can see now.
+# Finished, no follow-up still being generated, and not already alerted for
+# the cards they can see now.
 _DUE = (
     f"{_VISIBLE_CARDS} > 0 "
     f"and {_DONE_CARDS} >= {_VISIBLE_CARDS} "
+    "and not exists (select 1 from public.card_generations g "
+    "  where g.recipient_id = r.id and g.status = 'pending' "
+    f"    and g.created_at > now() - {_STALE_GENERATION}) "
     "and (r.completed_notified_at is null "
     "     or r.completed_notified_at < (select max(c.created_at) from public.cards c "
     "          where c.engagement_id = r.engagement_id "
@@ -106,12 +114,10 @@ async def _admin_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-def schedule_completion_check(
-    recipient_id: str, *, after: asyncio.Task | None = None
-) -> None:
-    """Fire-and-forget ``run_completion_check``. Pass ``after`` (the reactive
-    generation task scheduled by the same save) to wait for it first."""
-    task = asyncio.create_task(run_completion_check(recipient_id, after=after))
+def schedule_completion_check(recipient_id: str, *, retry: bool = True) -> None:
+    """Fire-and-forget ``run_completion_check``. ``retry=False`` when the
+    caller knows the triggering save is already committed."""
+    task = asyncio.create_task(run_completion_check(recipient_id, retry=retry))
     _pending_tasks.add(task)
 
     def _done(t: asyncio.Task) -> None:
@@ -207,28 +213,22 @@ def engagement_admin_url(engagement_id: str) -> str:
     return f"{settings.frontend_base_url.rstrip('/')}/admin/#/client/{engagement_id}"
 
 
-async def run_completion_check(
-    recipient_id: str, *, after: asyncio.Task | None = None
-) -> None:
-    """Alert the engagement owner if ``recipient_id`` just finished. Never
-    raises: anything unexpected is logged."""
+async def run_completion_check(recipient_id: str, *, retry: bool = True) -> None:
+    """Alert the engagement owner if ``recipient_id`` just finished. With
+    ``retry`` the claim is retried while the triggering request's commit
+    lands. Never raises: anything unexpected is logged."""
     try:
         uuid.UUID(recipient_id)
     except (ValueError, TypeError, AttributeError):
         return
     try:
-        if after is not None:
-            try:
-                await asyncio.wait_for(asyncio.shield(after), _GENERATION_WAIT_SECONDS)
-            except Exception:
-                logger.warning("completion: waiting on generation for %s failed", recipient_id)
-
+        attempts = _CLAIM_MAX_ATTEMPTS if retry else 1
         claimed = False
-        for attempt in range(_CLAIM_MAX_ATTEMPTS):
+        for attempt in range(attempts):
             if await _claim(recipient_id):
                 claimed = True
                 break
-            if attempt < _CLAIM_MAX_ATTEMPTS - 1:
+            if attempt < attempts - 1:
                 await asyncio.sleep(_CLAIM_RETRY_SECONDS)
         if not claimed:
             return

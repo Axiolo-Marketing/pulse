@@ -42,6 +42,7 @@ import anthropic
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pulse_api import completion
 from pulse_api.audit import record_audit
 from pulse_api.config import settings
 from pulse_api.db import admin_engine
@@ -694,7 +695,7 @@ async def _load_generation_context(
 _pending_tasks: set[asyncio.Task] = set()
 
 
-def schedule_generation(**kwargs: Any) -> asyncio.Task:
+def schedule_generation(**kwargs: Any) -> None:
     """Schedule `run_generation` as a fire-and-forget `asyncio.Task`,
     NOT a FastAPI `BackgroundTasks` job — deliberately, to fix a circular
     wait that was proven live twice.
@@ -739,7 +740,7 @@ def schedule_generation(**kwargs: Any) -> asyncio.Task:
     escape (or a `CancelledError` if the process is shutting down) so it
     isn't silently swallowed by asyncio itself.
     """
-    task = asyncio.create_task(run_generation(**kwargs))
+    task = asyncio.create_task(_generate_then_check_completion(**kwargs))
     _pending_tasks.add(task)
 
     def _log_if_failed(t: asyncio.Task) -> None:
@@ -751,7 +752,17 @@ def schedule_generation(**kwargs: Any) -> asyncio.Task:
             logger.error("reactive: schedule_generation task escaped unexpectedly", exc_info=exc)
 
     task.add_done_callback(_log_if_failed)
-    return task
+
+
+async def _generate_then_check_completion(**kwargs: Any) -> None:
+    """Run the generation, then the completion-alert check — whatever the
+    outcome. A pending generation holds the alert back (its follow-ups would
+    make it premature), so this is what releases it; if follow-ups were
+    added the respondent is no longer finished and the check is a no-op.
+    The triggering save is committed by now (the context load waited for
+    it), so no claim retry is needed."""
+    await run_generation(**kwargs)
+    completion.schedule_completion_check(str(kwargs["recipient_id"]), retry=False)
 
 
 async def wait_for_pending_generations() -> None:

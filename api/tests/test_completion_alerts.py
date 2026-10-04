@@ -202,15 +202,9 @@ async def test_creator_who_left_the_org_is_not_emailed(
     assert deck["owner_email"] in recipients
 
 
-async def test_ai_followup_on_last_card_defers_the_alert(
-    db: AsyncSession,
-    client_authed: AsyncClient,
-    deck: dict,
-    captured_emails: list[OutboundEmail],
-    monkeypatch: pytest.MonkeyPatch,
+async def _enable_reactive(
+    db: AsyncSession, deck: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Correcting the last card spawns AI follow-ups (fake mode), so the
-    respondent isn't finished yet — the alert waits until they answer those."""
     monkeypatch.setattr(settings, "reactive_cards_enabled", True)
     monkeypatch.setattr(settings, "reactive_fake_mode", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "")
@@ -223,12 +217,23 @@ async def test_ai_followup_on_last_card_defers_the_alert(
         {"e": deck["id"]},
     )
 
+
+_CORRECTION = {"confirmed": False, "correction": "It's actually 12 regions, not 8."}
+
+
+async def test_ai_followup_on_last_card_defers_the_alert(
+    db: AsyncSession,
+    client_authed: AsyncClient,
+    deck: dict,
+    captured_emails: list[OutboundEmail],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Correcting the last card spawns AI follow-ups (fake mode), so the
+    respondent isn't finished yet — the alert waits until they answer those."""
+    await _enable_reactive(db, deck, monkeypatch)
+
     await _save(client_authed, deck["cards"][0])
-    await _save(
-        client_authed,
-        deck["cards"][1],
-        value={"confirmed": False, "correction": "It's actually 12 regions, not 8."},
-    )
+    await _save(client_authed, deck["cards"][1], value=_CORRECTION)
     await reactive.wait_for_pending_generations()
     await completion.wait_for_pending_checks()
     assert captured_emails == []
@@ -245,6 +250,91 @@ async def test_ai_followup_on_last_card_defers_the_alert(
     assert followups
     for card_id in followups:
         await _save(client_authed, card_id, value={"text": "12"})
+    assert len(captured_emails) == 1
+
+
+async def test_generation_that_adds_nothing_releases_the_alert(
+    db: AsyncSession,
+    client_authed: AsyncClient,
+    deck: dict,
+    captured_emails: list[OutboundEmail],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the last card's correction yields no follow-up, the generation's
+    own completion check sends the alert (the route leaves it to it)."""
+    await _enable_reactive(db, deck, monkeypatch)
+    monkeypatch.setattr(
+        reactive,
+        "_fake_completion",
+        lambda _t: reactive._LLMResult(
+            status="skipped", model="fake", input_tokens=0, output_tokens=0
+        ),
+    )
+
+    await _save(client_authed, deck["cards"][0])
+    await _save(client_authed, deck["cards"][1], value=_CORRECTION)
+    await reactive.wait_for_pending_generations()
+    await completion.wait_for_pending_checks()
+    assert len(captured_emails) == 1
+
+
+async def _pending_generation(db: AsyncSession, deck: dict, *, age_minutes: int) -> str:
+    """A `pending` generation row for the respondent's first card, as if an
+    earlier correction's follow-up were still being generated. Written as
+    the owner — the respondent's role can only read generations."""
+    await db.execute(text("reset role"))
+    return (
+        await db.execute(
+            text(
+                "insert into public.card_generations "
+                "(org_id, engagement_id, recipient_id, response_id, card_id, "
+                " trigger_hash, created_at) "
+                "select r.org_id, r.engagement_id, r.recipient_id, r.id, r.card_id, "
+                "       'h', now() - make_interval(mins => :age) "
+                "from public.responses r "
+                "where r.card_id = cast(:c as uuid) and r.recipient_id = cast(:rid as uuid) "
+                "returning id::text"
+            ),
+            {"c": deck["cards"][0], "rid": deck["recipient_id"], "age": age_minutes},
+        )
+    ).scalar_one()
+
+
+async def test_pending_generation_from_earlier_save_holds_the_alert(
+    db: AsyncSession,
+    client_authed: AsyncClient,
+    deck: dict,
+    captured_emails: list[OutboundEmail],
+) -> None:
+    """The deck stopped waiting on an earlier card's follow-up and the
+    respondent answered the rest: not finished until that generation lands."""
+    await _save(client_authed, deck["cards"][0])
+    gen = await _pending_generation(db, deck, age_minutes=0)
+
+    await _save(client_authed, deck["cards"][1], value={"confirmed": True})
+    assert captured_emails == []
+
+    # The generation finishes without adding cards; its completion check
+    # (what `reactive` schedules after every generation) now sends the alert.
+    await db.execute(text("reset role"))
+    await db.execute(
+        text("update public.card_generations set status = 'skipped' where id = cast(:g as uuid)"),
+        {"g": gen},
+    )
+    await completion.run_completion_check(deck["recipient_id"], retry=False)
+    assert len(captured_emails) == 1
+
+
+async def test_stale_pending_generation_does_not_hold_the_alert(
+    db: AsyncSession,
+    client_authed: AsyncClient,
+    deck: dict,
+    captured_emails: list[OutboundEmail],
+) -> None:
+    await _save(client_authed, deck["cards"][0])
+    await _pending_generation(db, deck, age_minutes=11)
+
+    await _save(client_authed, deck["cards"][1], value={"confirmed": True})
     assert len(captured_emails) == 1
 
 
