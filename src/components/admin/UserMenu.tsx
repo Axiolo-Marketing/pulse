@@ -27,7 +27,12 @@ export function UserMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-2"
+          aria-label="Account menu"
+        >
           <Avatar className="size-6">
             <AvatarFallback className="bg-secondary text-xs text-secondary-foreground">
               {initial}

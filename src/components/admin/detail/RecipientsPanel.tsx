@@ -583,6 +583,11 @@ export function RecipientsPanel({
                 <div className="truncate text-sm font-medium text-foreground">
                   {r.name || recipientLabel(r)}
                 </div>
+                {r.name && r.email ? (
+                  <div className="truncate text-xs text-muted-foreground">
+                    {r.email}
+                  </div>
+                ) : null}
                 <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted">
                     <span

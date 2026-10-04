@@ -1,7 +1,7 @@
 // Per-organization branding/theme — single source of truth.
 //
-// Imported by `app.ts` (client deck), `admin.ts` (admin shell), and
-// `settings.ts` (the Brand & theme form). Owns: the canonical font
+// Imported by the client deck, the admin shell, the deck preview and the
+// Brand & theme settings form. Owns: the canonical font
 // catalogue, the `:root` default values, the small colour-math helpers
 // used to derive shades, lazy Google-Fonts injection, and the one
 // function that pushes a `BrandingSettings` object onto the live
@@ -10,7 +10,7 @@
 // The shape of `BrandingSettings` is the cross-team contract — the
 // backend's `ALLOWED_FONTS` must equal the `slug`s in `FONT_OPTIONS`
 // below, and the default values must equal `:root` in
-// `src/styles/pulse.css`.
+// `src/styles/theme.css`.
 import type { BrandingSettings } from "./api";
 
 export interface FontOption {
@@ -27,8 +27,7 @@ export interface FontOption {
   googleParam: string | null;
 }
 
-// The default `--font-sans` stack from `src/styles/pulse.css`. Kept as a
-// named constant so the Plus Jakarta Sans option and BRANDING_DEFAULTS
+// The Plus Jakarta Sans font stack. Kept as a named constant so the Plus Jakarta Sans option and BRANDING_DEFAULTS
 // reference the exact same string.
 const PLUS_JAKARTA_STACK =
   '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
@@ -40,9 +39,8 @@ export const FONT_OPTIONS: readonly FontOption[] = [
     slug: "plus-jakarta-sans",
     label: "Plus Jakarta Sans",
     cssFamily: PLUS_JAKARTA_STACK,
-    // v1 page shells link it in <head> too; loading it here as well keeps
-    // it working on shells that don't (the v2 deck defaults to the system
-    // font and only loads Plus Jakarta when an org picks it).
+    // The invite/unsubscribe shells link it in <head>; the deck defaults to
+    // the system font and only loads Plus Jakarta when an org picks it.
     googleParam: "Plus+Jakarta+Sans:wght@400;500;600;700;800",
   },
   {
@@ -82,8 +80,8 @@ export const FONT_OPTIONS: readonly FontOption[] = [
 ];
 
 /** The Pulse neutral theme — what a deck looks like for an org with no
- * custom branding. Must equal the `:root` defaults in `src/styles/pulse.css`
- * (v1) and `src/styles/theme.css` (v2). `applyBranding` falls back to these
+ * custom branding. Must equal the `:root` defaults in `src/styles/theme.css`.
+ * `applyBranding` falls back to these
  * for any unset field so switching orgs (or clearing branding) resets the
  * theme cleanly. */
 export const BRANDING_DEFAULTS = {

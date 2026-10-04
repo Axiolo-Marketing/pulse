@@ -13,7 +13,7 @@ function ext(path: string): string {
 }
 
 /** Uploaded references live under /api/attachments/; static deliverables under
- * the site base (public/deliverables/…). Mirrors app.ts source resolution. */
+ * the site base (public/deliverables/…). */
 function resolveSrc(path: string, baseSlash: string): string {
   if (path.startsWith("attachments/")) {
     return `${API_BASE}/api/attachments/${path.slice("attachments/".length)}`;

@@ -1,0 +1,28 @@
+---
+// Redirect stub for the retired `/v2/*` URLs. While v1 and v2 shipped side by
+// side, v2 lived under `/v2/`; visitors may still hold those links in history
+// or bookmarks. Each stub forwards to the canonical page, keeping ?query#hash
+// (deck tokens, admin hash routes). A blocking inline script so there's no
+// flash; the meta refresh covers the no-JS case (without query/hash).
+interface Props {
+  /** Canonical path relative to the site base, e.g. "admin/" or "" for the deck. */
+  to: string;
+}
+const { to } = Astro.props;
+const base = import.meta.env.BASE_URL ?? "/";
+const target = `${base.endsWith("/") ? base : `${base}/`}${to}`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex,nofollow" />
+    <script is:inline define:vars={{ target }}>
+      window.location.replace(target + window.location.search + window.location.hash);
+    </script>
+    <meta http-equiv="refresh" content={`0;url=${target}`} />
+    <title>Pulse</title>
+  </head>
+  <body></body>
+</html>

@@ -985,6 +985,38 @@ async def test_add_card_accepts_every_response_type(
     assert r.json()["response_type"] == response_type
 
 
+@pytest.mark.parametrize("response_type", ["single-select", "multi-select"])
+@pytest.mark.parametrize("options", [None, [], ["", "  "]])
+async def test_add_card_select_requires_an_option(
+    admin_authed: AsyncClient,
+    seed_client: dict[str, str],
+    response_type: str,
+    options: list[str] | None,
+) -> None:
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{seed_client['id']}/cards",
+        json={
+            "category": "C", "title": "T", "context": "X", "question": "Q",
+            "response_type": response_type, "options": options,
+        },
+    )
+    assert r.status_code == 422
+    assert "at least 1 option" in r.text
+
+
+async def test_add_card_select_with_one_option_is_ok(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    r = await admin_authed.post(
+        f"/api/admin/engagements/{seed_client['id']}/cards",
+        json={
+            "category": "C", "title": "T", "context": "X", "question": "Q",
+            "response_type": "single-select", "options": ["Only"],
+        },
+    )
+    assert r.status_code == 201
+
+
 async def test_add_card_rejects_invalid_response_type(
     admin_authed: AsyncClient, seed_client: dict[str, str]
 ) -> None:
@@ -1200,6 +1232,35 @@ async def test_patch_card_options_jsonb(
     )
     assert r.status_code == 200
     assert r.json()["options"] == ["new-A", "new-B", "new-C"]
+
+
+@pytest.mark.parametrize("options", [None, [], ["  "]])
+async def test_patch_card_select_cannot_lose_all_options(
+    admin_authed: AsyncClient, seed_cards: list[dict[str, str]], options: list[str] | None
+) -> None:
+    card = next(c for c in seed_cards if c["response_type"] == "single-select")
+    r = await admin_authed.patch(
+        f"/api/admin/cards/{card['id']}", json={"options": options}
+    )
+    assert r.status_code == 422
+
+
+async def test_patch_card_options_on_non_select_card_unaffected(
+    admin_authed: AsyncClient, seed_cards: list[dict[str, str]]
+) -> None:
+    card = next(c for c in seed_cards if c["response_type"] == "short-text")
+    r = await admin_authed.patch(
+        f"/api/admin/cards/{card['id']}", json={"options": []}
+    )
+    assert r.status_code == 200
+
+
+async def test_patch_card_options_unknown_card_404(admin_authed: AsyncClient) -> None:
+    r = await admin_authed.patch(
+        "/api/admin/cards/00000000-0000-0000-0000-000000000000",
+        json={"options": ["a"]},
+    )
+    assert r.status_code == 404
 
 
 async def test_patch_card_unknown_id_returns_404(admin_authed: AsyncClient) -> None:

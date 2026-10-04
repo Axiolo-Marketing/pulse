@@ -8,7 +8,7 @@ def verification_email(token: str, name: str | None = None) -> tuple[str, str]:
     """Returns (subject, body) for the email-verification message.
 
     The link targets ``/admin/?verify-email-token=…`` — the admin shell
-    (v1 ``admin.ts`` and v2 ``AdminApp.tsx``) renders the verify flow off
+    (``AdminApp.tsx``) renders the verify flow off
     that query param. There is no standalone ``/verify-email`` page.
     """
     link = (

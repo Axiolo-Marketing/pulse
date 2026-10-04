@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useMutation,
   useQuery,
@@ -28,6 +28,12 @@ import {
   STATUS_LABELS,
   type EngagementStatus,
 } from "@/lib/engagement-status";
+import {
+  clientRollupText,
+  loadListControls,
+  saveListControls,
+  sortComparator,
+} from "@/lib/engagement-list";
 import { copyText, deckUrl } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -372,6 +378,17 @@ function ProgressCell({ s }: { s: EngagementSummary }): React.ReactElement {
   );
 }
 
+/** What a delete erases, from the counts the list already carries. */
+function deleteDescription(s: EngagementSummary | null): string {
+  if (!s) return "";
+  const label = [s.client_name, s.engagement_name].filter(Boolean).join(" · ");
+  const what =
+    s.total_cards > 0
+      ? `This will permanently remove ${s.total_cards} card${s.total_cards === 1 ? "" : "s"} and every respondent's answers (${s.recipients_count} respondent${s.recipients_count === 1 ? "" : "s"}), plus any uploaded files.`
+      : "No cards have been added to this engagement yet.";
+  return `Delete ${label}? ${what} This can't be undone.`;
+}
+
 export function EngagementList(): React.ReactElement {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -384,11 +401,23 @@ export function EngagementList(): React.ReactElement {
     queryFn: () => clientsApi.list(),
   });
 
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<"all" | EngagementStatus>("all");
-  const [client, setClient] = useState("all");
-  const [owner, setOwner] = useState("all");
-  const [sort, setSort] = useState<"name" | "last_active" | "status">("name");
+  // Filters live in module/sessionStorage-backed state so they survive a
+  // trip to a detail page and back.
+  const [controls] = useState(loadListControls);
+  const [query, setQuery] = useState(controls.query);
+  const [status, setStatus] = useState(controls.status);
+  const [clientFilter, setClient] = useState(controls.client);
+  const [ownerFilter, setOwner] = useState(controls.owner);
+  const [sort, setSort] = useState(controls.sort);
+  useEffect(() => {
+    saveListControls({
+      query,
+      status,
+      client: clientFilter,
+      owner: ownerFilter,
+      sort,
+    });
+  }, [query, status, clientFilter, ownerFilter, sort]);
   const [newOpen, setNewOpen] = useState(false);
   const [deleting, setDeleting] = useState<EngagementSummary | null>(null);
 
@@ -421,6 +450,19 @@ export function EngagementList(): React.ReactElement {
     ...new Set(summaries.map((s) => s.owner_name).filter(Boolean) as string[]),
   ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   const hasUnassigned = summaries.some((s) => !s.owner_name);
+  // A restored filter can point at a client/owner that no longer exists here
+  // (deleted, or the operator switched orgs) — treat it as "all" rather than
+  // silently hiding every row behind a control that reads "All clients".
+  const client =
+    clientFilter === "all" || clients.some((c) => c.id === clientFilter)
+      ? clientFilter
+      : "all";
+  const owner =
+    ownerFilter === "all" ||
+    (ownerFilter === UNASSIGNED && hasUnassigned) ||
+    owners.includes(ownerFilter)
+      ? ownerFilter
+      : "all";
 
   const q = query.trim().toLowerCase();
   const filtered = summaries.filter((s) => {
@@ -444,32 +486,41 @@ export function EngagementList(): React.ReactElement {
     return true;
   });
 
-  const STATUS_RANK: Record<EngagementStatus, number> = {
-    complete: 0,
-    in_progress: 1,
-    waiting: 2,
-  };
-  const sorted = [...filtered].sort((a, b) => {
-    if (sort === "name") {
-      return (a.engagement_name ?? "").localeCompare(b.engagement_name ?? "");
-    }
-    if (sort === "last_active") {
-      return (
-        new Date(b.last_active_at ?? 0).getTime() -
-        new Date(a.last_active_at ?? 0).getTime()
-      );
-    }
-    return STATUS_RANK[engagementStatus(a)] - STATUS_RANK[engagementStatus(b)];
-  });
+  const sorted = [...filtered].sort(sortComparator(sort));
 
-  // Group by client, keeping client sections alphabetical.
-  const byClient = new Map<string, EngagementSummary[]>();
-  for (const s of sorted) {
-    byClient.set(s.client_id, [...(byClient.get(s.client_id) ?? []), s]);
+  // One section per client, alphabetical. The rollup is computed from the
+  // client's full (pre-filter) engagements; a client with no engagements at
+  // all still shows while no filter is narrowing the view.
+  const membersByClient = new Map<string, EngagementSummary[]>();
+  for (const s of summaries) {
+    membersByClient.set(s.client_id, [...(membersByClient.get(s.client_id) ?? []), s]);
   }
-  const sections = [...byClient.entries()].sort((a, b) =>
-    (a[1][0]?.client_name ?? "").localeCompare(b[1][0]?.client_name ?? ""),
-  );
+  const visibleByClient = new Map<string, EngagementSummary[]>();
+  for (const s of sorted) {
+    visibleByClient.set(s.client_id, [...(visibleByClient.get(s.client_id) ?? []), s]);
+  }
+  const noFilters =
+    status === "all" && owner === "all" && client === "all" && !q;
+  const knownIds = new Set(clients.map((c) => c.id));
+  const sectionClients = [
+    ...clients,
+    // Defensive: an engagement whose client isn't in the clients list.
+    ...summaries
+      .filter((s) => !knownIds.has(s.client_id))
+      .map((s) => ({ id: s.client_id, name: s.client_name, created_at: "" }))
+      .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i),
+  ];
+  const sections = sectionClients
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      members: membersByClient.get(c.id) ?? [],
+      rows: visibleByClient.get(c.id) ?? [],
+    }))
+    .filter((c) => c.rows.length > 0 || (c.members.length === 0 && noFilters))
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-8">
@@ -547,20 +598,30 @@ export function EngagementList(): React.ReactElement {
         </p>
       ) : (
         <div className="flex flex-col gap-8">
-          {sections.map(([clientId, rows]) => (
+          {sections.map(({ id: clientId, name: clientName, members, rows }) => (
             <section key={clientId} aria-labelledby={`client-${clientId}`}>
               <div className="mb-2 flex items-baseline gap-2 px-1">
                 <h2
                   id={`client-${clientId}`}
                   className="text-sm font-semibold text-foreground"
                 >
-                  {rows[0]?.client_name}
+                  {clientName}
                 </h2>
                 <span className="text-xs text-muted-foreground">
-                  {rows.length} engagement{rows.length === 1 ? "" : "s"}
+                  {clientRollupText(members)}
                 </span>
               </div>
-              <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+              {rows.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+                  No engagements for this client yet.
+                </p>
+              ) : null}
+              <ul
+                className={cn(
+                  "divide-y divide-border overflow-hidden rounded-lg border border-border",
+                  rows.length === 0 && "hidden",
+                )}
+              >
                 {rows.map((s) => {
                   const owner = s.owner_name || s.owner_email;
                   return (
@@ -635,7 +696,7 @@ export function EngagementList(): React.ReactElement {
           if (!o) setDeleting(null);
         }}
         title="Delete this engagement?"
-        description={`“${deleting?.engagement_name || "Untitled engagement"}” and every respondent's answers will be permanently removed.`}
+        description={deleteDescription(deleting)}
         confirmLabel="Delete engagement"
         destructive
         pending={deleteMut.isPending}

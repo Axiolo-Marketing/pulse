@@ -289,7 +289,7 @@ async def test_save_response_rejects_unknown_card(client_authed: AsyncClient) ->
 # *scheme*, so a hostile client could otherwise smuggle a `javascript:`/
 # `data:` link into storage for the operator to click. The server must
 # enforce the same http/https-only rule the deck UI applies client-side
-# (`isValidUrl` in `src/lib/render.ts`), since a direct API call bypasses it.
+# (`isValidUrl` in `src/components/deck/inputs.tsx`), since a direct API call bypasses it.
 
 
 @pytest.mark.parametrize(

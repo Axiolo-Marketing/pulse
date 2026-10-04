@@ -208,8 +208,8 @@ async def _load_alert(recipient_id: str) -> tuple[dict, list[dict]] | None:
 
 
 def engagement_admin_url(engagement_id: str) -> str:
-    """The operator's link to the engagement page (the ``/admin/`` shell
-    forwards the hash to v2)."""
+    """The operator's link to the engagement page (a hash route of the
+    ``/admin/`` console)."""
     return f"{settings.frontend_base_url.rstrip('/')}/admin/#/client/{engagement_id}"
 
 

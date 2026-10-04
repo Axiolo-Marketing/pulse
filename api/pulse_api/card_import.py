@@ -265,3 +265,23 @@ def _normalize_question(raw: str) -> str:
     """Questions are one-liners. Collapse internal whitespace so a
     line-wrapped question in the source becomes a single string."""
     return " ".join(raw.split()).strip()
+
+
+SELECT_TYPES = frozenset({"single-select", "multi-select"})
+
+
+def select_options_error(
+    response_type: str, options: list[str] | None
+) -> str | None:
+    """Return an error message when a single/multi-select card has no usable
+    option (missing, empty, or all-blank), else ``None``.
+
+    Shared by the admin card routes and the MCP card tools so every card
+    write path enforces the same rule (a select card with nothing to pick is
+    unanswerable for the respondent).
+    """
+    if response_type not in SELECT_TYPES:
+        return None
+    if not any(isinstance(o, str) and o.strip() for o in (options or [])):
+        return f"Type {response_type!r} requires at least 1 option"
+    return None

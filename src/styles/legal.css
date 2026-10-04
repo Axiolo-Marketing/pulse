@@ -111,28 +111,3 @@ body {
 }
 
 .legal-footer a:hover { color: var(--primary); }
-
-/* Footer used on app pages */
-.app-legal-footer {
-  width: 100%;
-  margin-top: auto;
-  padding: 24px 16px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--muted);
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
-.app-legal-footer a {
-  color: var(--muted);
-  text-decoration: none;
-}
-
-.app-legal-footer a:hover { color: var(--primary); }
-
-.app-legal-footer .sep {
-  opacity: 0.5;
-}

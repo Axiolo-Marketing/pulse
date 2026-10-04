@@ -115,7 +115,7 @@ Every Frontend coder prompt opens with:
 1. **Read `CLAUDE.md` first.** Especially the brand system section and the `src/lib/api.ts` invariant ("no module imports from anywhere else for HTTP").
 2. **Invoke `frontend-dev:frontend-standards` skill** (TS, React, TailwindCSS, shadcn/ui, Framer Motion, oxlint, Prettier).
 3. **Mobile-first.** Test mobile breakpoint first; desktop is the secondary view.
-4. **Brand tokens.** Use CSS custom properties from `src/styles/pulse.css` (`--primary`, `--ink`, etc.). No hardcoded hex.
+4. **Brand tokens.** Use the theme tokens from `src/styles/theme.css` (Tailwind/shadcn semantic classes; `--primary`, `--ink`, etc.). No hardcoded hex.
 5. **No `window.alert/confirm/prompt`** (memory: `feedback_no_alerts.md`). Inline errors near trigger; `toast()` for transient notices.
 6. **All HTTP through `src/lib/api.ts`.**
 

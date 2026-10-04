@@ -1,7 +1,7 @@
 import type { ResponseState } from "@/lib/api";
 
-// The action the recipient took on a card, awaiting a save. Mirrors the
-// PendingAction union dispatched by the handlers in src/scripts/app.ts.
+// The action the recipient took on a card, awaiting a save. The
+// union dispatched by the deck handlers.
 export type PendingAction =
   | { kind: "confirm" }
   | { kind: "edit"; correction: string }
@@ -28,7 +28,7 @@ export interface EncodedResponse {
 }
 
 // Fold an optional free-form note into the structured value. null is preserved
-// (skip with no note); objects get a note field. Identical to app.ts withNote.
+// (skip with no note); objects get a note field.
 function withNote(v: unknown, note?: string): unknown {
   if (!note) return v;
   if (v === null) return { note };
@@ -38,7 +38,7 @@ function withNote(v: unknown, note?: string): unknown {
 
 /**
  * Encode a pending action into the `{ state, response_value }` the backend
- * expects. Mirrors performSave() in src/scripts/app.ts exactly — the backend
+ * expects. The backend
  * derives engagement_id from the token and stamps answered_at/viewed_at, so we
  * only ship state + response_value.
  *

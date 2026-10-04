@@ -1,8 +1,10 @@
 import { useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { HashRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 
-import { authApi, orgsApi, type AuthUser } from "@/lib/api";
+import { toast } from "sonner";
+
+import { ApiError, authApi, orgsApi, type AuthUser } from "@/lib/api";
 import { applyBranding } from "@/lib/branding";
 
 import { AdminFooter, PulseWordmark } from "./Brand";
@@ -28,10 +30,16 @@ export function AdminShell({ user }: { user: AuthUser }): React.ReactElement {
     if (orgMeQ.data) applyBranding(orgMeQ.data.branding);
   }, [orgMeQ.data]);
 
-  async function switchOrg(orgId: string): Promise<void> {
-    await orgsApi.switchOrg(orgId);
-    await qc.invalidateQueries(); // refetch everything under the new org
-  }
+  const switchM = useMutation({
+    mutationFn: (orgId: string) => orgsApi.switchOrg(orgId),
+    onSuccess: async (_data, orgId) => {
+      await qc.invalidateQueries(); // refetch everything under the new org
+      const name = orgsQ.data?.find((o) => o.id === orgId)?.name;
+      toast.success(name ? `Switched to ${name}` : "Switched organization");
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.detail : "Could not switch"),
+  });
 
   async function signOut(): Promise<void> {
     try {
@@ -55,7 +63,8 @@ export function AdminShell({ user }: { user: AuthUser }): React.ReactElement {
               <OrgSwitcher
                 orgs={orgsQ.data ?? []}
                 activeOrgId={user.active_org_id}
-                onSwitch={(id) => void switchOrg(id)}
+                pending={switchM.isPending}
+                onSwitch={(id) => switchM.mutate(id)}
               />
             </div>
             <nav className="flex items-center">

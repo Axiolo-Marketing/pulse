@@ -48,14 +48,6 @@ export const STATUS_LABELS: Record<EngagementStatus, string> = {
   complete: "Complete",
 };
 
-/** CSS class suffix per status — paired with the `.status-pill` base in
- * `admin.css` (e.g. `status-pill status-pill--complete`). */
-export const STATUS_CSS_CLASS: Record<EngagementStatus, string> = {
-  waiting: "status-pill--waiting",
-  in_progress: "status-pill--in-progress",
-  complete: "status-pill--complete",
-};
-
 /** Stable iteration order for option lists + rollups (most→least "done"
  * reads naturally as a rollup: "1 complete · 2 in progress · 3 waiting"). */
 export const STATUS_ORDER: EngagementStatus[] = [

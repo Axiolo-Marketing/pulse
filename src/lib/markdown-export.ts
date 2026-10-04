@@ -1,4 +1,10 @@
-import type { Card, ClientResponse, Engagement } from "./api";
+import type {
+  Card,
+  ClientResponse,
+  Engagement,
+  EngagementDetail,
+  Recipient,
+} from "./api";
 
 export interface UploadInfo {
   id: string;
@@ -178,4 +184,90 @@ function renderResponseBody(
 // Combine multiple card blocks into one paste-ready markdown string.
 export function renderEngagementMarkdown(blocks: string[]): string {
   return blocks.join("\n");
+}
+
+const defaultLabel = (r: Recipient): string => r.email || r.name || "Respondent";
+
+/** Everything a card block needs for one recipient (or, with `recipient`
+ * undefined, the no-answers form): their response + uploads, mapped to the
+ * shape the renderer wants. Shared by the full export and the per-answer
+ * "Copy this answer" action so both produce identical blocks. */
+export function buildCardMarkdown(
+  detail: EngagementDetail,
+  card: Card,
+  recipient: Recipient | undefined,
+  uploadUrl: (uploadId: string) => string,
+  label: (r: Recipient) => string = defaultLabel,
+): string {
+  const response = recipient
+    ? detail.responses.find(
+        (x) => x.recipient_id === recipient.id && x.card_id === card.id,
+      )
+    : undefined;
+  const ups = recipient
+    ? detail.uploads.filter(
+        (x) => x.recipient_id === recipient.id && x.card_id === card.id,
+      )
+    : [];
+  return renderCardMarkdown({
+    card,
+    client: detail.engagement,
+    response,
+    uploads: ups.map((u) => ({
+      id: u.id,
+      name: u.file_name,
+      sizeBytes: u.file_size_bytes,
+      url: uploadUrl(u.id),
+      kind: u.kind,
+      transcript: u.transcript_status === "done" ? u.transcript : null,
+    })),
+    recipientLabel: recipient ? label(recipient) : undefined,
+  });
+}
+
+/** The whole engagement as Markdown: every recipient's answer to every card.
+ * With no recipients it still exports the deck's cards ("_Not yet viewed._"),
+ * so Copy / Download never silently produce an empty file. */
+export function buildEngagementExport(
+  detail: EngagementDetail,
+  uploadUrl: (uploadId: string) => string,
+  label: (r: Recipient) => string = defaultLabel,
+): string {
+  const cards = [...detail.cards].sort((a, b) => a.order_index - b.order_index);
+  const blocks: string[] = [];
+  if (detail.recipients.length === 0) {
+    for (const card of cards) {
+      blocks.push(buildCardMarkdown(detail, card, undefined, uploadUrl, label));
+    }
+  } else {
+    for (const r of detail.recipients) {
+      for (const card of cards) {
+        blocks.push(buildCardMarkdown(detail, card, r, uploadUrl, label));
+      }
+    }
+  }
+  return renderEngagementMarkdown(blocks);
+}
+
+/** Lowercase ASCII slug: accents stripped, runs of other characters become a
+ * single hyphen, no leading/trailing hyphens. */
+export function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Download name: `{engagement-or-client slug}-{YYYY-MM-DD}.md`. */
+export function exportFilename(
+  e: { engagement_name?: string | null; name: string },
+  today: Date = new Date(),
+): string {
+  const stem =
+    slugify(e.engagement_name?.trim() ?? "") ||
+    slugify(e.name) ||
+    "engagement";
+  return `${stem}-${today.toISOString().slice(0, 10)}.md`;
 }

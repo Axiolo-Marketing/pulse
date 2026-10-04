@@ -227,13 +227,18 @@ export function SingleSelectInput({
   const [note, setNote] = useState(
     typeof prior.note === "string" ? prior.note : "",
   );
-  const selected = typeof prior.selected === "string" ? prior.selected : null;
-  const options = card.options ?? [];
-  const showKeys = useOptionKeys(
-    options.length,
-    (i) => onSelect(options[i], note.trim() || undefined),
-    saving,
+  // Local highlight: the tapped option shows immediately (while saving and
+  // after a failed save), and "Send note" uses it rather than the saved one.
+  const [picked, setPicked] = useState<string | null>(
+    typeof prior.selected === "string" ? prior.selected : null,
   );
+  const selected = picked;
+  const pick = (option: string): void => {
+    setPicked(option);
+    onSelect(option, note.trim() || undefined);
+  };
+  const options = card.options ?? [];
+  const showKeys = useOptionKeys(options.length, (i) => pick(options[i]), saving);
   return (
     <>
       <div
@@ -250,7 +255,7 @@ export function SingleSelectInput({
               role="radio"
               aria-checked={isSel}
               disabled={saving}
-              onClick={() => onSelect(option, note.trim() || undefined)}
+              onClick={() => pick(option)}
               className={cn(
                 "flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-left text-[0.95rem] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60",
                 isSel

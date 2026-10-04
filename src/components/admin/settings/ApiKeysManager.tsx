@@ -210,16 +210,23 @@ function CreateKeyDialog({
     onSuccess: (key) => {
       setCreated(key);
       setError(null);
+      // The dialog can be dismissed (Esc / X / outside click) without
+      // hitting Done, so refresh the list as soon as the key exists.
+      void qc.invalidateQueries({ queryKey: ["apiKeys"] });
     },
     onError: (err) =>
       setError(err instanceof ApiError ? err.detail : "Could not create key."),
   });
 
-  function copyKey(): void {
+  async function copyKey(): Promise<void> {
     if (!created) return;
-    void navigator.clipboard.writeText(created.key);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+    try {
+      await navigator.clipboard.writeText(created.key);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      toast.error("Could not copy — select the field and copy manually.");
+    }
   }
 
   function done(): void {
@@ -248,7 +255,7 @@ function CreateKeyDialog({
                   className="font-mono"
                   onFocus={(e) => e.target.select()}
                 />
-                <Button variant="outline" onClick={copyKey} className="gap-1.5">
+                <Button variant="outline" onClick={() => void copyKey()} className="gap-1.5">
                   <Copy />
                   {copied ? "Copied!" : "Copy"}
                 </Button>

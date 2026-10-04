@@ -801,3 +801,30 @@ async def test_fetch_userinfo_userinfo_response_wins_over_id_token(
     id_token = _fake_jwt({"tid": "from-id-token"})
     userinfo = await provider.fetch_userinfo("access-tok", id_token=id_token)
     assert userinfo["tid"] == "from-userinfo"
+
+
+@pytest.mark.parametrize(
+    ("gid", "gsecret", "mid", "msecret", "expected"),
+    [
+        ("", "", "", "", {"google": False, "microsoft": False}),
+        ("g", "s", "", "", {"google": True, "microsoft": False}),
+        ("g", "", "m", "s", {"google": False, "microsoft": True}),
+        ("g", "s", "m", "s", {"google": True, "microsoft": True}),
+    ],
+)
+async def test_providers_reports_configured(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    gid: str,
+    gsecret: str,
+    mid: str,
+    msecret: str,
+    expected: dict[str, bool],
+) -> None:
+    monkeypatch.setattr(settings, "google_client_id", gid)
+    monkeypatch.setattr(settings, "google_client_secret", gsecret)
+    monkeypatch.setattr(settings, "microsoft_client_id", mid)
+    monkeypatch.setattr(settings, "microsoft_client_secret", msecret)
+    r = await client.get("/api/auth/providers")
+    assert r.status_code == 200
+    assert r.json() == expected

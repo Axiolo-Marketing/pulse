@@ -25,7 +25,7 @@ type State =
   | { status: "error"; title: string; body: string }
   | { status: "ready"; data: Loaded };
 
-/** Operator preview of an engagement's respondent deck: `/v2/preview?e=<id>`.
+/** Operator preview of an engagement's respondent deck: `/preview?e=<id>`.
  * Loads through the admin session (cookie) — never a respondent token — and
  * applies the org's live branding so it looks exactly like the real deck.
  * Only shared cards are shown (per-respondent AI follow-ups are skipped).

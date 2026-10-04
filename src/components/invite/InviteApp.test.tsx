@@ -40,7 +40,7 @@ function setToken(token?: string): void {
       search: token ? `?token=${token}` : "",
       href: "http://localhost/",
       origin: "http://localhost",
-      pathname: "/v2/invite",
+      pathname: "/invite",
       assign: assignMock,
     } as unknown as Location,
   });
@@ -48,6 +48,7 @@ function setToken(token?: string): void {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("InviteApp", () => {
@@ -59,6 +60,13 @@ describe("InviteApp", () => {
   });
 
   it("renders the pending invite with OAuth buttons + password form", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ google: true, microsoft: true }),
+      })),
+    );
     setToken("tok");
     mockInvites.resolve.mockResolvedValue(pendingMeta);
     render(<InviteApp />);
@@ -68,9 +76,27 @@ describe("InviteApp", () => {
       screen.getByRole("button", { name: /continue with google/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /continue with microsoft/i }),
+      await screen.findByRole("button", { name: /continue with microsoft/i }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+  });
+
+  it("hides Microsoft when the backend has it unconfigured", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ google: true, microsoft: false }),
+      })),
+    );
+    setToken("tok");
+    mockInvites.resolve.mockResolvedValue(pendingMeta);
+    render(<InviteApp />);
+    expect(await screen.findByText("Join Acme Co")).toBeInTheDocument();
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("button", { name: /continue with microsoft/i }),
+    ).not.toBeInTheDocument();
   });
 
   it.each([

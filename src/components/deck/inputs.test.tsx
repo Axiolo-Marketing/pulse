@@ -12,6 +12,7 @@ import {
   SingleSelectInput,
   TextInput,
 } from "./inputs";
+import { FileUploadInput } from "./FileUpload";
 
 function makeCard(over: Partial<CardModel> = {}): CardModel {
   return {
@@ -285,5 +286,51 @@ describe("ConfirmEditView + EditBody", () => {
     expect(onSubmit).toHaveBeenCalledWith("Acme Corp");
     await user.click(screen.getByRole("button", { name: /cancel/i }));
     expect(onCancel).toHaveBeenCalled();
+  });
+});
+
+describe("SingleSelectInput local highlight", () => {
+  const card = makeCard({ options: ["A", "B", "C"] });
+
+  it("highlights the tapped option and Send note uses it", async () => {
+    const onNoteSubmit = vi.fn();
+    render(
+      <SingleSelectInput
+        card={card}
+        saving={false}
+        existing={priorResponse({ selected: "A" })}
+        onSelect={vi.fn()}
+        onNoteSubmit={onNoteSubmit}
+        onSkip={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    expect(screen.getByRole("radio", { name: "A" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("radio", { name: "C" }));
+    expect(screen.getByRole("radio", { name: "C" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "A" })).toHaveAttribute("aria-checked", "false");
+    await user.type(screen.getByLabelText(/notes/i), "why");
+    await user.click(screen.getByRole("button", { name: "Send note" }));
+    expect(onNoteSubmit).toHaveBeenCalledWith("why", "C");
+  });
+});
+
+describe("FileUploadInput note restore", () => {
+  it("pre-fills the saved note", () => {
+    render(
+      <FileUploadInput
+        card={makeCard({ response_type: "file-upload" })}
+        saving={false}
+        token="t"
+        existing={priorResponse({ file_ids: ["f1"], note: "see attached" })}
+        existingFiles={[]}
+        hasVoice={false}
+        onUploaded={vi.fn()}
+        onRemoved={vi.fn()}
+        onContinue={vi.fn()}
+        onSkip={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText(/notes/i)).toHaveValue("see attached");
   });
 });

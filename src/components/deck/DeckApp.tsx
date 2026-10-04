@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { Toaster } from "@/components/ui/sonner";
 import {
+  ApiError,
   clientApi,
   type Card as CardModel,
   type ClientResponse,
@@ -40,6 +41,15 @@ type BootState =
   | { status: "error"; title: string; body: string }
   | { status: "ready"; token: string; data: ReadyBoot };
 
+const NOT_FOUND = {
+  title: "We could not find your engagement",
+  body: "Please check the link or contact your consultant.",
+};
+const SESSION_ERROR = {
+  title: "Something went wrong",
+  body: "We could not load your session. Please refresh and try again.",
+};
+
 /** First card not yet answered/skipped, or `cards.length` (complete). */
 function computeBootIndex(
   cards: CardModel[],
@@ -69,8 +79,20 @@ export default function DeckApp(): React.ReactElement {
     let cancelled = false;
     let logoUrl: string | null = null;
     (async () => {
+      let engagement: Engagement;
       try {
-        const engagement = await clientApi.me(token);
+        engagement = await clientApi.me(token);
+      } catch (err) {
+        if (cancelled) return;
+        // Only an auth/not-found answer means the link is bad; a network
+        // error or 5xx is transient and gets the generic retry message.
+        const notFound =
+          err instanceof ApiError &&
+          (err.status === 401 || err.status === 403 || err.status === 404);
+        setBoot({ status: "error", ...(notFound ? NOT_FOUND : SESSION_ERROR) });
+        return;
+      }
+      try {
         const [rawCards, responses, uploads] = await Promise.all([
           clientApi.cards(token),
           clientApi.responses(token),
@@ -99,11 +121,7 @@ export default function DeckApp(): React.ReactElement {
         });
       } catch {
         if (!cancelled) {
-          setBoot({
-            status: "error",
-            title: "We could not find your engagement",
-            body: "Please check the link or contact your consultant.",
-          });
+          setBoot({ status: "error", ...SESSION_ERROR });
         }
       }
     })();
@@ -194,6 +212,8 @@ function DeckRunner({
   // or unmount; activePollRef above only ever starts once this wait's
   // budget expires.
   const awaitPollRef = useRef<AbortController | null>(null);
+  // Drives the "Checking if we need a quick follow-up…" status line.
+  const [pollActive, setPollActive] = useState(false);
 
   function clearRetry(): void {
     if (retryRef.current) {
@@ -206,6 +226,7 @@ function DeckRunner({
   function cancelActivePoll(): void {
     activePollRef.current?.abort();
     activePollRef.current = null;
+    setPollActive(false);
   }
 
   function cancelAwaitPoll(): void {
@@ -213,8 +234,7 @@ function DeckRunner({
     awaitPollRef.current = null;
   }
 
-  // Clear any pending retry on unmount and whenever the card changes (mirrors
-  // navigateTo() cancelling the retry timer in app.ts).
+  // Clear any pending retry on unmount and whenever the card changes.
   useEffect(() => () => clearRetry(), []);
   useEffect(() => {
     clearRetry();
@@ -262,6 +282,7 @@ function DeckRunner({
     if (activePollRef.current !== controller) return; // superseded or cancelled
     activePollRef.current = null;
     if (!result || result.status !== "completed" || result.cardIds.length === 0) {
+      setPollActive(false);
       return;
     }
 
@@ -269,8 +290,10 @@ function DeckRunner({
     try {
       freshCards = await clientApi.cards(token);
     } catch {
+      setPollActive(false);
       return;
     }
+    setPollActive(false);
 
     const liveCards = cardsRef.current;
     const existingIds = new Set(liveCards.map((c) => c.id));
@@ -300,6 +323,7 @@ function DeckRunner({
     cancelActivePoll();
     const controller = new AbortController();
     activePollRef.current = controller;
+    setPollActive(true);
     void pollForFollowUp(responseId, parentCardId, controller);
   }
 
@@ -461,7 +485,6 @@ function DeckRunner({
     if (action.kind === "note") toast.success("Note sent");
 
     // Only act on this save if the recipient is still on the card we saved
-    // (mirrors app.ts's cardIndex capture).
     if (indexRef.current !== startIndex) return;
 
     // Reactive cards: a "Needs edit" correction may have kicked off a
@@ -506,8 +529,7 @@ function DeckRunner({
       if (p) void performSave(p);
     },
     // Reactive cards: any user-driven navigation away from a "waiting" card
-    // cancels that wait outright and honors the navigation (mirrors
-    // navigateTo() in app.ts) — awaitFollowUp's poll callback checks
+    // cancels that wait outright and honors the navigation — awaitFollowUp's poll callback checks
     // awaitPollRef before acting, so a cancelled-then-resolved poll is a
     // no-op once it lands.
     onNavBack: () => {
@@ -587,6 +609,7 @@ function DeckRunner({
         orgName={engagement.org_name ?? null}
         handlers={handlers}
         media={media}
+        pollActive={pollActive}
         outline={{
           cards,
           responses,

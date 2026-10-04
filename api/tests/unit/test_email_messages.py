@@ -1,8 +1,7 @@
 """Unit tests for the auth email link builders. No DB, no FastAPI.
 
 These lock in the routing contract between outbound emails and the
-frontend: the admin shell (v1 ``src/scripts/admin.ts`` and v2
-``src/components/admin/AdminApp.tsx``) serves the verify-email and
+frontend: the admin shell (``src/components/admin/AdminApp.tsx``) serves the verify-email and
 reset-password flows off ``/admin/?verify-email-token=…`` and
 ``/admin/?reset-password-token=…`` query params — there are no standalone
 ``/verify-email`` or ``/reset-password`` pages. A link built against any

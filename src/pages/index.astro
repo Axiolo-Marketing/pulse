@@ -1,7 +1,6 @@
 ---
-import "../styles/pulse.css";
-import "../styles/legal.css";
-import UiGate from "../components/UiGate.astro";
+import "../styles/theme.css";
+import DeckApp from "../components/deck/DeckApp.tsx";
 const base = import.meta.env.BASE_URL ?? "/";
 const baseSlash = base.endsWith("/") ? base : `${base}/`;
 ---
@@ -10,44 +9,42 @@ const baseSlash = base.endsWith("/") ? base : `${base}/`;
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <UiGate v2Path="/v2/" defaultV2 />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#2960F6" />
+    <meta name="theme-color" content="#ffffff" />
     <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />
     <title>Pulse</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Epilogue is only the "pulse" wordmark. Body text is the org's
+         chosen font (lazy-loaded by applyBranding) or the system stack. -->
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Epilogue:ital,wght@1,700&display=swap"
     />
   </head>
   <body>
-    <div class="page">
-      <main id="app">
-        <div class="loading">Loading...</div>
-      </main>
-      <div class="app-footer">
-        <footer class="made-by-footer">
-          <span class="made-by-label">Made by</span>
-          <img
-            src={`${baseSlash}axiolo-logo.svg`}
-            alt="Axiolo"
-            class="made-by-logo"
-            width="84"
-            height="23"
-          />
-        </footer>
-        <footer class="app-legal-footer">
-          <a href={`${baseSlash}privacy`}>Privacy Policy</a>
-          <span class="sep" aria-hidden="true">·</span>
-          <a href={`${baseSlash}terms`}>Terms of Use</a>
-        </footer>
-      </div>
-    </div>
-
-    <script>
-      import "../scripts/app.ts";
-    </script>
+    <DeckApp client:only="react" />
+    <footer
+      class="flex flex-col items-center gap-2 px-5 pb-8 pt-6 text-xs text-muted-foreground"
+    >
+      <span class="flex items-center gap-1.5">
+        Made by
+        <img
+          src={`${baseSlash}axiolo-logo.svg`}
+          alt="Axiolo"
+          width="58"
+          height="16"
+        />
+      </span>
+      <span class="flex gap-2">
+        <a class="hover:text-foreground" href={`${baseSlash}privacy`}
+          >Privacy Policy</a
+        >
+        <span aria-hidden="true">·</span>
+        <a class="hover:text-foreground" href={`${baseSlash}terms`}
+          >Terms of Use</a
+        >
+      </span>
+    </footer>
   </body>
 </html>

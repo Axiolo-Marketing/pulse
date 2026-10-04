@@ -24,11 +24,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const BASE_URL = (import.meta.env.BASE_URL ?? "/") as string;
 
-function adminBaseHref(): string {
-  return BASE_URL.endsWith("/") ? `${BASE_URL}admin/` : `${BASE_URL}/admin/`;
-}
+import { adminBaseHref } from "@/lib/admin-url";
+import { useOAuthProviders } from "@/lib/providers";
 
 type TerminalKind =
   | "no_token"
@@ -175,6 +173,7 @@ function PendingCard({
   const [error, setError] = useState<string | null>(null);
   const pwRef = useRef<HTMLInputElement>(null);
 
+  const providers = useOAuthProviders();
   const roleLabel = meta.role === "owner" ? "Owner" : "Member";
   const busy = submitting || oauthBusy !== null;
 
@@ -251,17 +250,19 @@ function PendingCard({
             )}
             Continue with Google
           </Button>
-          <Button
-            variant="outline"
-            type="button"
-            disabled={busy}
-            onClick={() => startOAuth("microsoft")}
-          >
-            {oauthBusy === "microsoft" && (
-              <LoaderCircle className="animate-spin" aria-hidden="true" />
-            )}
-            Continue with Microsoft
-          </Button>
+          {providers.microsoft ? (
+            <Button
+              variant="outline"
+              type="button"
+              disabled={busy}
+              onClick={() => startOAuth("microsoft")}
+            >
+              {oauthBusy === "microsoft" && (
+                <LoaderCircle className="animate-spin" aria-hidden="true" />
+              )}
+              Continue with Microsoft
+            </Button>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">

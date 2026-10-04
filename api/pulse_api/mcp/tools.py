@@ -49,7 +49,11 @@ from mcp.server.fastmcp.server import Context
 
 from pulse_api import reactive, storage
 from pulse_api.audit import record_audit
-from pulse_api.card_import import CardImportError, parse_markdown
+from pulse_api.card_import import (
+    CardImportError,
+    parse_markdown,
+    select_options_error,
+)
 from pulse_api.config import settings
 from pulse_api.mcp.server import (
     _open_admin_session,
@@ -437,6 +441,8 @@ async def pulse_add_card(
     attachment_path: str | None = None,
 ) -> dict[str, Any]:
     user, org_id = await authenticate_request(ctx)
+    if err := select_options_error(response_type, options):
+        raise ValueError(err)
     async with _open_member_session(org_id) as session:
         if (await engagements_repo.get_by_id(session, engagement_id)) is None:
             raise ValueError("engagement not found")
@@ -512,6 +518,12 @@ async def pulse_update_card(
         fields["attachment_path"] = attachment_path
 
     async with _open_member_session(org_id) as session:
+        if "options" in fields:
+            current = await cards_repo.update_card(session, card_id, {})
+            if current is None:
+                raise ValueError("card not found")
+            if err := select_options_error(current["response_type"], fields["options"]):
+                raise ValueError(err)
         row = await cards_repo.update_card(session, card_id, fields)
         if row is None:
             raise ValueError("card not found")

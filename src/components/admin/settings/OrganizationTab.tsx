@@ -42,6 +42,15 @@ import { ConfirmDialog } from "../detail/EngagementDialogs";
 import { BrandingSettings } from "./BrandingSettings";
 import { FormMessage, PersonAvatar, Pill, SettingsSection } from "./parts";
 
+export function formatMemberCount(n: number): string {
+  return `${n} member${n === 1 ? "" : "s"}`;
+}
+
+export function formatInviteCount(n: number): string {
+  if (n === 0) return "no pending invites";
+  return `${n} pending invite${n === 1 ? "" : "s"}`;
+}
+
 type Msg = { kind: "success" | "error"; text: string } | null;
 
 const MAX_LOGO_BYTES = 500 * 1024;
@@ -78,6 +87,10 @@ function OrgNameForm({
         isOwner
           ? () => {
               setMsg(null);
+              if (!name.trim()) {
+                setMsg({ kind: "error", text: "Name is required." });
+                return;
+              }
               mut.mutate();
             }
           : undefined
@@ -105,7 +118,13 @@ function OrgNameForm({
   );
 }
 
-function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
+function LogoSettings({
+  org,
+  isOwner = true,
+}: {
+  org: OrgDetails;
+  isOwner?: boolean;
+}): React.ReactElement {
   const qc = useQueryClient();
   const [removing, setRemoving] = useState(false);
   const logoUrl = orgLogoUrl(org.logo_path);
@@ -142,7 +161,11 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
     <SettingsSection
       title="Logo"
       description="Shown to respondents at the top of their deck."
-      footerHint="PNG, JPG, SVG or WebP, up to 500 KB. Square works best."
+      footerHint={
+        isOwner
+          ? "PNG, JPG, SVG or WebP, up to 500 KB. Square works best."
+          : "Only owners can change this."
+      }
     >
       <div className="flex items-center gap-4">
         <span className="flex size-16 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted text-xl font-semibold text-muted-foreground">
@@ -152,6 +175,7 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
             initial
           )}
         </span>
+        {isOwner ? (
         <div className="flex flex-wrap gap-2">
           <label className="inline-flex">
             <input
@@ -186,6 +210,7 @@ function LogoSettings({ org }: { org: OrgDetails }): React.ReactElement {
             </Button>
           ) : null}
         </div>
+        ) : null}
       </div>
 
       <ConfirmDialog
@@ -457,7 +482,9 @@ function InvitesSection(): React.ReactElement {
                     {inv.email}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Expires {formatTimestamp(inv.expires_at)}
+                    Invited {formatTimestamp(inv.created_at)}
+                    {inv.invited_by_email ? ` by ${inv.invited_by_email}` : ""}
+                    {" · "}expires {formatTimestamp(inv.expires_at)}
                   </div>
                 </div>
                 <Pill>{inv.role === "owner" ? "Owner" : "Member"}</Pill>
@@ -509,8 +536,12 @@ export function OrganizationTab({
           Only owners can change organization settings.
         </p>
       ) : null}
+      <p className="text-sm text-muted-foreground" data-testid="org-counts">
+        {formatMemberCount(org.member_count)} ·{" "}
+        {formatInviteCount(org.pending_invite_count)}
+      </p>
       <OrgNameForm org={org} isOwner={isOwner} />
-      {isOwner ? <LogoSettings org={org} /> : null}
+      <LogoSettings org={org} isOwner={isOwner} />
       {isOwner ? <BrandingSettings org={org} /> : null}
       <MembersSection isOwner={isOwner} currentUserId={currentUserId} />
       {isOwner ? <InvitesSection /> : null}

@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// E2E smoke tests for the v2 islands + the v1→v2 opt-in gate.
+// E2E tests for the deck, admin and public pages.
 //
 // Requires: the dev stack running (`make dev`) at localhost:14321, and
 // Playwright browsers installed (`npx playwright install chromium`).

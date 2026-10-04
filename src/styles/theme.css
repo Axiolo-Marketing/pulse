@@ -1,8 +1,7 @@
 /*
- * Pulse v2 design system — Tailwind v4 + shadcn/ui, Axiolo brand.
+ * Pulse design system — Tailwind v4 + shadcn/ui.
  *
- * This is a FRESH design token scale (not a copy of v1's pulse.css). It keeps
- * two things deliberately:
+ * It keeps two things deliberately:
  *   1. A default theme (Pulse neutral: near-black, white, system font) that
  *      orgs override with their own branding.
  *   2. The runtime CSS-variable seam: the customizable brand tokens below
@@ -11,7 +10,8 @@
  *      writes on :root at runtime. shadcn's semantic tokens reference them, so
  *      per-org branding still re-themes the whole component tree live.
  *
- * Imported once by every v2 page shell (src/pages/v2/*.astro).
+ * Imported once by every app page shell (src/pages/*.astro, except the
+ * legal pages, which use legal.css).
  */
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -35,7 +35,7 @@
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
 
-  /* ── Fresh neutral + radius scale (v2 redesign — not org-customizable) ── */
+  /* ── Neutral + radius scale (not org-customizable) ── */
   --radius: 0.75rem;
   --neutral-50: #fafafa;
   --neutral-100: #f5f5f5;
@@ -62,8 +62,8 @@
   --accent: var(--primary-soft);
   --accent-foreground: var(--primary-dark);
 
-  /* v1's --muted was a TEXT colour; shadcn --muted is a SURFACE. Keep them
-     distinct: --muted is a neutral surface, --muted-foreground is body-gray. */
+  /* shadcn --muted is a SURFACE, not a text colour: --muted is a neutral
+     surface, --muted-foreground is body-gray. */
   --muted: var(--neutral-100);
   --muted-foreground: var(--neutral-500);
 
@@ -71,7 +71,7 @@
   --input: var(--neutral-200);
   --ring: var(--primary);
 
-  /* No red existed in v1 (only amber --warning). Add a destructive for shadcn. */
+  /* Destructive red for shadcn (the brand palette only has amber --warning). */
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
 
@@ -85,7 +85,7 @@
   --brand: #4f39f6;
 }
 
-/* ── Operator console theme (v2 admin only) ──
+/* ── Operator console theme (admin only) ──
    The admin is Pulse's own product chrome, not a client-facing surface, so it
    uses a fixed neutral palette + system font (shadcn "neutral", matching the
    other Axiolo tools like quickhost.ing) instead of the org's brand colours.

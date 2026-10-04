@@ -82,7 +82,7 @@ class OrgListRow(BaseModel):
     """Row in the ``GET /api/superadmin/orgs`` listing.
 
     ``reactive_cards_allowed`` is included so the superadmin org table's
-    per-org toggle (both v1 and v2 UIs) can render its current state
+    per-org toggle can render its current state
     directly from the listing — the UI mutates via ``PATCH
     /api/superadmin/orgs/{id}`` and then re-fetches this listing rather
     than holding separate state, so this field must round-trip here too.

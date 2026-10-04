@@ -212,7 +212,7 @@ def _consent_page_html(
 def _login_redirect(request: Request, blob: str) -> RedirectResponse:
     """Build a 302 to the admin login carrying a same-origin ``return_to``.
 
-    The frontend (``src/scripts/admin.ts``) honors ``return_to`` after a
+    The admin console (``src/lib/return-to.ts``) honors ``return_to`` after a
     successful login and sends the browser back to this consent URL, so
     the operator lands straight back on Approve/Deny.
 

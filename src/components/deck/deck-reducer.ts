@@ -1,5 +1,4 @@
-// UI state machine for the client card deck (the v2 port of the imperative
-// closure in src/scripts/app.ts). Pure + framework-free so it can be unit
+// UI state machine for the client card deck. Pure + framework-free so it can be unit
 // tested exhaustively; the React island drives it via useReducer.
 //
 // `index` runs 0..total. index === total is the "all done" / complete state.
@@ -82,7 +81,7 @@ export function initialDeckState(
   };
 }
 
-// Every navigation resets per-card UI state, mirroring navigateTo() in app.ts.
+// Every navigation resets per-card UI state.
 function navTo(state: DeckUiState, index: number): DeckUiState {
   return {
     ...state,
