@@ -13,10 +13,13 @@ export function OrgSwitcher({
   orgs,
   activeOrgId,
   onSwitch,
+  pending = false,
 }: {
   orgs: OrgSummary[];
   activeOrgId: string | null;
   onSwitch: (orgId: string) => void;
+  /** A switch is in flight — disable the items. */
+  pending?: boolean;
 }): React.ReactElement | null {
   const active = orgs.find((o) => o.id === activeOrgId) ?? orgs[0];
   if (!active) return null;
@@ -40,6 +43,7 @@ export function OrgSwitcher({
         {orgs.map((o) => (
           <DropdownMenuItem
             key={o.id}
+            disabled={pending}
             onSelect={() => {
               if (o.id !== active.id) onSwitch(o.id);
             }}

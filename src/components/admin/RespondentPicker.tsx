@@ -1,5 +1,5 @@
 import { useId, useMemo, useRef, useState } from "react";
-import { Plus, UserRound, X } from "lucide-react";
+import { Plus, UserPen, UserRound, X } from "lucide-react";
 
 import type { ClientContact } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,26 @@ const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
 
 export function isEmail(value: string): boolean {
   return EMAIL_RE.test(value.trim());
+}
+
+// `Name <email>` pairs or bare emails, separated by commas / semicolons /
+// whitespace / newlines. A name can't contain a comma, `<` or `>`.
+const ENTRY_RE =
+  /([^,;\n<>]*?)<\s*([^\s<>,;]+@[^\s<>,;]+)\s*>|([^\s,;<>]+@[^\s,;<>]+)/g;
+
+/** Parse typed/pasted text into respondents. Accepts bare emails and
+ * `Name <email>` (optionally quoted name). Invalid addresses are dropped.
+ * A name already saved for a client contact is NOT applied here — callers
+ * fill that in. */
+export function parseRespondents(raw: string): PickedRespondent[] {
+  const out: PickedRespondent[] = [];
+  for (const m of raw.matchAll(ENTRY_RE)) {
+    const email = (m[2] ?? m[3] ?? "").trim();
+    if (!isEmail(email)) continue;
+    const name = (m[1] ?? "").trim().replace(/^["']+|["']+$/g, "").trim();
+    out.push({ email, name: name || null });
+  }
+  return out;
 }
 
 /** Chips input for choosing respondents. Type-ahead suggests the client's
@@ -41,6 +61,7 @@ export function RespondentPicker({
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [naming, setNaming] = useState<string | null>(null);
 
   const taken = useMemo(
     () =>
@@ -61,13 +82,16 @@ export function RespondentPicker({
         (c.name ?? "").toLowerCase().includes(q),
     )
     .slice(0, 8);
+  const typed = parseRespondents(query);
+  const typedOne = typed.length === 1 ? typed[0] : undefined;
+  const typedKey = typedOne?.email.toLowerCase() ?? "";
   const canAddTyped =
-    isEmail(query) &&
-    !taken.has(q) &&
-    !contacts.some((c) => c.email.toLowerCase() === q);
+    !!typedOne &&
+    !taken.has(typedKey) &&
+    !contacts.some((c) => c.email.toLowerCase() === typedKey);
   const options: PickedRespondent[] = [
     ...suggestions.map((c) => ({ email: c.email, name: c.name })),
-    ...(canAddTyped ? [{ email: query.trim() }] : []),
+    ...(canAddTyped && typedOne ? [typedOne] : []),
   ];
   const showList = open && !disabled && options.length > 0;
 
@@ -87,18 +111,23 @@ export function RespondentPicker({
 
   /** Emails typed or pasted as a list ("a@x.com, b@y.com"). */
   function addTyped(raw: string): boolean {
-    const parts = raw.split(/[\s,;]+/).filter(Boolean);
-    const valid = parts.filter(isEmail);
+    const valid = parseRespondents(raw);
     if (!valid.length) return false;
     add(
-      valid.map((email) => {
+      valid.map(({ email, name }) => {
         const saved = contacts.find(
           (c) => c.email.toLowerCase() === email.toLowerCase(),
         );
-        return { email, name: saved?.name ?? null };
+        return { email, name: name ?? saved?.name ?? null };
       }),
     );
     return true;
+  }
+
+  function commitName(v: PickedRespondent, raw: string): void {
+    const name = raw.trim() || null;
+    onChange(value.map((x) => (x === v ? { ...x, name } : x)));
+    setNaming(null);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
@@ -140,16 +169,51 @@ export function RespondentPicker({
             key={v.email.toLowerCase()}
             className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted/60 py-0.5 pr-1 pl-2 text-xs text-foreground"
           >
-            <span className="truncate">
-              {v.name ? (
-                <>
-                  <span className="font-medium">{v.name}</span>{" "}
-                  <span className="text-muted-foreground">{v.email}</span>
-                </>
-              ) : (
-                v.email
-              )}
-            </span>
+            {naming === v.email ? (
+              <input
+                autoFocus
+                aria-label={`Name for ${v.email}`}
+                defaultValue={v.name ?? ""}
+                placeholder="Name"
+                onClick={(e) => e.stopPropagation()}
+                onBlur={(e) => commitName(v, e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitName(v, e.currentTarget.value);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setNaming(null);
+                  }
+                }}
+                className="h-5 w-28 rounded bg-background px-1 text-xs outline-none ring-1 ring-border"
+              />
+            ) : (
+              <span className="truncate">
+                {v.name ? (
+                  <>
+                    <span className="font-medium">{v.name}</span>{" "}
+                    <span className="text-muted-foreground">{v.email}</span>
+                  </>
+                ) : (
+                  v.email
+                )}
+              </span>
+            )}
+            {naming !== v.email ? (
+              <button
+                type="button"
+                aria-label={v.name ? `Edit name for ${v.email}` : `Add a name for ${v.email}`}
+                title={v.name ? "Edit name" : "Add a name"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNaming(v.email);
+                }}
+                className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+              >
+                <UserPen className="size-3" />
+              </button>
+            ) : null}
             <button
               type="button"
               aria-label={`Remove ${v.email}`}
@@ -181,7 +245,7 @@ export function RespondentPicker({
               ? "Add another…"
               : contacts.length
                 ? "Search contacts or type an email…"
-                : "Type an email and press Enter…"
+                : "Type an email (or Name <email>) and press Enter…"
           }
           onChange={(e) => {
             setQuery(e.target.value);
@@ -190,13 +254,13 @@ export function RespondentPicker({
           }}
           onPaste={(e) => {
             const text = e.clipboardData.getData("text");
-            if (/[\s,;]/.test(text.trim()) && addTyped(text)) e.preventDefault();
+            if (/[\s,;<]/.test(text.trim()) && addTyped(text)) e.preventDefault();
           }}
           onFocus={() => setOpen(true)}
           onBlur={() => {
             // Let a click on a suggestion land before the list closes.
             window.setTimeout(() => setOpen(false), 120);
-            if (isEmail(query)) addTyped(query);
+            if (query.trim()) addTyped(query);
           }}
           onKeyDown={onKeyDown}
           className="h-6 min-w-40 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
@@ -230,7 +294,9 @@ export function RespondentPicker({
                   <>
                     <Plus className="size-4 text-muted-foreground" />
                     <span>
-                      Add <span className="font-medium">{o.email}</span>
+                      Add{" "}
+                      {o.name ? <span className="font-medium">{o.name} </span> : null}
+                      <span className="font-medium">{o.email}</span>
                     </span>
                   </>
                 ) : (

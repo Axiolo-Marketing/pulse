@@ -9,8 +9,8 @@ import tailwindcss from "@tailwindcss/vite";
 // `site: "https://<the-domain>"` here so Astro can build absolute URLs into
 // sitemap.xml and Open Graph tags.
 //
-// React + Tailwind v4 power the v2 UI (see ~/.claude/plans/yes-i-want-to-kind-pearl.md).
-// Output stays `static`: v2 ships as React islands (`client:only="react"`) hydrated
+// React + Tailwind v4 power the UI (see ~/.claude/plans/yes-i-want-to-kind-pearl.md).
+// Output stays `static`: the UI ships as React islands (`client:only="react"`) hydrated
 // on the client, so nginx keeps serving pre-built files with no Node runtime.
 export default defineConfig({
   output: "static",

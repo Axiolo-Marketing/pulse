@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe("UnsubscribeApp", () => {
   it("shows the success state when the API accepts the token", async () => {
-    window.history.pushState({}, "", "/v2/unsubscribe?u=goodtoken");
+    window.history.pushState({}, "", "/unsubscribe?u=goodtoken");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({ ok: true } as Response),
@@ -27,7 +27,7 @@ describe("UnsubscribeApp", () => {
   });
 
   it("shows the invalid state when the link has no token", async () => {
-    window.history.pushState({}, "", "/v2/unsubscribe");
+    window.history.pushState({}, "", "/unsubscribe");
 
     render(<UnsubscribeApp />);
 
@@ -35,7 +35,7 @@ describe("UnsubscribeApp", () => {
   });
 
   it("shows the expired state on a non-ok response", async () => {
-    window.history.pushState({}, "", "/v2/unsubscribe?u=bad");
+    window.history.pushState({}, "", "/unsubscribe?u=bad");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({ ok: false } as Response),

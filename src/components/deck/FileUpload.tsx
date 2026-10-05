@@ -5,6 +5,7 @@ import {
   ApiError,
   clientApi,
   type Card as CardModel,
+  type ClientResponse,
   type UploadRow,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ export function FileUploadInput({
   card,
   saving,
   token,
+  existing,
   existingFiles,
   hasVoice,
   onUploaded,
@@ -43,6 +45,7 @@ export function FileUploadInput({
   card: CardModel;
   saving: boolean;
   token: string;
+  existing?: ClientResponse;
   existingFiles: UploadRow[];
   hasVoice: boolean;
   onUploaded: (row: UploadRow) => void;
@@ -52,7 +55,10 @@ export function FileUploadInput({
 }): React.ReactElement {
   const [pending, setPending] = useState<Pending[]>([]);
   const [removing, setRemoving] = useState<Set<string>>(new Set());
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(() => {
+    const prior = (existing?.response_value ?? {}) as Record<string, unknown>;
+    return typeof prior.note === "string" ? prior.note : "";
+  });
   const [dragging, setDragging] = useState(false);
   const hasMouse = useMediaQuery(FINE_POINTER_QUERY);
 

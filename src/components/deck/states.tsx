@@ -58,7 +58,11 @@ export function CompleteCard({
 }): React.ReactElement {
   return (
     <main className="flex min-h-dvh items-center justify-center p-5">
-      <Card className="w-full max-w-md" data-testid="deck-complete">
+      <Card
+        className="w-full max-w-md"
+        role="status"
+        data-testid="deck-complete"
+      >
         <CardHeader className="items-center gap-4 p-8 text-center sm:p-10">
           <span className="flex size-12 items-center justify-center rounded-full bg-success-soft text-success [&_svg]:size-6">
             <CircleCheck aria-hidden="true" />

@@ -1,6 +1,4 @@
-// The callback surface the card UI dispatches into — the React equivalent of
-// the CardHandlers object wired from data-action attributes in app.ts. The
-// DeckRunner builds a concrete instance backed by performSave + the reducer.
+// The callback surface the card UI dispatches into. The DeckRunner builds a concrete instance backed by performSave + the reducer.
 export interface DeckHandlers {
   onConfirm: () => void;
   onEditStart: () => void;

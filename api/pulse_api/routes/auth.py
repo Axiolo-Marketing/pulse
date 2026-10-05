@@ -277,6 +277,21 @@ async def logout(response: Response) -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/providers")
+async def providers() -> dict[str, bool]:
+    """Which OAuth sign-in providers are configured (public, no secrets).
+
+    Lets the login/invite UI hide buttons for providers this deployment
+    hasn't set up (Microsoft is dormant by design).
+    """
+    return {
+        "google": bool(settings.google_client_id and settings.google_client_secret),
+        "microsoft": bool(
+            settings.microsoft_client_id and settings.microsoft_client_secret
+        ),
+    }
+
+
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse.from_model(user)

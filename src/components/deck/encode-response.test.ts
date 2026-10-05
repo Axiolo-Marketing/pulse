@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { encodeResponse } from "./encode-response";
 
-describe("encodeResponse — response_value parity with app.ts", () => {
+describe("encodeResponse", () => {
   it("confirm → answered { confirmed: true }", () => {
     expect(encodeResponse({ kind: "confirm" })).toEqual({
       state: "answered",

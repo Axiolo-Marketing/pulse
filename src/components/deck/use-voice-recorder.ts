@@ -58,7 +58,7 @@ async function recordingIsSilent(blob: Blob): Promise<boolean> {
 /**
  * Wraps the framework-free Recorder in a React lifecycle. Mount one per card
  * (key by card id) so unmount cancels any in-progress take and revokes blob
- * URLs. Mirrors the voice state machine in src/scripts/app.ts.
+ * URLs.
  */
 export function useVoiceRecorder({
   token,

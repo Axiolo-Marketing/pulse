@@ -39,24 +39,20 @@ function reseedDevAdmin(): void {
   }
 }
 
-// These selectors are v1's (#login-email, #user-menu-trigger, …). /admin/
-// now defaults to v2, so pin the v1 shell with its sticky opt-out cookie.
-test.beforeEach(async ({ context, baseURL }) => {
-  await context.addCookies([
-    { name: "pulse_ui", value: "v1", url: baseURL ?? "http://localhost:4321" },
-  ]);
-});
-
 test.beforeAll(reseedDevAdmin);
 test.afterAll(reseedDevAdmin); // restore dev-admin-password no matter what
+
+function accountMenu(page: Page) {
+  return page.getByRole("button", { name: "Account menu" });
+}
 
 async function login(page: Page, password: string): Promise<void> {
   await page.goto("/admin/");
   await page.locator("#login-email").fill(EMAIL);
   await page.locator("#login-pw").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  // The user-menu trigger only renders in the authed shell.
-  await expect(page.locator("#user-menu-trigger")).toBeVisible();
+  // The account menu only renders in the authed shell.
+  await expect(accountMenu(page)).toBeVisible();
 }
 
 async function changePasswordViaSettings(
@@ -64,16 +60,13 @@ async function changePasswordViaSettings(
   current: string,
   next: string,
 ): Promise<void> {
-  await page.locator("#user-menu-trigger").click();
-  await page.locator("#nav-settings").click();
-  await expect(
-    page.getByRole("heading", { name: "Change password" }),
-  ).toBeVisible();
+  await accountMenu(page).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.locator("#pw-current").fill(current);
   await page.locator("#pw-new").fill(next);
   await page.locator("#pw-confirm").fill(next);
   await page.getByRole("button", { name: "Update password" }).click();
-  await expect(page.locator(".toast")).toHaveText("Password updated");
+  await expect(page.getByText("Password updated.")).toBeVisible();
 }
 
 test("operator changes their password from Settings and signs back in", async ({
@@ -83,9 +76,9 @@ test("operator changes their password from Settings and signs back in", async ({
   await changePasswordViaSettings(page, DEFAULT_PW, TEMP_PW_SETTINGS);
 
   // Sign out, sign back in with the NEW password.
-  await page.locator("#user-menu-trigger").click();
-  await page.locator("#logout").click();
-  await expect(page.locator("#login-form")).toBeVisible();
+  await accountMenu(page).click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await expect(page.locator("#login-email")).toBeVisible();
 
   await login(page, TEMP_PW_SETTINGS);
 
@@ -99,8 +92,8 @@ test("forgot-password: the emailed reset link lands on a working form", async ({
 }) => {
   // Request the reset through the real UI.
   await page.goto("/admin/");
-  await page.locator("[data-action='forgot']").click();
-  await page.locator("#forgot-email").fill(EMAIL);
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await page.locator("#fp-email").fill(EMAIL);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(
     page.getByRole("heading", { name: "Check your email" }),
@@ -134,17 +127,16 @@ test("forgot-password: the emailed reset link lands on a working form", async ({
   // THE regression: the emailed link must render the reset form, not a 404.
   await page.goto(`/admin/?reset-password-token=${token}`);
   await expect(
-    page.getByRole("heading", { name: "Set new password" }),
+    page.getByText("Set a new password"),
   ).toBeVisible();
 
-  await page.locator("#reset-pw").fill(TEMP_PW_RESET);
-  await page.getByRole("button", { name: "Set password" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Password updated" }),
-  ).toBeVisible();
+  await page.locator("#rp-pw").fill(TEMP_PW_RESET);
+  await page.locator("#rp-confirm").fill(TEMP_PW_RESET);
+  await page.getByRole("button", { name: "Update password" }).click();
+  await expect(page.getByText("Password updated")).toBeVisible();
 
   // And the new password actually signs in.
-  await page.getByRole("link", { name: "Sign in" }).click();
-  await expect(page.locator("#login-form")).toBeVisible();
+  await page.getByRole("button", { name: "Continue to sign in" }).click();
+  await expect(page.locator("#login-email")).toBeVisible();
   await login(page, TEMP_PW_RESET);
 });

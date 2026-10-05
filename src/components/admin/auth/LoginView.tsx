@@ -12,21 +12,35 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+import { readReturnTo, stashReturnTo } from "@/lib/return-to";
+import { useOAuthProviders } from "@/lib/providers";
+
 import { AuthLayout, OrDivider } from "./AuthLayout";
 
 export function LoginView({
   onAuthed,
   onSignup,
   onForgot,
+  notice,
 }: {
   onAuthed: (user: AuthUser) => void;
   onSignup: () => void;
   onForgot: () => void;
+  /** Error shown on arrival (e.g. from an OAuth redirect). */
+  notice?: string | null;
 }): React.ReactElement {
+  const providers = useOAuthProviders();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(notice ?? null);
   const [submitting, setSubmitting] = useState(false);
+
+  function startOAuth(provider: "google" | "microsoft"): void {
+    // Carry a same-origin return_to (MCP consent) across the provider
+    // round-trip; the backend redirects back to plain /admin/.
+    stashReturnTo(readReturnTo());
+    window.location.href = authApi.oauthAuthorizeUrl(provider);
+  }
 
   async function submit(): Promise<void> {
     setError(null);
@@ -46,27 +60,31 @@ export function LoginView({
         <CardDescription>Welcome back to Pulse.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <Button
-            variant="outline"
-            type="button"
-            onClick={() => {
-              window.location.href = authApi.oauthAuthorizeUrl("google");
-            }}
-          >
-            Continue with Google
-          </Button>
-          <Button
-            variant="outline"
-            type="button"
-            onClick={() => {
-              window.location.href = authApi.oauthAuthorizeUrl("microsoft");
-            }}
-          >
-            Continue with Microsoft
-          </Button>
-        </div>
-        <OrDivider />
+        {providers.google || providers.microsoft ? (
+          <>
+            <div className="flex flex-col gap-2">
+              {providers.google ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => startOAuth("google")}
+                >
+                  Continue with Google
+                </Button>
+              ) : null}
+              {providers.microsoft ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => startOAuth("microsoft")}
+                >
+                  Continue with Microsoft
+                </Button>
+              ) : null}
+            </div>
+            <OrDivider />
+          </>
+        ) : null}
         <form
           className="flex flex-col gap-3"
           onSubmit={(e) => {

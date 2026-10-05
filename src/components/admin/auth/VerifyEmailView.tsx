@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CircleCheck, LoaderCircle, TriangleAlert } from "lucide-react";
 
 import { ApiError, authApi } from "@/lib/api";
+import { adminBaseHref } from "@/lib/admin-url";
 import { Button } from "@/components/ui/button";
 import {
   CardContent,
@@ -66,7 +67,7 @@ export function VerifyEmailView({
             <Button
               className="w-full"
               onClick={() => {
-                window.location.href = "/v2/admin";
+                window.location.href = adminBaseHref();
               }}
             >
               Continue to admin
@@ -87,7 +88,7 @@ export function VerifyEmailView({
               variant="outline"
               className="w-full"
               onClick={() => {
-                window.location.href = "/v2/admin";
+                window.location.href = adminBaseHref();
               }}
             >
               Back to sign in

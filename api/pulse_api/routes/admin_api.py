@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,11 @@ from pulse_api.auth.middleware import (
     get_current_org_member,
     get_org_scoped_session,
 )
-from pulse_api.card_import import CardImportError, parse_markdown
+from pulse_api.card_import import (
+    CardImportError,
+    parse_markdown,
+    select_options_error,
+)
 from pulse_api.db import get_admin_session
 from pulse_api.models import OrganizationMembership, User
 from pulse_api.repos import cards as cards_repo
@@ -123,6 +127,13 @@ class CreateCardRequest(BaseModel):
     default_value: str | None = None
     skip_allowed: bool = True
     attachment_path: str | None = None
+
+    @model_validator(mode="after")
+    def _select_needs_options(self) -> "CreateCardRequest":
+        err = select_options_error(self.response_type, self.options)
+        if err:
+            raise ValueError(err)
+        return self
 
 
 class UpdateCardRequest(BaseModel):
@@ -849,6 +860,15 @@ async def update_card(
 ) -> dict[str, Any]:
     user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
+    if "options" in fields:
+        # response_type is immutable, so the stored type decides whether the
+        # patched options are acceptable (a select card can't lose them all).
+        current = await cards_repo.update_card(session, card_id, {})
+        if current is None:
+            raise HTTPException(status_code=404, detail="card not found")
+        err = select_options_error(current["response_type"], fields["options"])
+        if err:
+            raise HTTPException(status_code=422, detail=err)
     row = await cards_repo.update_card(session, card_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="card not found")

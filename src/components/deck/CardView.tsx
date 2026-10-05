@@ -267,6 +267,7 @@ function InputForType({
           card={card}
           saving={saving}
           token={media.token}
+          existing={existing}
           existingFiles={media.cardFiles}
           hasVoice={!!media.voiceUpload}
           onUploaded={media.onFileUploaded}
@@ -293,6 +294,7 @@ export function CardView({
   handlers,
   media,
   outline,
+  pollActive = false,
 }: {
   card: CardModel;
   position: number;
@@ -307,6 +309,8 @@ export function CardView({
   media: CardMedia;
   /** Desktop question outline (sidebar). Omit to never show it. */
   outline?: DeckOutlineData;
+  /** A background follow-up poll is running; shows a quiet status line. */
+  pollActive?: boolean;
 }): React.ReactElement {
   const saving = mode === "saving";
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
@@ -348,6 +352,14 @@ export function CardView({
         orgName={orgName}
         wide={showOutline}
       />
+      {pollActive ? (
+        <p
+          role="status"
+          className="mx-auto w-full max-w-xl px-5 pt-3 text-center text-xs text-muted-foreground"
+        >
+          Checking if we need a quick follow-up…
+        </p>
+      ) : null}
       {saveError ? (
         <SaveBanner message={saveError} onRetry={handlers.onRetry} />
       ) : null}

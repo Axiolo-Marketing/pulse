@@ -20,7 +20,7 @@ application layer reinforcing the same scope through a session-driven
 | `.claude/multi-tenant-workflow.md` | The sub-agent orchestration contract used to build the multi-tenant migration. Reference for future large initiatives. |
 | `deploy/README.md` | Production deployment runbook (Ansible on a shared Debian VPS). |
 | `api/` | FastAPI backend — Python 3.13, SQLModel, asyncpg, Alembic. |
-| `src/` | Astro frontend — v1 (vanilla TypeScript, current default) and v2 (React + Tailwind + shadcn/ui, opt-in) ship side by side during the migration. |
+| `src/` | Astro frontend — React islands + Tailwind + shadcn/ui. |
 | `api/migrations/versions/` | Alembic migrations. `0001` (initial port from Supabase) → `0015` (latest, multi-respondent recipients). |
 | `api/db-init/` | Postgres role bootstrap SQL — runs once on a fresh DB volume. |
 | `public/deliverables/` | Static HTML "active references" that cards can link to via `attachment_path`. |
@@ -49,7 +49,7 @@ stacks. Override via `DB_HOST_PORT`, `BACKEND_HOST_PORT`, `FRONTEND_HOST_PORT`.
 
 - **Backend**: FastAPI · Python 3.13 · SQLModel · asyncpg · Alembic
 - **Database**: Self-hosted Postgres 16 with four roles (`pulse_owner`, `pulse_anon`, `pulse_member`, `pulse_admin`) and RLS as the multi-tenant backstop
-- **Frontend**: Astro 5 · vanilla TypeScript · brand tokens in `src/styles/pulse.css`
+- **Frontend**: Astro · React islands · Tailwind v4 + shadcn/ui · tokens in `src/styles/theme.css`
 - **Auth**: signed-cookie sessions via `itsdangerous`; per-`(user, org)` API keys (`Authorization: Bearer pulse_<key>`); Google + Microsoft OAuth (invite-only — no auto-signup)
 - **MCP**: FastMCP mounted at `/api/mcp/`, same Bearer-key auth
 - **Deploy**: Ansible playbook in `deploy/`, deployed to a shared Debian VPS

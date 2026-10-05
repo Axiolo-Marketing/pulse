@@ -1,7 +1,7 @@
 // Reactive cards: shared, framework-free deck-ordering + trigger-detection +
-// poll helpers. Both the v1 (vanilla TS) and v2 (React) decks import this
-// module verbatim — no DOM, no React, pure functions only, so both UIs stay
-// byte-for-byte identical in how they order and splice AI-generated cards.
+// poll helpers for the client deck. No DOM, no React —
+// pure functions only, so ordering and splicing of AI-generated cards is
+// unit-testable in isolation.
 //
 // Background: a "Needs edit" correction on a confirm-edit card can trigger a
 // backend LLM generation (gated behind `me.reactive_cards_enabled`) that
@@ -120,10 +120,9 @@ export function spliceIndexFor(
 
 /**
  * Mirrors the backend's `extract_trigger_text` gate: only a *saved*
- * confirm-edit correction can have kicked off a generation. Both decks
- * produce the exact same `response_value` shape for this action —
- * `{ confirmed: false, correction: "<text>" }` — see `performSave` in
- * `src/scripts/app.ts` and `encodeResponse` in
+ * confirm-edit correction can have kicked off a generation. The deck
+ * produces this `response_value` shape for the action —
+ * `{ confirmed: false, correction: "<text>" }` — see `encodeResponse` in
  * `src/components/deck/encode-response.ts`.
  *
  * This is a client-side *hint* only ("should we bother polling?") — the

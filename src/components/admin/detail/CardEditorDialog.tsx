@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { Field, FormSectionLabel, ToggleList, ToggleRow } from "../form-parts";
+import { buildCardFields, hasOptions, optionsError } from "./card-payload";
 
 const RESPONSE_TYPES: {
   value: ResponseType;
@@ -99,10 +100,6 @@ function ResponseTypePicker({
   );
 }
 
-function hasOptions(type: ResponseType): boolean {
-  return type === "single-select" || type === "multi-select";
-}
-
 export function CardEditorDialog({
   engagementId,
   card,
@@ -128,6 +125,7 @@ export function CardEditorDialog({
   const [skipAllowed, setSkipAllowed] = useState(true);
   const [attachmentPath, setAttachmentPath] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [optionsMsg, setOptionsMsg] = useState<string | null>(null);
 
   // Re-seed the form each time the dialog opens (or the target card changes).
   // The dialog stays mounted while closed, so without this an edit would show
@@ -144,6 +142,7 @@ export function CardEditorDialog({
     setSkipAllowed(card?.skip_allowed ?? true);
     setAttachmentPath(card?.attachment_path ?? "");
     setError(null);
+    setOptionsMsg(null);
   }, [open, card]);
 
   const uploadMutation = useMutation({
@@ -159,23 +158,20 @@ export function CardEditorDialog({
 
   const mutation = useMutation({
     mutationFn: () => {
-      const options = hasOptions(responseType)
-        ? optionsText
-            .split("\n")
-            .map((o) => o.trim())
-            .filter((o) => o.length > 0)
-        : null;
-      const base = {
-        category: category.trim(),
-        title: title.trim(),
-        context: context.trim(),
-        question: question.trim(),
-        options,
-        default_value:
-          responseType === "confirm-edit" ? defaultValue.trim() || null : null,
-        skip_allowed: skipAllowed,
-        attachment_path: attachmentPath.trim() || null,
-      };
+      const base = buildCardFields(
+        {
+          category,
+          title,
+          context,
+          question,
+          responseType,
+          optionsText,
+          defaultValue,
+          skipAllowed,
+          attachmentPath,
+        },
+        card,
+      );
       if (card) {
         // response_type is immutable on edit.
         const updateArgs: UpdateCardArgs = base;
@@ -207,6 +203,12 @@ export function CardEditorDialog({
   function submit(): void {
     setError(null);
     if (!canSave) return;
+    const msg = optionsError(responseType, optionsText);
+    setOptionsMsg(msg);
+    if (msg) {
+      document.getElementById("card-options")?.focus();
+      return;
+    }
     mutation.mutate();
   }
 
@@ -306,9 +308,23 @@ export function CardEditorDialog({
                   id="card-options"
                   rows={4}
                   value={optionsText}
-                  onChange={(e) => setOptionsText(e.target.value)}
+                  onChange={(e) => {
+                    setOptionsText(e.target.value);
+                    setOptionsMsg(null);
+                  }}
                   disabled={submitting}
+                  aria-invalid={optionsMsg ? true : undefined}
+                  aria-describedby={optionsMsg ? "card-options-error" : undefined}
                 />
+                {optionsMsg ? (
+                  <p
+                    id="card-options-error"
+                    className="text-xs font-medium text-destructive"
+                    role="alert"
+                  >
+                    {optionsMsg}
+                  </p>
+                ) : null}
               </Field>
             ) : null}
             {responseType === "confirm-edit" ? (

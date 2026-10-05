@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CircleCheck, LoaderCircle } from "lucide-react";
 
 import { ApiError, authApi } from "@/lib/api";
+import { adminBaseHref } from "@/lib/admin-url";
 import { Button } from "@/components/ui/button";
 import {
   CardContent,
@@ -64,7 +65,7 @@ export function ResetPasswordView({
             <Button
               className="w-full"
               onClick={() => {
-                window.location.href = "/v2/admin";
+                window.location.href = adminBaseHref();
               }}
             >
               Continue to sign in

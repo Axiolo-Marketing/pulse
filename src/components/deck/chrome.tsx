@@ -114,6 +114,7 @@ export function DeckNav({
         size="sm"
         onClick={onPicker}
         className="h-9 gap-1.5 rounded-full px-3.5 tabular-nums"
+        aria-haspopup="dialog"
         data-testid="deck-progress"
       >
         <LayoutList className="size-4 text-muted-foreground" />

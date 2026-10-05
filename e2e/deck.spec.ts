@@ -1,13 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
-// Critical-flow E2E for the v2 client deck: answer every response type through
+// Critical-flow E2E for the client deck: answer every response type through
 // to completion, exercising save→advance, multi-select, text/link/contact,
 // the voice recorder (headless, via the fake-media launch flags), and a real
 // file upload. Requires the dev stack + the seeded demo deck (`make seed-deck`,
 // token dec0ded0dec0ded0). global-setup.ts resets the recipient first.
 
-const DECK = "/v2/?t=dec0ded0dec0ded0";
+const DECK = "/?t=dec0ded0dec0ded0";
 const csv = fileURLToPath(new URL("./fixtures/sample.csv", import.meta.url));
 
 test("answer every card type through to 'All done'", async ({ page }) => {

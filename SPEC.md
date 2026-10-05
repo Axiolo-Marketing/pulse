@@ -210,7 +210,7 @@ If a card benefits from a visual reference (org chart, ICP one-pager, sales play
 
 The file deploys with the next push to `main`. The card's "View Active Reference" button opens it in a sandboxed iframe modal (`sandbox="allow-scripts"`).
 
-Match the Axiolo brand if you can — Plus Jakarta Sans, the blue palette (`#2960F6` primary on `#0A0F2E` navy), the radius/shadow tokens from `src/styles/pulse.css` — so the modal feels continuous with the card. See `public/deliverables/glc-org-chart.html` for a reference implementation.
+Match the Axiolo brand if you can — Plus Jakarta Sans, the blue palette (`#2960F6` primary on `#0A0F2E` navy), the radius/shadow tokens from `src/styles/theme.css` — so the modal feels continuous with the card. See `public/deliverables/glc-org-chart.html` for a reference implementation.
 
 ---
 
@@ -397,11 +397,10 @@ is the traversal defense — every disk read/write goes through it.
 
 ### Architecture
 
-- Astro 5 static site, code-split per page.
-- Two pages: `src/pages/index.astro` (user-facing) and `src/pages/admin.astro` (operator).
-- Each page bundles its own JS chunk. The user-facing chunk contains the **anon key only**. The admin chunk contains the **service role key**. Verified against the production build.
-- Vanilla TypeScript + DOM-string templates. No framework runtime.
-- All state lives in Supabase. No localStorage for app state. SessionStorage is used only for the admin login flag.
+- Astro static site (`output: "static"`), code-split per page; each page mounts a React island (`client:only="react"`).
+- Pages: `src/pages/index.astro` (deck), `admin.astro` (operator console), `invite.astro`, `unsubscribe.astro`, `preview.astro`, plus legal pages.
+- No secrets in any bundle: the deck authenticates with the `?t=` token, the admin with a session cookie, both against the FastAPI backend.
+- All state lives in Postgres behind the API. No localStorage for app state.
 
 ### URL Pattern
 
@@ -413,12 +412,11 @@ Pulse now serves from the domain root behind nginx (see `deploy/roles/nginx-site
 
 ### Bootstrap Flow
 
-1. Page loads, runs `src/scripts/app.ts`.
-2. Script reads `?t=` from URL.
-3. Builds a Supabase client with anon key + `x-pulse-token` header.
-4. Fetches client row (RLS gates it), then in parallel: cards, responses, uploads.
-5. Computes `bootIndex = firstUnansweredIndex(cards, responses)` — first card where state is not `answered` or `skipped`.
-6. Renders that card. If `bootIndex > 0`, renders the resume banner.
+1. Page loads, mounts `src/components/deck/DeckApp.tsx`.
+2. Reads `?t=` from the URL; every API call sends it as the `X-Pulse-Token` header.
+3. Fetches `/api/me` (the recipient + engagement, RLS-gated), applies org branding, then in parallel: cards, responses, uploads. A rejected token shows "could not find your engagement"; any other failure shows a "refresh and try again" error.
+4. Computes `bootIndex = firstUnansweredIndex(cards, responses)` — first card where state is not `answered` or `skipped`.
+5. Renders that card. If `bootIndex > 0`, renders the resume banner.
 
 ### Card UI
 
@@ -565,7 +563,7 @@ File-upload responses include 7-day signed URLs.
 
 | | |
 |---|---|
-| Frontend | Astro 5 + vanilla TypeScript (no React, no Tailwind) |
+| Frontend | Astro + React islands + Tailwind v4 + shadcn/ui |
 | Backend | FastAPI (Python 3.13), SQLModel ORM, asyncpg, Alembic |
 | Database | Self-hosted Postgres 16 |
 | Storage | Local disk under `settings.upload_dir`; per-tenant subdirs |
@@ -585,8 +583,8 @@ File-upload responses include 7-day signed URLs.
 
 ### Dependencies (frontend, see `package.json`)
 
-- `astro` — only build-time + dev server
-- No runtime UI framework; no UI component library; vanilla CSS with brand tokens in `src/styles/pulse.css`
+- `astro` — build-time + dev server
+- `react` + `@astrojs/react` (islands), `tailwindcss` v4, shadcn/ui on `radix-ui`, `@tanstack/react-query`, `react-router` (admin HashRouter), `sonner`, `lucide-react`; tokens in `src/styles/theme.css`
 
 ### Environment Variables (top-level — see `.env.example` for the full list)
 
@@ -832,10 +830,6 @@ anymore** — that was a v2 Supabase caveat. The FastAPI backend authenticates
 every admin call via a signed-cookie session and runs queries on the
 `pulse_member` Postgres role; the browser bundle holds no credentials beyond
 the operator's session cookie and the engagement token from the URL.
-
-### 14.9 HMR in Dev
-
-Both `app.ts` and `admin.ts` call `import.meta.hot.decline()` so any code change forces a full page reload in dev. Prevents stale module instances accumulating button listeners.
 
 ---
 

@@ -522,8 +522,10 @@ function OrgsTableSection(): React.ReactElement {
         `AI follow-ups ${args.allowed ? "enabled" : "disabled"} for ${args.org.name}.`,
       );
     },
-    onError: (_err, args) => {
-      toast.error(`Couldn't update AI follow-ups for ${args.org.name}.`);
+    onError: (err, args) => {
+      toast.error(`Couldn't update AI follow-ups for ${args.org.name}.`, {
+        description: err instanceof ApiError ? err.detail : undefined,
+      });
     },
   });
 

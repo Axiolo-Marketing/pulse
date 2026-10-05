@@ -408,6 +408,47 @@ async def test_add_and_list_recipients_roundtrip(
     assert dup["result"].get("isError") is True
 
 
+async def test_mcp_select_card_requires_options(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    eng = _structured(
+        await _mcp_call(
+            mcp_client,
+            "tools/call",
+            _tool_call_payload("pulse_create_engagement", {"client_name": "Sel Co"}),
+            api_key=raw,
+        )
+    )
+    args = {
+        "engagement_id": eng["id"], "category": "c", "title": "t",
+        "context": "x", "question": "q?", "response_type": "single-select",
+    }
+    bad = await _mcp_call(
+        mcp_client, "tools/call", _tool_call_payload("pulse_add_card", args), api_key=raw
+    )
+    assert bad["result"].get("isError") is True
+    ok = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload("pulse_add_card", {**args, "options": ["A"]}),
+        api_key=raw,
+    )
+    assert ok["result"].get("isError") is not True, ok
+    card_id = _structured(ok)["id"]
+    cleared = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload("pulse_update_card", {"card_id": card_id, "options": []}),
+        api_key=raw,
+    )
+    assert cleared["result"].get("isError") is True
+
+
 # 3. Missing Authorization header → HTTP 401 (RequireAuthMiddleware).
 #    RS-mode validates the bearer at the HTTP layer, so an unauthenticated
 #    call never reaches a tool body — it's rejected with 401 +

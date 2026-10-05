@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api", tags=["client"])
 VALID_STATES = ("viewed", "answered", "skipped", "needs_edit")
 
 # Schemes the deck itself accepts for a `document-link` answer (SPEC.md §4:
-# `{url, note?}`). Kept in sync with `isValidUrl()` in `src/lib/render.ts`,
+# `{url, note?}`). Kept in sync with `isValidUrl()` in `src/components/deck/inputs.tsx`,
 # which restricts the deck's own link input to the same two schemes.
 _ALLOWED_URL_SCHEMES = ("http", "https")
 
@@ -53,9 +53,9 @@ def _reject_unsafe_response_url(response_value: dict[str, Any] | None) -> None:
     Trust boundary: `response_value` is attacker-controlled. It comes
     straight from the deck-token holder (the client) via this route, and a
     direct API call bypasses the deck UI's own scheme check (`isValidUrl`
-    in `src/lib/render.ts`). The victim is the *operator*: the admin
-    console later renders any `url` key as a clickable `<a href=...>` (v1
-    `src/scripts/admin.ts`, v2 `src/components/admin/detail/parts.tsx`).
+    in `src/components/deck/inputs.tsx`). The victim is the *operator*: the admin
+    console later renders any `url` key as a clickable `<a href=...>`
+    (`src/components/admin/detail/parts.tsx`).
     HTML-escaping / JSX neutralizes markup characters but not the URL
     *scheme* — a stored `javascript:`/`data:`/`vbscript:` (or
     protocol-relative `//...`) value would still execute in the operator's

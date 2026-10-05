@@ -12,6 +12,7 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  LoaderCircle,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -19,6 +20,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -29,10 +31,12 @@ import {
   ApiError,
   type Card as CardModel,
   type EngagementDetail as EngagementDetailData,
+  type Recipient,
 } from "@/lib/api";
 import {
-  renderCardMarkdown,
-  renderEngagementMarkdown,
+  buildCardMarkdown,
+  buildEngagementExport,
+  exportFilename,
 } from "@/lib/markdown-export";
 import { formatTimestamp } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
@@ -55,6 +59,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+import { BRIEF_TEMPLATE } from "./detail/brief-template";
 import { CardEditorDialog } from "./detail/CardEditorDialog";
 import {
   ConfirmDialog,
@@ -73,35 +78,58 @@ import {
 import { AdminError, AdminLoading } from "./states";
 
 function buildMarkdown(detail: EngagementDetailData): string {
-  const cards = [...detail.cards].sort((a, b) => a.order_index - b.order_index);
-  const blocks: string[] = [];
-  for (const r of detail.recipients) {
-    for (const card of cards) {
-      const response = detail.responses.find(
-        (x) => x.recipient_id === r.id && x.card_id === card.id,
-      );
-      const ups = detail.uploads.filter(
-        (x) => x.recipient_id === r.id && x.card_id === card.id,
-      );
-      blocks.push(
-        renderCardMarkdown({
-          card,
-          client: detail.engagement,
-          response,
-          uploads: ups.map((u) => ({
-            id: u.id,
-            name: u.file_name,
-            sizeBytes: u.file_size_bytes,
-            url: adminApi.uploadDownloadUrl(u.id),
-            kind: u.kind,
-            transcript: u.transcript_status === "done" ? u.transcript : null,
-          })),
-          recipientLabel: recipientLabel(r),
-        }),
-      );
-    }
+  return buildEngagementExport(
+    detail,
+    (id) => adminApi.uploadDownloadUrl(id),
+    recipientLabel,
+  );
+}
+
+/** Confirm-dialog bodies that spell out what gets erased, from the detail
+ * payload the page already holds. */
+function confirmCopy(detail: EngagementDetailData): {
+  resetDescription: string;
+  deleteDescription: string;
+} {
+  const { engagement } = detail;
+  const label = [engagement.name, engagement.engagement_name]
+    .filter(Boolean)
+    .join(" · ");
+  const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const responses = detail.responses.filter(
+    (r) => r.state === "answered" || r.state === "skipped",
+  ).length;
+  const files = detail.uploads.filter((u) => u.kind !== "voice").length;
+  const voices = detail.uploads.filter((u) => u.kind === "voice").length;
+
+  const cleared: string[] = [];
+  if (responses > 0) cleared.push(plural(responses, "response"));
+  if (files > 0) cleared.push(plural(files, "uploaded file"));
+  if (voices > 0) cleared.push(plural(voices, "voice note"));
+  const resetDescription = [
+    `Reset all answers for ${label}?`,
+    cleared.length > 0
+      ? `This clears ${cleared.join(" and ")}, returning every card to unanswered.`
+      : "There are no answers to clear yet.",
+    "The cards and respondent links stay the same, so they can start over. This can't be undone.",
+  ].join(" ");
+
+  const removed =
+    detail.cards.length > 0
+      ? [plural(detail.cards.length, "card"), plural(responses, "response")]
+      : [];
+  if (detail.cards.length > 0) {
+    if (files > 0) removed.push(plural(files, "uploaded file"));
+    if (voices > 0) removed.push(plural(voices, "voice note"));
   }
-  return renderEngagementMarkdown(blocks);
+  const deleteDescription = [
+    `Delete ${label}?`,
+    removed.length > 0
+      ? `This will permanently remove ${removed.join(", ")}, along with ${plural(detail.recipients.length, "respondent")} and their links.`
+      : "No cards have been added to this engagement yet.",
+    "This can't be undone.",
+  ].join(" ");
+  return { resetDescription, deleteDescription };
 }
 
 const RESPONSE_TYPE_LABELS: Record<string, string> = {
@@ -137,6 +165,20 @@ function BriefCard({
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(brief ?? "");
+  const hasBrief = !!brief?.trim();
+  // An empty brief opens pre-filled with the starter outline.
+  function startEditing(): void {
+    setText(hasBrief ? (brief ?? "") : BRIEF_TEMPLATE);
+    setEditing(true);
+  }
+  async function copyBrief(): Promise<void> {
+    try {
+      await copyText(brief ?? "");
+      toast.success("Brief copied as Markdown.");
+    } catch {
+      toast.error("Couldn't copy the brief.");
+    }
+  }
   const mut = useMutation({
     mutationFn: () =>
       adminApi.updateEngagement(engagementId, { brief: text.trim() || null }),
@@ -152,18 +194,28 @@ function BriefCard({
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-foreground">Brief</h2>
         {!editing ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-mr-2 h-7 gap-1.5 text-muted-foreground hover:text-foreground"
-            onClick={() => {
-              setText(brief ?? "");
-              setEditing(true);
-            }}
-          >
-            <Pencil />
-            Edit
-          </Button>
+          <div className="-mr-2 flex items-center gap-1">
+            {hasBrief ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => void copyBrief()}
+              >
+                <Copy />
+                Copy as Markdown
+              </Button>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-muted-foreground hover:text-foreground"
+              onClick={startEditing}
+            >
+              <Pencil />
+              Edit
+            </Button>
+          </div>
         ) : null}
       </div>
       {editing ? (
@@ -184,7 +236,7 @@ function BriefCard({
             </Button>
           </div>
         </div>
-      ) : brief ? (
+      ) : hasBrief ? (
         // Briefs are authored as Markdown — render them in a capped scroll
         // box so a long brief doesn't push the sidebar out of reach.
         <div className={cn("max-h-80 overflow-y-auto px-4 py-3", MARKDOWN_PROSE)}>
@@ -194,8 +246,13 @@ function BriefCard({
         <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
           <FileText className="size-5 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">
-            No brief yet. Add context for your team.
+            No brief yet. A one-page narrative of who the client is and what
+            you're validating, copyable as Markdown.
           </p>
+          <Button variant="outline" size="sm" onClick={startEditing}>
+            <Plus />
+            Write brief
+          </Button>
         </div>
       )}
     </section>
@@ -209,6 +266,7 @@ function CardBlock({
   transcription,
   onEdit,
   onDelete,
+  onCopyAnswer,
 }: {
   card: CardModel;
   position: number;
@@ -216,6 +274,7 @@ function CardBlock({
   transcription: TranscriptionControls;
   onEdit: () => void;
   onDelete: () => void;
+  onCopyAnswer: (r: Recipient) => void;
 }): React.ReactElement {
   return (
     <article className="rounded-lg border border-border">
@@ -286,14 +345,31 @@ function CardBlock({
                 <div className="min-w-0 flex-1">
                   <div className="mb-1 flex flex-wrap items-center gap-2">
                     <span className="truncate text-sm font-medium text-foreground">
-                      {recipientLabel(r)}
+                      {r.name || recipientLabel(r)}
                     </span>
-                    <StateBadge response={response} />
-                    {ts ? (
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {formatTimestamp(ts)}
+                    {r.name && r.email ? (
+                      <span className="truncate text-xs text-muted-foreground">
+                        {r.email}
                       </span>
                     ) : null}
+                    <StateBadge response={response} />
+                    <span className="ml-auto flex items-center gap-1">
+                      {ts ? (
+                        <span className="text-xs text-muted-foreground">
+                          {formatTimestamp(ts)}
+                        </span>
+                      ) : null}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="-my-1 size-7 text-muted-foreground hover:text-foreground"
+                        title="Copy this answer as Markdown"
+                        aria-label={`Copy ${recipientLabel(r)}'s answer as Markdown`}
+                        onClick={() => onCopyAnswer(r)}
+                      >
+                        <Copy />
+                      </Button>
+                    </span>
                   </div>
                   <ResponseBody
                     card={card}
@@ -347,7 +423,7 @@ function FeatureChip({
 }
 
 /** Phone-sized preview of the respondent deck, embedded from
- * `/v2/preview?e=<id>` (real deck screens + the org's branding; nothing is
+ * `<base>preview?e=<id>` (real deck screens + the org's branding; nothing is
  * saved). "Restart" remounts the frame to start again from card 1. */
 function PreviewDialog({
   engagementId,
@@ -359,7 +435,8 @@ function PreviewDialog({
   onOpenChange: (o: boolean) => void;
 }): React.ReactElement {
   const [run, setRun] = useState(0);
-  const src = `/v2/preview?e=${encodeURIComponent(engagementId)}`;
+  const base = import.meta.env.BASE_URL;
+  const src = `${base.endsWith("/") ? base : `${base}/`}preview?e=${encodeURIComponent(engagementId)}`;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-4 sm:max-w-[460px]">
@@ -477,13 +554,27 @@ export function EngagementDetail(): React.ReactElement {
         err instanceof ApiError ? err.detail : "Couldn't start transcription.",
       ),
   });
+  // Per-card parse errors come back newline-joined in the 400's detail;
+  // show them as an inline list beside the Import control.
+  const [importErrors, setImportErrors] = useState<string[] | null>(null);
   const importMut = useMutation({
     mutationFn: (markdown: string) => adminApi.importMarkdownCards(id, markdown),
-    onSuccess: () => {
+    onMutate: () => setImportErrors(null),
+    onSuccess: ({ created }) => {
       void qc.invalidateQueries({ queryKey: ["engagement", id] });
-      toast.success("Cards imported.");
+      toast.success(
+        `${created.length} card${created.length === 1 ? "" : "s"} imported`,
+      );
     },
-    onError: () => toast.error("Couldn't import that Markdown."),
+    onError: (err) => {
+      const detail =
+        err instanceof ApiError ? err.detail : "Could not import that Markdown.";
+      const lines = detail
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      setImportErrors(lines.length ? lines : [detail]);
+    },
   });
 
   if (q.isPending) return <AdminLoading />;
@@ -506,13 +597,33 @@ export function EngagementDetail(): React.ReactElement {
     }
   }
   function download(): void {
-    const blob = new Blob([buildMarkdown(detail)], { type: "text/markdown" });
+    const blob = new Blob([buildMarkdown(detail)], {
+      type: "text/markdown;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${engagement.engagement_name || engagement.name}.md`;
+    a.download = exportFilename(engagement);
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
+  }
+  async function copyAnswer(card: CardModel, r: Recipient): Promise<void> {
+    try {
+      await copyText(
+        buildCardMarkdown(
+          detail,
+          card,
+          r,
+          (uid) => adminApi.uploadDownloadUrl(uid),
+          recipientLabel,
+        ),
+      );
+      toast.success(`Copied ${recipientLabel(r)}'s answer.`);
+    } catch {
+      toast.error("Couldn't copy.");
+    }
   }
 
   // ── Summary numbers ──
@@ -530,6 +641,7 @@ export function EngagementDetail(): React.ReactElement {
     .sort()
     .at(-1);
   const title = engagement.engagement_name?.trim() || "Untitled engagement";
+  const { resetDescription, deleteDescription } = confirmCopy(detail);
   const transcriptionControls: TranscriptionControls = {
     enabled:
       !!detail.transcription_available && !!engagement.transcription_enabled,
@@ -664,8 +776,9 @@ export function EngagementDetail(): React.ReactElement {
               <label className="inline-flex">
                 <input
                   type="file"
-                  accept=".md,.markdown,text/markdown"
+                  accept=".md,.markdown,.txt,text/markdown,text/plain"
                   className="peer sr-only"
+                  disabled={importMut.isPending}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
@@ -673,8 +786,12 @@ export function EngagementDetail(): React.ReactElement {
                   }}
                 />
                 <span className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50">
-                  <Upload className="size-4" />
-                  Import
+                  {importMut.isPending ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Upload className="size-4" />
+                  )}
+                  {importMut.isPending ? "Importing…" : "Import"}
                 </span>
               </label>
               <Button size="sm" onClick={() => setCardEditor({ open: true })}>
@@ -683,6 +800,35 @@ export function EngagementDetail(): React.ReactElement {
               </Button>
             </div>
           </div>
+
+          {importErrors ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <strong className="font-medium text-destructive">Import failed</strong>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-my-1 -mr-2 size-7 text-muted-foreground"
+                  aria-label="Dismiss import errors"
+                  onClick={() => setImportErrors(null)}
+                >
+                  <X />
+                </Button>
+              </div>
+              {importErrors.length > 1 ? (
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-foreground">
+                  {importErrors.map((l, i) => (
+                    <li key={i}>{l}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-foreground">{importErrors[0]}</p>
+              )}
+            </div>
+          ) : null}
 
           {cards.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border px-4 py-12 text-center">
@@ -702,6 +848,7 @@ export function EngagementDetail(): React.ReactElement {
                 transcription={transcriptionControls}
                 onEdit={() => setCardEditor({ open: true, card })}
                 onDelete={() => setDeletingCard(card)}
+                onCopyAnswer={(r) => void copyAnswer(card, r)}
               />
             ))
           )}
@@ -735,7 +882,7 @@ export function EngagementDetail(): React.ReactElement {
         open={resetOpen}
         onOpenChange={setResetOpen}
         title="Reset all answers?"
-        description="This clears every recipient's responses, files, and voice notes. The cards and magic links stay. This can't be undone."
+        description={resetDescription}
         confirmLabel="Reset answers"
         destructive
         pending={resetMut.isPending}
@@ -745,7 +892,7 @@ export function EngagementDetail(): React.ReactElement {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title="Delete this engagement?"
-        description="This permanently removes the engagement, its cards, recipients, responses, and files. This can't be undone."
+        description={deleteDescription}
         confirmLabel="Delete engagement"
         destructive
         pending={deleteMut.isPending}

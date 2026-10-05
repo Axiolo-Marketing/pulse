@@ -23,7 +23,7 @@ import { PersonAvatar } from "./parts";
 /** Stable dotted action enum → human-readable label. Kept in sync with
  * `AUDIT_ACTIONS` in `api/pulse_api/audit.py`. The keys double as the
  * "By action" filter's option values. */
-const ACTION_LABELS: Record<string, string> = {
+export const ACTION_LABELS: Record<string, string> = {
   "engagement.create": "Created engagement",
   "engagement.update": "Edited engagement",
   "engagement.delete": "Deleted engagement",
@@ -39,6 +39,7 @@ const ACTION_LABELS: Record<string, string> = {
   "card.import": "Imported cards",
   "card.reactive_generate": "AI follow-up generated",
   "attachment.upload": "Uploaded attachment",
+  "upload.transcribe": "Requested transcript",
   "org.update": "Updated organization",
   "org.logo_set": "Updated logo",
   "org.logo_remove": "Removed logo",
@@ -72,6 +73,21 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** A target name in quotes, or "(unknown)" when the metadata is missing. */
+function quoted(v: unknown): string {
+  const s = str(v).trim();
+  return s ? `"${s}"` : "(unknown)";
+}
+
+/** A bare target (e.g. an email), or "(unknown)" when missing. */
+function plain(v: unknown): string {
+  return str(v).trim() || "(unknown)";
+}
+
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 function actorName(entry: ActivityEntry): string {
   return entry.actor.name?.trim() || entry.actor.email || "Someone";
 }
@@ -83,30 +99,46 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
   const m: Record<string, unknown> = entry.metadata ?? {};
   switch (entry.action) {
     case "engagement.create":
-      return `created engagement "${str(m.name)}"`;
+      return `created engagement ${quoted(m.name)}`;
+    case "engagement.update":
+      return `edited engagement ${quoted(m.name)}`;
+    case "engagement.delete":
+      return `deleted engagement ${quoted(m.name)}`;
     case "engagement.reset":
-      return `reset engagement answers (${num(m.responses_cleared)} responses, ${num(m.uploads_cleared)} uploads cleared)`;
+      return `reset engagement answers (${plural(num(m.responses_cleared), "response")}, ${plural(num(m.uploads_cleared), "upload")} cleared)`;
+    case "card.create":
+      return `added card ${quoted(m.title)}`;
+    case "card.update":
+      return `edited card ${quoted(m.title)}`;
+    case "card.delete":
+      return `deleted card ${quoted(m.title)}`;
     case "card.import":
-      return `imported ${num(m.count)} card(s)`;
+      return `imported ${plural(num(m.count), "card")}`;
+    case "attachment.upload":
+      return `uploaded attachment ${quoted(m.filename)}`;
+    case "upload.transcribe":
+      return "requested a voice transcript";
     case "engagement.invites_sent": {
       const emails = Array.isArray(m.emails) ? m.emails.map(String) : [];
       return emails.length
         ? `emailed the deck to ${emails.join(", ")}`
-        : `emailed the deck to ${num(m.count)} respondent(s)`;
+        : `emailed the deck to ${plural(num(m.count), "respondent")}`;
     }
     case "recipient.add":
-      return `added respondent ${str(m.email)}`;
+      return `added respondent ${plain(m.email)}`;
+    case "recipient.remove":
+      return `removed respondent ${plain(m.email)}`;
     case "client.contact_save":
-      return `saved client contact ${str(m.email)}`;
+      return `saved client contact ${plain(m.email)}`;
     case "client.contact_remove":
-      return `removed client contact ${str(m.email)}`;
+      return `removed client contact ${plain(m.email)}`;
     case "card.reactive_generate": {
       const ids = Array.isArray(m.card_ids) ? m.card_ids : [];
       return `generated ${ids.length} AI follow-up card${ids.length === 1 ? "" : "s"}`;
     }
     case "org.update":
       if (m.old_name && m.new_name) {
-        return `renamed the organization from "${str(m.old_name)}" to "${str(m.new_name)}"`;
+        return `renamed the organization from ${quoted(m.old_name)} to ${quoted(m.new_name)}`;
       }
       if (typeof m.new_reactive_cards_allowed === "boolean") {
         return m.new_reactive_cards_allowed
@@ -114,16 +146,34 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
           : "disabled reactive cards for the organization";
       }
       return "updated the organization";
+    case "org.branding":
+      return "updated the organization branding";
+    case "org.logo_set":
+      return "updated the organization logo";
+    case "org.logo_remove":
+      return "removed the organization logo";
+    case "org.create":
+      return `created organization ${quoted(m.name)}`;
+    case "org.delete":
+      return `deleted organization ${quoted(m.name)}`;
     case "member.invite":
-      return `invited ${str(m.email)} (${str(m.role)})`;
+      return `invited ${plain(m.email)} (${str(m.role) || "member"})`;
+    case "member.invite_revoke":
+      return "revoked a pending invite";
     case "member.role_change":
-      return `changed a member's role from ${str(m.from)} to ${str(m.to)}`;
+      return `changed a member's role from ${str(m.from) || "—"} to ${str(m.to) || "—"}`;
     case "member.remove":
-      return `removed a member (${str(m.former_role)})`;
+      return m.former_role
+        ? `removed a member (${str(m.former_role)})`
+        : "removed a member";
     case "member.join":
-      return `joined the organization as ${str(m.role)}`;
-    case "api_key.create":
-      return `created API key "${str(m.label)}" (pulse_${str(m.prefix)}…)`;
+      return `joined the organization as ${str(m.role) || "member"}`;
+    case "api_key.create": {
+      const prefix = str(m.prefix);
+      return `created API key ${quoted(m.label)}${prefix ? ` (pulse_${prefix}…)` : ""}`;
+    }
+    case "api_key.revoke":
+      return `revoked API key ${quoted(m.label)}`;
     default:
       return (ACTION_LABELS[entry.action] ?? entry.action).toLowerCase();
   }
