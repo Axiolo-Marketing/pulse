@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse_api import completion, reactive
+from pulse_api import completion, reactive, webhooks
 from pulse_api.config import settings
 from pulse_api.db import get_anon_session
 from pulse_api.observability import limiter
@@ -137,6 +137,13 @@ async def get_me(
     me = await engagements_repo.get_my_engagement(session)
     if me is None:
         raise HTTPException(status_code=404, detail="client not found")
+    # First open of this recipient's deck: the detached job claims
+    # `first_opened_at` once and sends `deck_opened` if the org has a
+    # webhook (`pulse_api/webhooks.py`). Nothing was written here, so
+    # there's no commit for the job to wait on.
+    unopened = await engagements_repo.my_unopened_recipient_id(session)
+    if unopened is not None:
+        webhooks.schedule_deck_opened(unopened)
     return me
 
 
@@ -252,6 +259,13 @@ async def save_response(
         and await completion.alert_due(session, str(row["recipient_id"]))
     ):
         completion.schedule_completion_check(str(row["recipient_id"]))
+
+    # Outbound webhook: report the answer (`deck_answered` /
+    # `contact_shared`). The job waits for this save's commit, then decides
+    # from the committed row whether it's a reportable answer and whether
+    # the org has a webhook at all.
+    if req.state == "answered":
+        webhooks.schedule_answer(row["id"], row["updated_at"])
 
     return row
 

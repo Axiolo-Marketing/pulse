@@ -41,6 +41,9 @@ string emitted by the route layer appears in this list.
 * ``org.branding``          — org branding/theme overrides changed
 * ``org.logo_set``          — org logo uploaded (new or replaced)
 * ``org.logo_remove``       — org logo cleared
+* ``org.webhook_update``    — owner set, changed or cleared the org's
+  outbound webhook (metadata carries the URL and whether a secret is set,
+  never the secret)
 * ``org.create``            — superadmin created an org
 * ``org.delete``            — superadmin deleted an org
 * ``member.invite``         — owner created a pending invite
@@ -90,6 +93,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "org.branding",
         "org.logo_set",
         "org.logo_remove",
+        "org.webhook_update",
         "org.create",
         "org.delete",
         # Members + invites

@@ -73,6 +73,8 @@ describe("formatActivityPhrase", () => {
     ["engagement.reset", "counts", { responses_cleared: 1, uploads_cleared: 2 }, "reset engagement answers (1 response, 2 uploads cleared)"],
     ["engagement.invites_sent", "emails", { emails: ["a@x.com", "b@x.com"] }, "emailed the deck to a@x.com, b@x.com"],
     ["org.branding", "-", null, "updated the organization branding"],
+    ["org.webhook_update", "set", { new_url: "https://r.test/h" }, "set the outbound webhook to https://r.test/h"],
+    ["org.webhook_update", "cleared", { cleared: true }, "turned off the outbound webhook"],
   ];
 
   it.each(cases)("%s (%s)", (action, _label, meta, expected) => {

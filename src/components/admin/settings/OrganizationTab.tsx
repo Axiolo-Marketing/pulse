@@ -227,6 +227,126 @@ function LogoSettings({
   );
 }
 
+function WebhookSettings({ org }: { org: OrgDetails }): React.ReactElement {
+  const qc = useQueryClient();
+  const [url, setUrl] = useState(org.webhook_url ?? "");
+  const [secret, setSecret] = useState("");
+  const [msg, setMsg] = useState<Msg>(null);
+  const [clearing, setClearing] = useState(false);
+  const isSet = Boolean(org.webhook_url && org.webhook_secret_set);
+
+  const onDone = (text: string) => {
+    void qc.invalidateQueries({ queryKey: ["orgs", "me"] });
+    setSecret("");
+    setMsg({ kind: "success", text });
+  };
+  const onFail = (err: unknown) =>
+    setMsg({
+      kind: "error",
+      text: err instanceof ApiError ? err.detail : "Could not save.",
+    });
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      orgsApi.setWebhook({
+        url: url.trim(),
+        ...(secret.trim() ? { secret: secret.trim() } : {}),
+      }),
+    onSuccess: () => onDone("Saved."),
+    onError: onFail,
+  });
+  const clearMut = useMutation({
+    mutationFn: () => orgsApi.clearWebhook(),
+    onSuccess: () => {
+      setClearing(false);
+      setUrl("");
+      onDone("Webhook cleared.");
+    },
+    onError: (err) => {
+      setClearing(false);
+      onFail(err);
+    },
+  });
+
+  return (
+    <SettingsSection
+      title="Outbound webhook"
+      description="Pulse posts a signed event here when a respondent opens their deck, answers a card, shares a contact, or finishes."
+      action={<Pill tone={isSet ? "strong" : "default"}>{isSet ? "Set" : "Not set"}</Pill>}
+      onSubmit={() => {
+        setMsg(null);
+        if (!url.trim().startsWith("https://")) {
+          setMsg({ kind: "error", text: "The URL must start with https://." });
+          return;
+        }
+        if (!org.webhook_secret_set && !secret.trim()) {
+          setMsg({ kind: "error", text: "Paste the signing secret." });
+          return;
+        }
+        saveMut.mutate();
+      }}
+      footerHint={<FormMessage message={msg} />}
+      footer={
+        <>
+          {org.webhook_url || org.webhook_secret_set ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setClearing(true)}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              Clear
+            </Button>
+          ) : null}
+          <Button type="submit" size="sm" disabled={saveMut.isPending}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4 sm:max-w-md">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="webhook-url">URL</Label>
+          <Input
+            id="webhook-url"
+            type="url"
+            placeholder="https://"
+            value={url}
+            maxLength={2000}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="webhook-secret">Signing secret</Label>
+          <Input
+            id="webhook-secret"
+            type="password"
+            autoComplete="off"
+            placeholder={
+              org.webhook_secret_set ? "Set. Paste a new one to replace it." : "Not set"
+            }
+            value={secret}
+            maxLength={500}
+            onChange={(e) => setSecret(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={clearing}
+        onOpenChange={setClearing}
+        title="Clear the webhook?"
+        description="Pulse stops sending respondent events until you set it again."
+        confirmLabel="Clear webhook"
+        destructive
+        pending={clearMut.isPending}
+        onConfirm={() => clearMut.mutate()}
+      />
+    </SettingsSection>
+  );
+}
+
 type MemberAction = { kind: "promote" | "demote" | "remove"; member: MemberRow };
 
 function MembersSection({
@@ -543,6 +663,7 @@ export function OrganizationTab({
       <OrgNameForm org={org} isOwner={isOwner} />
       <LogoSettings org={org} isOwner={isOwner} />
       {isOwner ? <BrandingSettings org={org} /> : null}
+      {isOwner ? <WebhookSettings org={org} /> : null}
       <MembersSection isOwner={isOwner} currentUserId={currentUserId} />
       {isOwner ? <InvitesSection /> : null}
     </div>

@@ -19,6 +19,14 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# The org row the member-scoped routes read back. The webhook secret is
+# reduced to a boolean here so it can never reach a response by accident.
+_ORG_COLUMNS = (
+    "id::text as id, name, slug, logo_path, branding, "
+    "reactive_cards_allowed, webhook_url, "
+    "(webhook_secret is not null) as webhook_secret_set, created_at"
+)
+
 
 async def list_orgs_for_user(
     session: AsyncSession, user_id: uuid.UUID | str
@@ -155,8 +163,7 @@ async def get_for_member(
     """
     result = await session.execute(
         text(
-            "select id::text as id, name, slug, logo_path, branding, "
-            "reactive_cards_allowed, created_at "
+            f"select {_ORG_COLUMNS} "
             "from public.organizations where id = cast(:o as uuid)"
         ),
         {"o": str(org_id)},
@@ -185,8 +192,7 @@ async def update_name(
         text(
             "update public.organizations set name = :n "
             "where id = cast(:o as uuid) "
-            "returning id::text as id, name, slug, logo_path, branding, "
-            "reactive_cards_allowed, created_at"
+            f"returning {_ORG_COLUMNS}"
         ),
         {"n": name, "o": str(org_id)},
     )
@@ -252,10 +258,42 @@ async def set_branding(
             "update public.organizations "
             "set branding = cast(:b as jsonb) "
             "where id = cast(:o as uuid) "
-            "returning id::text as id, name, slug, logo_path, branding, "
-            "reactive_cards_allowed, created_at"
+            f"returning {_ORG_COLUMNS}"
         ),
         {"b": encoded, "o": str(org_id)},
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def set_webhook(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID | str,
+    url: str | None,
+    secret: str | None,
+    keep_secret: bool = False,
+) -> dict[str, object] | None:
+    """Set or clear the org's outbound webhook (``pulse_api/webhooks.py``).
+
+    ``keep_secret=True`` updates only the URL and leaves the stored secret
+    as it is (the owner changed the URL without re-pasting the secret).
+    Pass ``url=None, secret=None`` to clear both. RLS WITH CHECK on the
+    org-scoped session refuses any other ``id``.
+
+    Returns:
+        Refreshed row dict (secret reduced to ``webhook_secret_set``), or
+        ``None`` if the org was not found.
+    """
+    secret_sql = "webhook_secret" if keep_secret else "cast(:s as text)"
+    result = await session.execute(
+        text(
+            "update public.organizations "
+            f"set webhook_url = cast(:u as text), webhook_secret = {secret_sql} "
+            "where id = cast(:o as uuid) "
+            f"returning {_ORG_COLUMNS}"
+        ),
+        {"u": url, "o": str(org_id), **({} if keep_secret else {"s": secret})},
     )
     row = result.mappings().one_or_none()
     return dict(row) if row else None

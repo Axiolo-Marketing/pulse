@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from pulse_api import completion
+from pulse_api import completion, webhooks
 from pulse_api import email as email_module
 from pulse_api.auth.middleware import get_org_scoped_session
 from pulse_api.auth.session import encode_session
@@ -676,6 +676,15 @@ def _completion_alerts_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         completion, "schedule_completion_check", lambda *_a, **_k: None
     )
+
+
+@pytest.fixture(autouse=True)
+def _webhooks_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opening a deck, answering a card or finishing would otherwise spawn
+    outbound-webhook jobs against the real admin engine. Only the detached
+    jobs are stubbed; ``tests/test_webhooks.py`` restores them."""
+    for name in ("schedule_deck_opened", "schedule_answer", "schedule_deck_completed"):
+        monkeypatch.setattr(webhooks, name, lambda *_a, **_k: None)
 
 
 @pytest.fixture
