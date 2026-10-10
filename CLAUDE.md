@@ -100,6 +100,16 @@ When a respondent's last visible card (shared deck + their own AI follow-ups) ge
 - **Once-only**: `recipients.completed_notified_at` (migration `0020`) is claimed by a conditional UPDATE that re-checks completeness; it re-alerts only if a card was added after it and the respondent finished that too. Always on — no setting yet.
 - **Tests**: `tests/test_completion_alerts.py`. `conftest.py` stubs the scheduler by default so other tests that finish a deck don't spawn jobs against the real admin engine.
 
+### Outbound webhook (Reba signals)
+
+Per-org webhook so Reba (Axiolo's SDR agent, signal loop PR 4) learns what a respondent does with a deck. Pulse only sends. Code: `api/pulse_api/webhooks.py`; SPEC §16 has the full contract.
+
+- **Settings**: `organizations.webhook_url` (https, check constraint) + `webhook_secret` (migration `0021`). Off unless both are set. Owner-only `PUT /api/orgs/me/webhook` `{url, secret?}` (omit the secret to keep it) / `DELETE` to clear; audit `org.webhook_update` (metadata: URLs + whether a secret is set, never the secret). `GET /api/orgs/me` returns `webhook_url` + `webhook_secret_set` only: `repos/orgs.py::_ORG_COLUMNS` reduces the secret to a boolean. UI: "Outbound webhook" section on Settings → Organization (owners).
+- **Events**: `deck_opened` (first `GET /api/me`; `recipients.first_opened_at` is the once-ever claim, set even with no webhook; backfilled for anyone who'd already used their deck), `deck_answered` / `contact_shared` (`save_response`, state `answered` only), `deck_completed` (scheduled from `completion.run_completion_check` right after a successful claim, before and independent of the email). Ids: `opened:<rid>`, `answered:<response_id>:<epoch updated_at>`, `contact:<response_id>:<epoch updated_at>`, `completed:<rid>:<epoch claim>`.
+- **Signing**: `X-Reba-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`, re-signed on every attempt (receiver window is 3 minutes).
+- **Delivery**: detached `asyncio` tasks with a strong-reference registry (never `BackgroundTasks`), BYPASSRLS `admin_engine` short sessions, no session open during HTTP. The answer job retries its read until the save's `updated_at` is visible (the row may already exist from a `viewed` save). httpx 5 s timeout, 4 attempts, backoff on network errors and 5xx; failures are logged, never raised.
+- **Tests**: `tests/test_webhooks.py` (respx-mocked receiver; verifies body + signature). `conftest.py` stubs the three `schedule_*` functions by default.
+
 ### Reactive cards (LLM follow-ups on corrections)
 
 When a respondent corrects a `confirm-edit` card (`{confirmed: false, correction}` saved as `answered` — the ONLY trigger; notes/free-text/skips never trigger, and AI cards never re-trigger), `api/pulse_api/reactive.py` may insert up to 2 **recipient-scoped** follow-up cards (`cards.recipient_id` set, `source='ai'`, `generated_from_response_id` back-link — migration `0017`) into that respondent's deck live. SPEC §15 is the product spec; the design plan is `~/.claude/plans/when-a-respondent-makes-virtual-pelican.md`.

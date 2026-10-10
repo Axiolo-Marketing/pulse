@@ -34,6 +34,10 @@ class Organization(SQLModel, table=True):
             reactive follow-up generation feature (migration 0017).
             Defaults ``False`` — an org must be explicitly allowed before
             any of its engagements can turn the feature on.
+        webhook_url: Optional https URL that respondent events are POSTed
+            to (``pulse_api/webhooks.py``, migration 0021). Owner-managed.
+        webhook_secret: HMAC key the events are signed with. Never returned
+            by a read API. Delivery is off unless both are set.
         created_at: Insert timestamp (naive UTC).
     """
 
@@ -45,4 +49,6 @@ class Organization(SQLModel, table=True):
     logo_path: str | None = None
     branding: dict | None = Field(default=None, sa_column=Column(JSONB))
     reactive_cards_allowed: bool = False
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
     created_at: datetime = Field(default_factory=utcnow_naive)

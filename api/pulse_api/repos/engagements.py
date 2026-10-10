@@ -60,6 +60,20 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
     return dict(row) if row else None
 
 
+async def my_unopened_recipient_id(session: AsyncSession) -> str | None:
+    """The token-bound recipient's id while their deck has never been
+    opened (``first_opened_at`` unset), else ``None``. RLS
+    (``recipients_self_read``) narrows this to the caller's own row."""
+    result = await session.execute(
+        text(
+            "select id::text from public.recipients "
+            "where token = public.pulse_request_token() "
+            "  and first_opened_at is null limit 1"
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_my_org_logo_path(session: AsyncSession) -> str | None:
     """Return the owning org's current ``logo_path`` for the token's engagement.
 

@@ -430,6 +430,10 @@ export interface OrgDetails {
    * `true` — the engagement edit UI reads this to decide whether that
    * checkbox is selectable at all. */
   reactive_cards_allowed: boolean;
+  /** Outbound webhook URL respondent events are POSTed to (`null` = off). */
+  webhook_url: string | null;
+  /** Whether a signing secret is stored. The secret itself is never sent. */
+  webhook_secret_set: boolean;
 }
 
 export interface MemberRow {
@@ -910,6 +914,18 @@ export const orgsApi = {
 
   deleteLogo: (): Promise<void> =>
     request("/api/orgs/me/logo", { method: "DELETE" }),
+
+  /** Owner-only. Set the outbound webhook. Omit `secret` to keep the stored
+   * one (required the first time). Returns the refreshed `OrgDetails`. */
+  setWebhook: (args: { url: string; secret?: string }): Promise<OrgDetails> =>
+    request("/api/orgs/me/webhook", {
+      method: "PUT",
+      body: JSON.stringify(args),
+    }),
+
+  /** Owner-only. Clear the webhook URL and secret. */
+  clearWebhook: (): Promise<OrgDetails> =>
+    request("/api/orgs/me/webhook", { method: "DELETE" }),
 
   listMembers: (): Promise<MemberRow[]> => request("/api/orgs/me/members"),
 

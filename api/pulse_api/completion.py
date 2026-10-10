@@ -28,6 +28,9 @@ once — again only if the operator later adds cards and they finish those as
 well. Uses ``clock_timestamp()`` rather than ``now()`` so the comparison with
 ``cards.created_at`` holds inside a single long transaction too.
 
+A successful claim also schedules the outbound webhook's ``deck_completed``
+event (``pulse_api/webhooks.py``), whether or not the email then sends.
+
 All DB access uses the BYPASSRLS ``admin_engine`` on short sessions; emails
 are sent with no session open. Failures are logged and never surface to the
 respondent.
@@ -39,11 +42,13 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
+from pulse_api import webhooks
 from pulse_api.auth.email_messages import respondent_finished_email
 from pulse_api.config import settings
 from pulse_api.db import admin_engine
@@ -94,7 +99,7 @@ IS_DUE_SQL = f"select {_DUE} from public.recipients r where r.id = cast(:rid as 
 CLAIM_SQL = (
     "update public.recipients r set completed_notified_at = clock_timestamp() "
     f"where r.id = cast(:rid as uuid) and {_DUE} "
-    "returning r.id"
+    "returning r.completed_notified_at"
 )
 
 
@@ -137,13 +142,14 @@ async def wait_for_pending_checks() -> None:
         await asyncio.gather(*list(_pending_tasks), return_exceptions=True)
 
 
-async def _claim(recipient_id: str) -> bool:
+async def _claim(recipient_id: str) -> datetime | None:
+    """The claim's timestamp when this call claimed the alert, else None."""
     async with _admin_session() as session:
         claimed = (
             await session.execute(text(CLAIM_SQL), {"rid": recipient_id})
         ).scalar_one_or_none()
         await session.commit()
-    return claimed is not None
+    return claimed
 
 
 async def _load_alert(recipient_id: str) -> tuple[dict, list[dict]] | None:
@@ -223,15 +229,18 @@ async def run_completion_check(recipient_id: str, *, retry: bool = True) -> None
         return
     try:
         attempts = _CLAIM_MAX_ATTEMPTS if retry else 1
-        claimed = False
+        claimed_at: datetime | None = None
         for attempt in range(attempts):
-            if await _claim(recipient_id):
-                claimed = True
+            claimed_at = await _claim(recipient_id)
+            if claimed_at is not None:
                 break
             if attempt < attempts - 1:
                 await asyncio.sleep(_CLAIM_RETRY_SECONDS)
-        if not claimed:
+        if claimed_at is None:
             return
+        # The outbound webhook hears about it at the same moment, in its own
+        # task, so a failed or skipped email never holds it back.
+        webhooks.schedule_deck_completed(recipient_id, claimed_at)
 
         loaded = await _load_alert(recipient_id)
         if loaded is None:

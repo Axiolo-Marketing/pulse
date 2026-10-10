@@ -166,6 +166,10 @@ class OrgDetails(BaseModel):
     for the reactive-cards feature (see ``pulse_api.reactive`` module
     docstring for the full three-gate chain) — the admin UI reads this
     to decide whether the per-engagement toggle is selectable at all.
+
+    ``webhook_url`` / ``webhook_secret_set`` describe the org's outbound
+    webhook (``pulse_api.webhooks``). The secret itself is never returned,
+    only whether one is stored.
     """
 
     id: str
@@ -177,6 +181,8 @@ class OrgDetails(BaseModel):
     member_count: int
     pending_invite_count: int
     reactive_cards_allowed: bool = False
+    webhook_url: str | None = None
+    webhook_secret_set: bool = False
 
 
 class UpdateOrgRequest(BaseModel):
@@ -397,6 +403,8 @@ async def get_my_org(
         member_count=member_count,
         pending_invite_count=invite_count,
         reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
+        webhook_url=row.get("webhook_url"),
+        webhook_secret_set=bool(row.get("webhook_secret_set")),
     )
 
 
@@ -460,6 +468,8 @@ async def update_my_org(
         member_count=member_count,
         pending_invite_count=invite_count,
         reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
+        webhook_url=row.get("webhook_url"),
+        webhook_secret_set=bool(row.get("webhook_secret_set")),
     )
 
 
@@ -530,6 +540,8 @@ async def update_my_org_branding(
         member_count=member_count,
         pending_invite_count=invite_count,
         reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
+        webhook_url=row.get("webhook_url"),
+        webhook_secret_set=bool(row.get("webhook_secret_set")),
     )
 
 
@@ -722,6 +734,155 @@ async def delete_org_logo(
         metadata=None,
     )
     await session.commit()
+
+
+# ── Outbound webhook (Reba signals) ───────────────────────────────────────
+
+
+class WebhookSettings(BaseModel):
+    """Body for ``PUT /api/orgs/me/webhook``.
+
+    ``url`` must be https. ``secret`` may be omitted to keep the stored one
+    (changing only the URL); it is required when none is stored yet.
+    """
+
+    url: str = Field(min_length=9, max_length=2000)
+    secret: str | None = Field(default=None, min_length=16, max_length=500)
+
+    @field_validator("url")
+    @classmethod
+    def _https_only(cls, value: str) -> str:
+        """Accept only an absolute https URL with a host."""
+        from urllib.parse import urlsplit
+
+        value = value.strip()
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not parts.hostname:
+            raise ValueError("webhook url must be an https:// URL")
+        return value
+
+    @field_validator("secret")
+    @classmethod
+    def _strip_secret(cls, value: str | None) -> str | None:
+        """Trim stray whitespace from a pasted secret."""
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) < 16:
+            raise ValueError("secret must be at least 16 characters")
+        return value
+
+
+async def _org_details_after_write(
+    session: AsyncSession,
+    row: dict[str, object],
+    membership: OrganizationMembership,
+) -> OrgDetails:
+    """Build :class:`OrgDetails` from a row returned by an org write."""
+    member_count = await orgs_repo.member_count(session, membership.org_id)
+    invite_count = await orgs_repo.pending_invite_count(
+        session, membership.org_id
+    )
+    return OrgDetails(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        slug=str(row["slug"]),
+        logo_path=row.get("logo_path"),
+        branding=_branding_from_row(row),
+        role=_role_str(membership),
+        member_count=member_count,
+        pending_invite_count=invite_count,
+        reactive_cards_allowed=bool(row.get("reactive_cards_allowed")),
+        webhook_url=row.get("webhook_url"),
+        webhook_secret_set=bool(row.get("webhook_secret_set")),
+    )
+
+
+@router.put("/api/orgs/me/webhook", response_model=OrgDetails)
+async def set_org_webhook(
+    req: WebhookSettings,
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> OrgDetails:
+    """Owner-only. Set the org's outbound webhook URL and signing secret.
+
+    Respondent events (``pulse_api.webhooks``) are POSTed there, signed
+    with the secret. The secret is never returned; the audit row records
+    only the URL and whether the secret changed.
+    """
+    user, membership = org_member
+    previous = await orgs_repo.get_for_member(session, membership.org_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+    if req.secret is None and not previous.get("webhook_secret_set"):
+        raise HTTPException(
+            status_code=400, detail="a signing secret is required"
+        )
+    row = await orgs_repo.set_webhook(
+        session,
+        org_id=membership.org_id,
+        url=req.url,
+        secret=req.secret,
+        keep_secret=req.secret is None,
+    )
+    if row is None:  # pragma: no cover — previous fetch above guards
+        raise HTTPException(status_code=404, detail="organization not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="org.webhook_update",
+        target_type="org",
+        target_id=str(membership.org_id),
+        metadata={
+            "old_url": previous.get("webhook_url"),
+            "new_url": req.url,
+            "secret_changed": req.secret is not None,
+            "secret_set": True,
+        },
+    )
+    await session.commit()
+    return await _org_details_after_write(session, row, membership)
+
+
+@router.delete("/api/orgs/me/webhook", response_model=OrgDetails)
+async def clear_org_webhook(
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+    _owner_guard: OrganizationMembership = Depends(require_owner),
+    session: AsyncSession = Depends(get_org_scoped_session),
+) -> OrgDetails:
+    """Owner-only. Clear the webhook URL and secret; delivery stops."""
+    user, membership = org_member
+    previous = await orgs_repo.get_for_member(session, membership.org_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="organization not found")
+    row = await orgs_repo.set_webhook(
+        session, org_id=membership.org_id, url=None, secret=None
+    )
+    if row is None:  # pragma: no cover — previous fetch above guards
+        raise HTTPException(status_code=404, detail="organization not found")
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="org.webhook_update",
+        target_type="org",
+        target_id=str(membership.org_id),
+        metadata={
+            "old_url": previous.get("webhook_url"),
+            "new_url": None,
+            "secret_changed": bool(previous.get("webhook_secret_set")),
+            "secret_set": False,
+            "cleared": True,
+        },
+    )
+    await session.commit()
+    return await _org_details_after_write(session, row, membership)
 
 
 @router.get("/api/orgs/me/logo/{filename}")

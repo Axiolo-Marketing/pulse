@@ -234,6 +234,8 @@ foreign key. RLS scopes reads/writes by `pulse.org_id` GUC set per request.
 | name | text not null | Display name, owner-editable |
 | slug | text not null unique | URL-safe, immutable |
 | logo_path | text | Relative to `upload_dir`, set via logo upload endpoint |
+| webhook_url | text | Outbound webhook (§16), https only (check constraint); owner-set |
+| webhook_secret | text | HMAC signing key for the webhook; never returned by any read API |
 | created_at, updated_at | timestamptz | |
 
 **organization_memberships** — who can act in which org, at what role
@@ -888,7 +890,7 @@ the user action (atomic — a failed action rolls back the audit too). The
 | Engagement | `engagement.create`, `engagement.update`, `engagement.delete`, `engagement.reset` |
 | Card | `card.create`, `card.update`, `card.delete`, `card.import` |
 | Attachment | `attachment.upload` |
-| Org | `org.create`, `org.update`, `org.delete`, `org.logo_set`, `org.logo_remove` |
+| Org | `org.create`, `org.update`, `org.delete`, `org.logo_set`, `org.logo_remove`, `org.branding`, `org.webhook_update` |
 | Member | `member.invite`, `member.invite_revoke`, `member.role_change`, `member.remove`, `member.join` |
 | API key | `api_key.create`, `api_key.revoke` |
 
@@ -928,6 +930,8 @@ All routes JSON in/out. Auth is cookie or `Authorization: Bearer pulse_<key>`
 - `POST /api/orgs/me/logo` — multipart, ≤ 500 KB, png/jpeg/svg/webp
 - `DELETE /api/orgs/me/logo`
 - `GET /api/orgs/me/logo/{filename}` — served from disk
+- `PUT /api/orgs/me/webhook` — `{url, secret?}` (owner-only; https; secret ≥ 16 chars, omit to keep the stored one)
+- `DELETE /api/orgs/me/webhook` — clear URL + secret (owner-only)
 
 **Members** (`get_current_org_member`; mutations owner-only):
 - `GET /api/orgs/me/members`
@@ -1082,6 +1086,44 @@ loop is clickable locally without credentials.
 
 ---
 
+## 16. Outbound webhook (Reba signals) (v5)
+
+Each organization can set a webhook URL (https) and signing secret in
+Settings → Organization (owner-only; `PUT/DELETE /api/orgs/me/webhook`,
+audit `org.webhook_update`, migration 0021). With both set, Pulse POSTs one
+JSON event per respondent action so another Axiolo system (Reba, the SDR
+agent) learns what a respondent does with a deck. Pulse only sends; it never
+acts on a reply. Code: `api/pulse_api/webhooks.py`.
+
+**Signing**: header `X-Reba-Signature: t=<unix seconds>,v1=<lowercase hex
+HMAC-SHA256(key=secret, message="<t>.<raw body>")>`, computed per attempt
+(receivers reject anything older than 3 minutes). `Content-Type:
+application/json`.
+
+**Body** (every event): `id` (stable; receivers drop repeats), `kind`,
+`occurred_at` (ISO 8601 UTC), `engagement_id`, `email` (lowercase, when the
+recipient has one), `title` (engagement name).
+
+| kind | When | `id` | Extra fields |
+|---|---|---|---|
+| `deck_opened` | First `GET /api/me` for a recipient, once ever (`recipients.first_opened_at`) | `opened:<recipient_id>` | none |
+| `deck_answered` | An `answered` save on a confirm-edit, select or text card (AI follow-ups included) | `answered:<response_id>:<epoch of updated_at>` | `fact: {text, source: "your answers: <card title>"}`; confirm-edit adds `confirmed`, and a correction adds `corrects` (the original statement) |
+| `contact_shared` | An `answered` save on a contact-share card | `contact:<response_id>:<epoch of updated_at>` | `contact: {email, name, company?}` (company falls back to the role field) |
+| `deck_completed` | The completion-alert claim succeeds (§ completion alerts) | `completed:<recipient_id>:<epoch of the claim>` | none |
+
+`fact.text`: a confirmed confirm-edit sends the statement shown
+(`default_value`), a corrected one the correction; select and text cards
+send `"<card title>: <answer>"` (multi-select joined with commas, a note
+appended). Skips, drafts, uploads, document links and empty answers send
+nothing.
+
+**Delivery**: detached task after the request (same pattern as completion
+alerts); the answer job waits for the save's commit before sending. httpx,
+5 s timeout, up to 4 attempts with backoff on network errors and 5xx. Failures
+are logged and never surface to the respondent.
+
+---
+
 ## End of Specification
 
 Source of truth for the Pulse product as deployed. Each engagement has its own
@@ -1089,3 +1131,4 @@ brief in the database, edited from `/admin/`. Each tenant org has its own slice
 of every table, enforced by RLS.
 
 *Pulse — decisions, not paperwork.*
+

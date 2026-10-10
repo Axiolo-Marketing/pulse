@@ -44,6 +44,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "org.logo_set": "Updated logo",
   "org.logo_remove": "Removed logo",
   "org.branding": "Updated branding",
+  "org.webhook_update": "Updated webhook",
   "org.create": "Created organization",
   "org.delete": "Deleted organization",
   "member.invite": "Invited teammate",
@@ -152,6 +153,11 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
       return "updated the organization logo";
     case "org.logo_remove":
       return "removed the organization logo";
+    case "org.webhook_update":
+      if (m.cleared) return "turned off the outbound webhook";
+      return m.new_url
+        ? `set the outbound webhook to ${plain(m.new_url)}`
+        : "updated the outbound webhook";
     case "org.create":
       return `created organization ${quoted(m.name)}`;
     case "org.delete":
