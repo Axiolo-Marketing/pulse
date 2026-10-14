@@ -1,4 +1,5 @@
 ---
+import Favicon from "../components/Favicon.astro";
 import "../styles/theme.css";
 import BrandHeader from "../components/BrandHeader.astro";
 import InviteApp from "../components/invite/InviteApp.tsx";
@@ -13,7 +14,7 @@ const baseSlash = base.endsWith("/") ? base : `${base}/`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#2960F6" />
     <meta name="robots" content="noindex,nofollow" />
-    <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />
+    <Favicon />
     <title>Join your team · Pulse</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

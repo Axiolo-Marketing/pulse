@@ -1,4 +1,5 @@
 ---
+import Favicon from "../components/Favicon.astro";
 import "../styles/legal.css";
 const base = import.meta.env.BASE_URL ?? "/";
 const baseSlash = base.endsWith("/") ? base : `${base}/`;
@@ -11,7 +12,7 @@ const effectiveDate = "May 29, 2026";
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#2960F6" />
-    <link rel="icon" type="image/svg+xml" href={`${baseSlash}favicon.svg`} />
+    <Favicon />
     <title>Privacy Policy — Pulse by Axiolo</title>
     <meta name="description" content="Privacy Policy for Pulse, a decision-validation tool by Axiolo LLC." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

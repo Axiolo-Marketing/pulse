@@ -1,16 +1,21 @@
-<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <style>
-        #arrows { fill: #2960F8; }
-        @media (prefers-color-scheme: dark) {
-        #arrows { fill: #fff; }
-    }
-    </style>
-<g clip-path="url(#clip0_1382_70)">
-<path id="arrows" d="M100 80.7764L80.8574 100V69.2207H49.999L69.1416 50.0029H100V80.7764ZM49.999 69.2207L30.8584 88.4424V57.665H0L19.1406 38.4473H49.999V69.2207ZM88.2861 30.7725L69.1436 49.9971V19.2168H38.2852L57.4258 0H88.2861V30.7725Z" />
-</g>
-<defs>
-<clipPath id="clip0_1382_70">
-<rect width="100" height="100" fill="#fff"/>
-</clipPath>
-</defs>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>Pulse</title>
+  <defs>
+    <linearGradient id="brand" x1="7" y1="5" x2="57" y2="59" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2960F8" />
+      <stop offset="1" stop-color="#4F39F6" />
+    </linearGradient>
+    <clipPath id="letter">
+      <path d="M15 5H36C48 5 57 12.5 57 24C57 35.5 49 44 37 44H27Q24.5 44 24.5 46.5V54Q24.5 59 19 59H12Q7 59 7 54V13Q7 5 15 5Z" />
+    </clipPath>
+  </defs>
+  <path fill="url(#brand)" d="M15 5H36C48 5 57 12.5 57 24C57 35.5 49 44 37 44H27Q24.5 44 24.5 46.5V54Q24.5 59 19 59H12Q7 59 7 54V13Q7 5 15 5Z" />
+  <path
+    d="M6 27.8H16.7C18.2 27.8 18.7 23.6 20 23.6C21.5 23.6 22.6 28 24.4 28C26.6 28 27.1 22.5 27.9 17.8L29.4 10.6C29.7 9 30.2 9 30.4 10.6L33.2 36.5C33.4 38.6 34.6 38.8 35.3 36.5L38.2 28.9C39.1 26.1 40.1 23.8 41.8 23.8C43.7 23.8 44.7 27.8 47 27.8H58"
+    stroke="#FFFFFF"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    clip-path="url(#letter)"
+  />
 </svg>
