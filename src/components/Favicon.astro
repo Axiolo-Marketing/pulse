@@ -1,0 +1,17 @@
+---
+const base = import.meta.env.BASE_URL ?? "/";
+const baseSlash = base.endsWith("/") ? base : `${base}/`;
+---
+
+<link
+  rel="icon"
+  type="image/x-icon"
+  sizes="16x16 32x32 48x48"
+  href={`${baseSlash}favicon.ico`}
+/>
+<link
+  rel="icon"
+  type="image/svg+xml"
+  sizes="any"
+  href={`${baseSlash}favicon.svg`}
+/>
