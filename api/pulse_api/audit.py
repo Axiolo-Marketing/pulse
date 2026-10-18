@@ -32,7 +32,9 @@ string emitted by the route layer appears in this list.
 * ``card.create``           — single card added to an engagement
 * ``card.update``           — card field change
 * ``card.delete``           — card removed
-* ``card.import``           — bulk markdown import (one row per call)
+* ``card.import``           — bulk markdown import (one row per call;
+  ``replaced`` in metadata when it replaced the existing deck)
+* ``card.bulk_delete``      — several (or all) cards removed in one call
 * ``card.reactive_generate`` — reactive-cards engine auto-inserted an AI follow-up card
 * ``attachment.upload``     — admin uploaded an active-reference file
 * ``upload.transcribe``     — operator (re)queued transcription of a voice answer
@@ -84,6 +86,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "card.update",
         "card.delete",
         "card.import",
+        "card.bulk_delete",
         "card.reactive_generate",
         # Attachments + uploads
         "attachment.upload",

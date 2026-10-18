@@ -1,6 +1,7 @@
 """Repository helpers for `cards`."""
 import json
 import uuid
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -168,6 +169,50 @@ async def delete_card(session: AsyncSession, card_id: str) -> bool:
         {"cid": card_id},
     )
     return result.rowcount > 0
+
+
+async def delete_cards(
+    session: AsyncSession, engagement_id: str, card_ids: list[str] | None
+) -> tuple[list[str], list[str]]:
+    """Delete several cards on ONE engagement — the listed ``card_ids``, or
+    every card (shared + AI follow-ups) when ``card_ids`` is None. Ids that
+    aren't on this engagement are ignored, so a stale selection can't reach
+    another deck. Answers and uploads cascade.
+
+    Returns ``(titles, upload_paths)``: the deleted cards' titles (for the
+    audit row) and their uploads' storage paths, read before the cascade, for
+    the caller to remove from disk after it commits.
+    """
+    if not _valid_uuid(engagement_id):
+        return [], []
+    if card_ids is not None:
+        card_ids = [c for c in card_ids if _valid_uuid(c)]
+        if not card_ids:
+            return [], []
+    scope = "c.engagement_id = cast(:eid as uuid)"
+    params: dict[str, Any] = {"eid": engagement_id}
+    if card_ids is not None:
+        scope += " and c.id = any(cast(:ids as uuid[]))"
+        params["ids"] = card_ids
+    paths = (
+        await session.execute(
+            text(
+                "select u.storage_path from public.uploads u "
+                f"join public.cards c on c.id = u.card_id where {scope}"
+            ),
+            params,
+        )
+    ).scalars().all()
+    titles = (
+        await session.execute(
+            text(
+                f"delete from public.cards c where {scope} "
+                "returning c.title"
+            ),
+            params,
+        )
+    ).scalars().all()
+    return list(titles), list(paths)
 
 
 async def peek_title(session: AsyncSession, card_id: str) -> str | None:
