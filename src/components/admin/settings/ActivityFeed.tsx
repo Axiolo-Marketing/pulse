@@ -37,6 +37,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "card.update": "Edited card",
   "card.delete": "Deleted card",
   "card.import": "Imported cards",
+  "card.bulk_delete": "Deleted cards",
   "card.reactive_generate": "AI follow-up generated",
   "attachment.upload": "Uploaded attachment",
   "upload.transcribe": "Requested transcript",
@@ -114,7 +115,13 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
     case "card.delete":
       return `deleted card ${quoted(m.title)}`;
     case "card.import":
-      return `imported ${plural(num(m.count), "card")}`;
+      return m.replaced !== undefined
+        ? `replaced the deck (${plural(num(m.replaced), "card")} removed, ${plural(num(m.count), "card")} imported)`
+        : `imported ${plural(num(m.count), "card")}`;
+    case "card.bulk_delete":
+      return m.all
+        ? `deleted all ${plural(num(m.count), "card")}`
+        : `deleted ${plural(num(m.count), "card")}`;
     case "attachment.upload":
       return `uploaded attachment ${quoted(m.filename)}`;
     case "upload.transcribe":

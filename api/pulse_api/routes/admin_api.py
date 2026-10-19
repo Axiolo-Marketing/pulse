@@ -152,6 +152,25 @@ class UpdateCardRequest(BaseModel):
 
 class ImportMarkdownRequest(BaseModel):
     markdown: str = Field(min_length=1, max_length=500_000)
+    # Delete every existing card (and its answers) first, so a revised deck
+    # replaces the old one on the same engagement and respondent links.
+    replace: bool = False
+
+
+class BulkDeleteCardsRequest(BaseModel):
+    """Either specific ``card_ids`` or ``all=True`` (every card, including AI
+    follow-ups). Exactly one must be given."""
+
+    card_ids: list[str] | None = Field(default=None, max_length=1000)
+    all: bool = False
+
+    @model_validator(mode="after")
+    def _one_target(self) -> "BulkDeleteCardsRequest":
+        if self.all == (self.card_ids is not None):
+            raise ValueError("pass either card_ids or all=true")
+        if self.card_ids is not None and not self.card_ids:
+            raise ValueError("card_ids must not be empty")
+        return self
 
 
 # ── Engagement (engagements table) ─────────────────────────────────────────
@@ -802,6 +821,10 @@ async def import_cards_markdown(
     end of the existing deck — the repo's `coalesce(max(order_index),0)+1`
     insert sees prior uncommitted rows in the same session, so ordering
     is stable.
+
+    With ``replace``, every existing card (and its answers + uploads) is
+    deleted in the same transaction before the insert — only after the
+    markdown parsed cleanly, so a bad file never wipes the deck.
     """
     engagement = await engagements_repo.get_by_id(session, engagement_id)
     if engagement is None:
@@ -818,6 +841,12 @@ async def import_cards_markdown(
 
     user, membership = org_member
     org_id = str(membership.org_id)
+    replaced: list[str] = []
+    upload_paths: list[str] = []
+    if req.replace:
+        replaced, upload_paths = await cards_repo.delete_cards(
+            session, engagement_id, None
+        )
     created: list[dict[str, Any]] = []
     for card in parsed:
         row = await cards_repo.create_card(
@@ -843,10 +872,54 @@ async def import_cards_markdown(
         # One audit row per import call, not per card — the bulk import
         # is the operator's single user action. ``count`` lets the UI
         # render "Tom imported 14 cards" without joining card rows.
-        metadata={"count": len(created)},
+        metadata={"count": len(created), "replaced": len(replaced)}
+        if req.replace
+        else {"count": len(created)},
     )
     await session.commit()
-    return {"created": created}
+    for path in upload_paths:
+        storage.delete_upload(path)
+    return {"created": created, "replaced": len(replaced)}
+
+
+@router.post("/engagements/{engagement_id}/cards/bulk-delete")
+async def bulk_delete_cards(
+    engagement_id: str,
+    req: BulkDeleteCardsRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, int]:
+    """Delete several cards on one engagement (or all of them) in one go,
+    with every respondent's answers and uploads to them. The engagement and
+    its respondent links stay, so a revised deck can be added to the same
+    URLs. Ids not on this engagement are ignored. One audit row per call."""
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    user, membership = org_member
+    titles, upload_paths = await cards_repo.delete_cards(
+        session, engagement_id, None if req.all else req.card_ids
+    )
+    if titles:
+        await record_audit(
+            session,
+            org_id=membership.org_id,
+            user_id=user.id,
+            action="card.bulk_delete",
+            target_type="engagement",
+            target_id=engagement_id,
+            metadata={
+                "count": len(titles),
+                "all": req.all,
+                "titles": titles[:50],
+            },
+        )
+    await session.commit()
+    for path in upload_paths:
+        storage.delete_upload(path)
+    return {"deleted": len(titles)}
 
 
 @router.patch("/cards/{card_id}")

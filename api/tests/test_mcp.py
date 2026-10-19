@@ -576,6 +576,29 @@ async def test_create_engagement_then_import_deck_orders_cards(
     ).all()
     assert [(r[0], r[1]) for r in rows] == [("First", 1), ("Second", 2)]
 
+    # replace=true swaps the deck instead of appending.
+    replace_resp = await _mcp_call(
+        mcp_client,
+        "tools/call",
+        _tool_call_payload(
+            "pulse_import_deck",
+            {"engagement_id": client_id, "markdown": deck, "replace": True},
+        ),
+        api_key=raw,
+    )
+    assert replace_resp["result"].get("isError") is not True, replace_resp
+    assert _structured(replace_resp)["replaced"] == 2
+    rows = (
+        await db.execute(
+            text(
+                "select title, order_index from public.cards "
+                "where engagement_id = cast(:i as uuid) order by order_index"
+            ),
+            {"i": client_id},
+        )
+    ).all()
+    assert [(r[0], r[1]) for r in rows] == [("First", 1), ("Second", 2)]
+
 
 # 7. upload_attachment → add_card chain links the attachment.
 async def test_upload_attachment_then_add_card_links_path(

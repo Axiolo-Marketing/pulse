@@ -820,13 +820,27 @@ export const adminApi = {
   deleteCard: (id: string): Promise<void> =>
     request(`/api/admin/cards/${id}`, { method: "DELETE" }),
 
+  /** Delete the given cards on one engagement, or every card with `"all"`.
+   * Their answers and uploads go too; the respondent links stay. */
+  bulkDeleteCards: (
+    engagementId: string,
+    cards: string[] | "all",
+  ): Promise<{ deleted: number }> =>
+    request(`/api/admin/engagements/${engagementId}/cards/bulk-delete`, {
+      method: "POST",
+      body: JSON.stringify(cards === "all" ? { all: true } : { card_ids: cards }),
+    }),
+
+  /** `replace` deletes every existing card (and its answers) first, in the
+   * same transaction — only if the Markdown parses. */
   importMarkdownCards: (
     engagementId: string,
     markdown: string,
-  ): Promise<{ created: Card[] }> =>
+    replace = false,
+  ): Promise<{ created: Card[]; replaced?: number }> =>
     request(`/api/admin/engagements/${engagementId}/cards/import-markdown`, {
       method: "POST",
-      body: JSON.stringify({ markdown }),
+      body: JSON.stringify({ markdown, replace }),
     }),
 
   uploadAttachment: (file: File): Promise<{ path: string; mime_type: string }> => {

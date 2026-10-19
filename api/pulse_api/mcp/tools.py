@@ -379,11 +379,13 @@ async def pulse_delete_engagement(
     description=(
         "Bulk-import cards from a Pulse-card markdown document. Atomic: "
         "all cards land or none do. Cards append to the end of the "
-        "existing deck."
+        "existing deck. Pass `replace=true` to first delete every existing "
+        "card on the engagement, with every respondent's answers to them — "
+        "the respondent links stay the same."
     ),
 )
 async def pulse_import_deck(
-    ctx: Context, engagement_id: str, markdown: str
+    ctx: Context, engagement_id: str, markdown: str, replace: bool = False
 ) -> dict[str, Any]:
     user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
@@ -395,6 +397,12 @@ async def pulse_import_deck(
             detail = "\n".join(exc.errors) if exc.errors else str(exc)
             raise ValueError(detail) from exc
 
+        replaced: list[str] = []
+        upload_paths: list[str] = []
+        if replace:
+            replaced, upload_paths = await cards_repo.delete_cards(
+                session, engagement_id, None
+            )
         created: list[dict[str, Any]] = []
         for card in parsed:
             row = await cards_repo.create_card(
@@ -413,10 +421,14 @@ async def pulse_import_deck(
             action="card.import",
             target_type="engagement",
             target_id=engagement_id,
-            metadata={"count": len(created)},
+            metadata={"count": len(created), "replaced": len(replaced)}
+            if replace
+            else {"count": len(created)},
         )
         await session.commit()
-        return {"created": created}
+    for path in upload_paths:
+        storage.delete_upload(path)
+    return {"created": created, "replaced": len(replaced)}
 
 
 @mcp.tool(

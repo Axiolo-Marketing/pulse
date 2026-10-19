@@ -42,6 +42,7 @@ import { formatTimestamp } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,6 +62,11 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { BRIEF_TEMPLATE } from "./detail/brief-template";
 import { CardEditorDialog } from "./detail/CardEditorDialog";
+import {
+  cardDeletionDescription,
+  cardDeletionImpact,
+  type CardDeletionImpact,
+} from "./detail/card-deletion";
 import {
   ConfirmDialog,
   EditEngagementDialog,
@@ -264,6 +270,8 @@ function CardBlock({
   position,
   detail,
   transcription,
+  selected,
+  onSelectedChange,
   onEdit,
   onDelete,
   onCopyAnswer,
@@ -272,13 +280,26 @@ function CardBlock({
   position: number;
   detail: EngagementDetailData;
   transcription: TranscriptionControls;
+  selected: boolean;
+  onSelectedChange: (selected: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
   onCopyAnswer: (r: Recipient) => void;
 }): React.ReactElement {
   return (
-    <article className="rounded-lg border border-border">
+    <article
+      className={cn(
+        "rounded-lg border border-border",
+        selected && "border-foreground/40 ring-1 ring-foreground/10",
+      )}
+    >
       <div className="flex items-start gap-3 px-4 pt-4 pb-3">
+        <Checkbox
+          className="mt-1"
+          checked={selected}
+          onCheckedChange={(v) => onSelectedChange(v === true)}
+          aria-label={`Select card ${position}`}
+        />
         <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-medium tabular-nums text-muted-foreground">
           {position}
         </span>
@@ -472,6 +493,58 @@ function PreviewDialog({
   );
 }
 
+/** Asked when a Markdown file is imported into a deck that already has
+ * questions: append, or replace the whole deck (same respondent links). */
+function ImportModeDialog({
+  open,
+  existing,
+  impact,
+  pending,
+  onCancel,
+  onChoose,
+}: {
+  open: boolean;
+  existing: number;
+  impact: CardDeletionImpact;
+  pending: boolean;
+  onCancel: () => void;
+  onChoose: (replace: boolean) => void;
+}): React.ReactElement {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !pending && onCancel()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Import questions</DialogTitle>
+          <DialogDescription>
+            This engagement already has {existing} question
+            {existing === 1 ? "" : "s"}. Add the imported ones after them, or
+            replace the whole deck. Respondent links stay the same either way.
+          </DialogDescription>
+        </DialogHeader>
+        {impact.answers > 0 ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-foreground">
+            Replacing also deletes {impact.answers} answer
+            {impact.answers === 1 ? "" : "s"} from {impact.respondents} respondent
+            {impact.respondents === 1 ? "" : "s"}. This can't be undone.
+          </p>
+        ) : null}
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button variant="ghost" onClick={onCancel} disabled={pending}>
+            Cancel
+          </Button>
+          <Button variant="outline" onClick={() => onChoose(false)} disabled={pending}>
+            Add to the end
+          </Button>
+          <Button variant="destructive" onClick={() => onChoose(true)} disabled={pending}>
+            {pending ? <LoaderCircle className="animate-spin" /> : null}
+            Replace all {existing}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function EngagementDetail(): React.ReactElement {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -495,6 +568,10 @@ export function EngagementDetail(): React.ReactElement {
     { open: boolean; card?: CardModel } | null
   >(null);
   const [deletingCard, setDeletingCard] = useState<CardModel | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkTarget, setBulkTarget] = useState<string[] | "all" | null>(null);
+  // Markdown waiting on the add/replace choice (deck already has questions).
+  const [pendingImport, setPendingImport] = useState<string | null>(null);
 
   const resetMut = useMutation({
     mutationFn: () => adminApi.resetEngagement(id),
@@ -528,6 +605,20 @@ export function EngagementDetail(): React.ReactElement {
       toast.error("Couldn't delete the card.");
     },
   });
+  const bulkDeleteMut = useMutation({
+    mutationFn: (target: string[] | "all") => adminApi.bulkDeleteCards(id, target),
+    onSuccess: ({ deleted }) => {
+      void qc.invalidateQueries({ queryKey: ["engagement", id] });
+      void qc.invalidateQueries({ queryKey: ["engagements"] });
+      setSelected(new Set());
+      setBulkTarget(null);
+      toast.success(`${deleted} question${deleted === 1 ? "" : "s"} deleted.`);
+    },
+    onError: () => {
+      setBulkTarget(null);
+      toast.error("Couldn't delete those questions.");
+    },
+  });
   const transcribeMut = useMutation({
     mutationFn: (uploadId: string) => adminApi.transcribeUpload(uploadId),
     // The server claimed the row, but a refetch can race its commit. Mark
@@ -558,15 +649,21 @@ export function EngagementDetail(): React.ReactElement {
   // show them as an inline list beside the Import control.
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
   const importMut = useMutation({
-    mutationFn: (markdown: string) => adminApi.importMarkdownCards(id, markdown),
+    mutationFn: ({ markdown, replace }: { markdown: string; replace: boolean }) =>
+      adminApi.importMarkdownCards(id, markdown, replace),
     onMutate: () => setImportErrors(null),
-    onSuccess: ({ created }) => {
+    onSuccess: ({ created, replaced }, { replace }) => {
       void qc.invalidateQueries({ queryKey: ["engagement", id] });
+      void qc.invalidateQueries({ queryKey: ["engagements"] });
+      setPendingImport(null);
+      setSelected(new Set());
+      const n = `${created.length} card${created.length === 1 ? "" : "s"}`;
       toast.success(
-        `${created.length} card${created.length === 1 ? "" : "s"} imported`,
+        replace ? `Deck replaced: ${replaced ?? 0} removed, ${n} imported.` : `${n} imported`,
       );
     },
     onError: (err) => {
+      setPendingImport(null);
       const detail =
         err instanceof ApiError ? err.detail : "Could not import that Markdown.";
       const lines = detail
@@ -587,6 +684,21 @@ export function EngagementDetail(): React.ReactElement {
   const detail = q.data;
   const { engagement } = detail;
   const cards = [...detail.cards].sort((a, b) => a.order_index - b.order_index);
+  // Ignore stale ids (cards deleted elsewhere since they were ticked).
+  const selectedIds = cards.filter((c) => selected.has(c.id)).map((c) => c.id);
+  const allSelected = cards.length > 0 && selectedIds.length === cards.length;
+  function toggleCard(cardId: string, on: boolean): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(cardId);
+      else next.delete(cardId);
+      return next;
+    });
+  }
+  function onImportFile(markdown: string): void {
+    if (cards.length > 0) setPendingImport(markdown);
+    else importMut.mutate({ markdown, replace: false });
+  }
 
   async function copyAll(): Promise<void> {
     try {
@@ -728,6 +840,13 @@ export function EngagementDetail(): React.ReactElement {
                 <RotateCcw />
                 Reset all answers
               </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={cards.length === 0}
+                onSelect={() => setBulkTarget("all")}
+              >
+                <Trash2 />
+                Delete all questions
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
                 <Trash2 />
@@ -765,13 +884,44 @@ export function EngagementDetail(): React.ReactElement {
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section className="order-2 flex flex-col gap-3 lg:order-1">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground">
-              Questions & responses
-              <span className="ml-2 font-normal text-muted-foreground">
-                {cards.length}
-              </span>
-            </h2>
+          <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-3 pl-4">
+              {cards.length > 0 ? (
+                <Checkbox
+                  checked={
+                    allSelected ? true : selectedIds.length > 0 ? "indeterminate" : false
+                  }
+                  onCheckedChange={(v) =>
+                    setSelected(v === true ? new Set(cards.map((c) => c.id)) : new Set())
+                  }
+                  aria-label="Select all questions"
+                />
+              ) : null}
+              <h2 className="text-sm font-semibold text-foreground">
+                Questions & responses
+                <span className="ml-2 font-normal text-muted-foreground">
+                  {cards.length}
+                </span>
+              </h2>
+            </div>
+            {selectedIds.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">
+                  {selectedIds.length} selected
+                </span>
+                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBulkTarget(allSelected ? "all" : selectedIds)}
+                >
+                  <Trash2 />
+                  {allSelected ? "Delete all" : `Delete ${selectedIds.length}`}
+                </Button>
+              </div>
+            ) : (
             <div className="flex gap-2">
               <label className="inline-flex">
                 <input
@@ -782,7 +932,7 @@ export function EngagementDetail(): React.ReactElement {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
-                    if (file) void file.text().then((t) => importMut.mutate(t));
+                    if (file) void file.text().then(onImportFile);
                   }}
                 />
                 <span className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50">
@@ -799,6 +949,7 @@ export function EngagementDetail(): React.ReactElement {
                 Add card
               </Button>
             </div>
+            )}
           </div>
 
           {importErrors ? (
@@ -846,6 +997,8 @@ export function EngagementDetail(): React.ReactElement {
                 position={i + 1}
                 detail={detail}
                 transcription={transcriptionControls}
+                selected={selected.has(card.id)}
+                onSelectedChange={(on) => toggleCard(card.id, on)}
                 onEdit={() => setCardEditor({ open: true, card })}
                 onDelete={() => setDeletingCard(card)}
                 onCopyAnswer={(r) => void copyAnswer(card, r)}
@@ -910,6 +1063,36 @@ export function EngagementDetail(): React.ReactElement {
         pending={deleteCardMut.isPending}
         onConfirm={() => {
           if (deletingCard) deleteCardMut.mutate(deletingCard.id);
+        }}
+      />
+      <ConfirmDialog
+        open={bulkTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setBulkTarget(null);
+        }}
+        title={
+          bulkTarget === "all"
+            ? "Delete all questions?"
+            : `Delete ${bulkTarget?.length ?? 0} question${bulkTarget?.length === 1 ? "" : "s"}?`
+        }
+        description={
+          bulkTarget ? cardDeletionDescription(cardDeletionImpact(detail, bulkTarget)) : ""
+        }
+        confirmLabel={bulkTarget === "all" ? "Delete all questions" : "Delete questions"}
+        destructive
+        pending={bulkDeleteMut.isPending}
+        onConfirm={() => {
+          if (bulkTarget) bulkDeleteMut.mutate(bulkTarget);
+        }}
+      />
+      <ImportModeDialog
+        open={pendingImport !== null}
+        existing={cards.length}
+        impact={cardDeletionImpact(detail, "all")}
+        pending={importMut.isPending}
+        onCancel={() => setPendingImport(null)}
+        onChoose={(replace) => {
+          if (pendingImport !== null) importMut.mutate({ markdown: pendingImport, replace });
         }}
       />
       {cardEditor ? (
