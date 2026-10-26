@@ -95,7 +95,9 @@ export type ResponseType =
   | "long-text"
   | "file-upload"
   | "document-link"
-  | "contact-share";
+  | "contact-share"
+  /** Page blocks only: a table answered on a client document. */
+  | "grid";
 
 export type ResponseState =
   | "not_started"
@@ -156,6 +158,9 @@ export interface Engagement {
   reactive_cards_enabled?: boolean;
   /** Per-engagement opt-in to transcribe voice answers (admin views). */
   transcription_enabled?: boolean;
+  /** The client document respondents answer on (page blocks). When set,
+   * respondent links point there instead of the deck. */
+  page_url?: string | null;
 }
 
 export interface Card {
@@ -188,6 +193,22 @@ export interface Card {
    * resolves this back to a parent card id to place the follow-up right
    * after it. `null`/absent for operator cards. */
   generated_from_response_id?: string | null;
+  /** Page blocks: the `<pulse-*>` element id this card was synced from. */
+  block_id?: string | null;
+  /** Page blocks: a grid's rows and columns. */
+  block_config?: GridConfig | null;
+}
+
+export interface GridConfig {
+  rows: { key: string; label: string }[];
+  columns: { key: string; label: string; options: string[] | null }[];
+}
+
+export interface PageSyncResult {
+  created: string[];
+  updated: string[];
+  /** Synced earlier but no longer on the page (left in place). */
+  missing: string[];
 }
 
 /** One row from `GET /api/generations` — the client deck's poll surface for
@@ -555,6 +576,8 @@ export interface EngagementSummary {
   /** Per-respondent breakdown (ordered by when they were added). Each carries
    * its own `answered` count, shown against `total_cards` as a badge. */
   recipients: EngagementSummaryRecipient[];
+  /** The client document respondents answer on (page blocks). */
+  page_url?: string | null;
 }
 
 /** A respondent as it appears in the engagement-list rollup — enough to show
@@ -658,6 +681,8 @@ export interface UpdateEngagementArgs {
    * deployment has no transcription provider (see
    * `EngagementDetail.transcription_available`). */
   transcription_enabled?: boolean;
+  /** The client document respondents answer on; "" clears it. */
+  page_url?: string;
 }
 
 export interface CreateCardArgs {
@@ -819,6 +844,18 @@ export const adminApi = {
 
   deleteCard: (id: string): Promise<void> =>
     request(`/api/admin/cards/${id}`, { method: "DELETE" }),
+
+  /** Create/update this engagement's cards from a page's `<pulse-*>` blocks.
+   * Re-syncing rewords cards in place and keeps answers. */
+  syncPage: (
+    engagementId: string,
+    html: string,
+    pageUrl?: string,
+  ): Promise<PageSyncResult> =>
+    request(`/api/admin/engagements/${engagementId}/page`, {
+      method: "POST",
+      body: JSON.stringify(pageUrl === undefined ? { html } : { html, page_url: pageUrl }),
+    }),
 
   /** Delete the given cards on one engagement, or every card with `"all"`.
    * Their answers and uploads go too; the respondent links stay. */

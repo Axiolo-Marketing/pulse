@@ -23,7 +23,12 @@ export async function copyText(
   return t;
 }
 
-/** A respondent's deck URL for their magic-link token. */
-export function deckUrl(token: string): string {
+/** A respondent's private link: to the engagement's page when it has one
+ * (page blocks), else to the deck. Mirrors `reminders.deck_url` server-side. */
+export function deckUrl(token: string, pageUrl?: string | null): string {
+  if (pageUrl) {
+    const base = pageUrl.split("#")[0];
+    return `${base}${base.includes("?") ? "&" : "?"}t=${token}`;
+  }
   return `${window.location.origin}/?t=${token}`;
 }

@@ -67,4 +67,6 @@ class Card(SQLModel, table=True):
     generated_from_response_id: uuid.UUID | None = Field(
         default=None, foreign_key="responses.id"
     )
+    block_id: str | None = None
+    block_config: Any | None = Field(default=None, sa_column=Column(JSONB))
     created_at: datetime = Field(default_factory=utcnow_naive)

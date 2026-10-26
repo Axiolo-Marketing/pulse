@@ -44,7 +44,7 @@ async def run() -> int:
         )
         for r in due:
             subject, body = engagement_reminder_email(
-                deck_url=reminders_lib.deck_url(r["token"]),
+                deck_url=reminders_lib.deck_url(r["token"], r.get("page_url")),
                 org_name=str(r["org_name"]),
                 recipient_name=r.get("name"),
                 engagement_name=r.get("engagement_name"),

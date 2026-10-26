@@ -11,6 +11,7 @@ import {
   type UploadRow,
 } from "@/lib/api";
 import { applyBranding } from "@/lib/branding";
+import { deckUrl } from "@/lib/clipboard";
 import {
   hasTriggerPotential,
   orderDeckCards,
@@ -82,6 +83,12 @@ export default function DeckApp(): React.ReactElement {
       let engagement: Engagement;
       try {
         engagement = await clientApi.me(token);
+        // This engagement is answered on a client document (page blocks):
+        // send the respondent there with the same token.
+        if (engagement.page_url) {
+          window.location.replace(deckUrl(token, engagement.page_url));
+          return;
+        }
       } catch (err) {
         if (cancelled) return;
         // Only an auth/not-found answer means the link is bad; a network

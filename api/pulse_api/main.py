@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api.config import settings
 from pulse_api.db import get_session
+from pulse_api.embed_cors import EmbedCORSMiddleware
 from pulse_api.mcp.oauth.routes import oauth_root_routes
 from pulse_api.mcp.server import lifespan as mcp_lifespan
 from pulse_api.mcp.server import mcp_app
@@ -23,6 +24,7 @@ from pulse_api.routes import admin_api as admin_api_routes
 from pulse_api.routes import attachments as attachments_routes
 from pulse_api.routes import auth as auth_routes
 from pulse_api.routes import client_api as client_api_routes
+from pulse_api.routes import embed as embed_routes
 from pulse_api.routes import invites as invites_routes
 from pulse_api.routes import oauth as oauth_routes
 from pulse_api.routes import orgs as orgs_routes
@@ -71,10 +73,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "X-Pulse-Token", "Authorization"],
 )
+# Client documents on other origins (see pulse_api/embed_cors.py). Added
+# after CORSMiddleware so it sits outside it and answers embed preflights.
+app.add_middleware(EmbedCORSMiddleware, origins=lambda: settings.embed_origins)
 
 app.include_router(auth_routes.router)
 app.include_router(oauth_routes.router)
 app.include_router(client_api_routes.router)
+app.include_router(embed_routes.router)
 app.include_router(uploads_routes.router)
 app.include_router(admin_api_routes.router)
 app.include_router(attachments_routes.admin_router)

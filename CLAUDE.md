@@ -92,6 +92,16 @@ An engagement is a shared deck of `cards`; each **recipient** (`recipients` tabl
 - **Reminders** (scheduled): the daily `pulse_api.jobs.send_reminders` job (cron `/etc/cron.d/pulse-reminders`, BYPASSRLS `admin_engine`) nudges invited-but-unfinished recipients. Gated by `settings.reminders_enabled` (env `REMINDERS_ENABLED`, **off by default**) + a per-engagement `engagements.reminders_enabled` pause; eligibility honors inactivity/cadence/max day thresholds (all env-configurable). `recipients_repo.list_due_reminders` is the WHERE-clause that decides who's due.
 - **Unsubscribe**: every invite/reminder email carries a signed per-recipient unsubscribe link (own salt `pulse-reminder-unsubscribe`, helpers in `pulse_api/reminders.py`). Public `POST /api/reminders/unsubscribe` (rate-limited, BYPASSRLS) + `src/pages/unsubscribe.astro` flip `unsubscribed_at`.
 
+### Page blocks (answers collected on a client document)
+
+A client document (e.g. a QuickHost page) can collect answers instead of the deck. The page marks inputs with `<pulse-question id=…>` / `<pulse-grid id=…>` (rows/columns as `<pulse-row>` / `<pulse-col options="a|b">` children) and loads `public/embed/pulse-blocks.js` (served at `/embed/pulse-blocks.js`). Markup contract: `api/pulse_api/page_blocks.py` docstring.
+
+- **Sync**: `POST /api/admin/engagements/{id}/page` `{html, page_url?}` (or upload the `.html` via the questions list's Import) parses the blocks server-side (no URL fetching) and upserts one card per block on `cards.block_id` (migration `0022`): rewording keeps answers, removed blocks are reported `missing` (not deleted), a type change 400s. Grid blocks are `response_type='grid'`, rows/columns in `cards.block_config`, answers `{"cells": {row: {col: value}}}`. Audit `engagement.page_sync`.
+- **Respondent links**: `engagements.page_url` (Edit engagement → "Answer on a web page", or the sync body) makes invite/reminder/copy links `{page_url}?t=<token>` (`reminders.deck_url` / `clipboard.deckUrl`), and the deck redirects there.
+- **Embed API** (`routes/embed.py`): `GET /api/embed/blocks`, `POST /api/embed/responses {block_id, value}` — token-authed like the deck, saves via `client_api.save_response` (alerts, webhooks, progress unchanged); an emptied answer goes back to `viewed`. `page_blocks.clean_answer` is the validation boundary.
+- **CORS**: `pulse_api/embed_cors.py` answers ONLY `/api/embed/*`, ONLY for `EMBED_ALLOWED_ORIGINS` (comma list, `https://*.quickhost.ing` wildcard), never with credentials.
+- **Tests**: `tests/test_page_blocks.py`, `src/lib/grid.test.ts`.
+
 ### Completion alerts (owner email when a respondent finishes)
 
 When a respondent's last visible card (shared deck + their own AI follow-ups) gets an `answered`/`skipped` response, the engagement owner is emailed once ("Jane finished 2027 Revenue Plan", link to `/admin/#/client/{id}`). Owner = `engagements.created_by` while still a member of the org, else every org owner. Code: `api/pulse_api/completion.py`; template `respondent_finished_email`.

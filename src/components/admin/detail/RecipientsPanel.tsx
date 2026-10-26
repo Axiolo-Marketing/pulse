@@ -415,12 +415,15 @@ export function RecipientsPanel({
   clientName,
   recipients,
   hasCards,
+  pageUrl,
 }: {
   engagementId: string;
   clientId?: string;
   clientName?: string;
   recipients: Recipient[];
   hasCards: boolean;
+  /** Respondent links open this page instead of the deck (page blocks). */
+  pageUrl?: string | null;
 }): React.ReactElement {
   const invalidate = useInvalidateRecipients(engagementId);
   const [adding, setAdding] = useState(false);
@@ -482,7 +485,7 @@ export function RecipientsPanel({
   });
 
   async function copyLink(r: Recipient): Promise<void> {
-    const url = deckUrl(r.token);
+    const url = deckUrl(r.token, pageUrl);
     try {
       await copyText(url);
       toast.success(`Link copied for ${recipientLabel(r)}`, { description: url });

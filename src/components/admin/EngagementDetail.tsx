@@ -147,6 +147,7 @@ const RESPONSE_TYPE_LABELS: Record<string, string> = {
   "document-link": "Link",
   "contact-share": "Contact",
   "file-upload": "File upload",
+  grid: "Grid (page)",
 };
 
 const MARKDOWN_PROSE = cn(
@@ -313,7 +314,9 @@ function CardBlock({
               responses={detail.responses}
             />
           </div>
-          <p className="mt-0.5 text-sm text-muted-foreground">{card.question}</p>
+          {card.question.trim() !== card.title.trim() ? (
+            <p className="mt-0.5 text-sm text-muted-foreground">{card.question}</p>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {card.category ? (
               <span className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
@@ -648,6 +651,28 @@ export function EngagementDetail(): React.ReactElement {
   // Per-card parse errors come back newline-joined in the 400's detail;
   // show them as an inline list beside the Import control.
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
+  const pageSyncMut = useMutation({
+    mutationFn: (html: string) => adminApi.syncPage(id, html),
+    onMutate: () => setImportErrors(null),
+    onSuccess: ({ created, updated, missing }) => {
+      void qc.invalidateQueries({ queryKey: ["engagement", id] });
+      void qc.invalidateQueries({ queryKey: ["engagements"] });
+      const parts = [
+        created.length ? `${created.length} added` : null,
+        updated.length ? `${updated.length} updated` : null,
+      ].filter(Boolean);
+      toast.success(`Page synced: ${parts.join(", ") || "no changes"}.`, {
+        description: missing.length
+          ? `${missing.length} question${missing.length === 1 ? " is" : "s are"} no longer on the page (kept): ${missing.join(", ")}`
+          : undefined,
+      });
+    },
+    onError: (err) => {
+      const detail =
+        err instanceof ApiError ? err.detail : "Could not read that page.";
+      setImportErrors(detail.split("\n").map((l) => l.trim()).filter(Boolean));
+    },
+  });
   const importMut = useMutation({
     mutationFn: ({ markdown, replace }: { markdown: string; replace: boolean }) =>
       adminApi.importMarkdownCards(id, markdown, replace),
@@ -695,7 +720,13 @@ export function EngagementDetail(): React.ReactElement {
       return next;
     });
   }
-  function onImportFile(markdown: string): void {
+  function onImportFile(file: File, text: string): void {
+    // A client document with <pulse-*> blocks syncs its questions instead.
+    if (/\.html?$/i.test(file.name) || file.type === "text/html") {
+      pageSyncMut.mutate(text);
+      return;
+    }
+    const markdown = text;
     if (cards.length > 0) setPendingImport(markdown);
     else importMut.mutate({ markdown, replace: false });
   }
@@ -926,22 +957,22 @@ export function EngagementDetail(): React.ReactElement {
               <label className="inline-flex">
                 <input
                   type="file"
-                  accept=".md,.markdown,.txt,text/markdown,text/plain"
+                  accept=".md,.markdown,.txt,.html,.htm,text/markdown,text/plain,text/html"
                   className="peer sr-only"
-                  disabled={importMut.isPending}
+                  disabled={importMut.isPending || pageSyncMut.isPending}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
-                    if (file) void file.text().then(onImportFile);
+                    if (file) void file.text().then((t) => onImportFile(file, t));
                   }}
                 />
                 <span className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50">
-                  {importMut.isPending ? (
+                  {importMut.isPending || pageSyncMut.isPending ? (
                     <LoaderCircle className="size-4 animate-spin" />
                   ) : (
                     <Upload className="size-4" />
                   )}
-                  {importMut.isPending ? "Importing…" : "Import"}
+                  {importMut.isPending || pageSyncMut.isPending ? "Importing…" : "Import"}
                 </span>
               </label>
               <Button size="sm" onClick={() => setCardEditor({ open: true })}>
@@ -1014,6 +1045,7 @@ export function EngagementDetail(): React.ReactElement {
             clientName={engagement.name}
             recipients={detail.recipients}
             hasCards={detail.cards.length > 0}
+            pageUrl={engagement.page_url}
           />
           <BriefCard engagementId={id} brief={engagement.brief} />
         </aside>

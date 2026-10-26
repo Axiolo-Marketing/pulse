@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { gridTable, type GridTable } from "@/lib/grid";
 import { cn } from "@/lib/utils";
 
 export function rcKey(recipientId: string, cardId: string): string {
@@ -218,6 +219,41 @@ function VoiceTranscript({
   );
 }
 
+/** A page-block grid answer as a compact table (scrolls sideways on phones). */
+function GridAnswer({ table }: { table: GridTable }): React.ReactElement {
+  if (table.filled === 0) return <Muted>Nothing filled in yet.</Muted>;
+  return (
+    <div className="-mx-1 overflow-x-auto">
+      <table className="w-full min-w-[32rem] border-collapse text-xs">
+        <thead>
+          <tr>
+            <th className="px-1 py-1.5" />
+            {table.columns.map((c) => (
+              <th key={c} className="px-1 py-1.5 text-left font-medium text-muted-foreground">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((r) => (
+            <tr key={r.label} className="border-t border-border">
+              <th scope="row" className="px-1 py-1.5 text-left font-medium">
+                {r.label}
+              </th>
+              {r.cells.map((c, i) => (
+                <td key={i} className={c ? "px-1 py-1.5" : "px-1 py-1.5 text-muted-foreground"}>
+                  {c || "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function ResponseBody({
   card,
   response,
@@ -279,6 +315,9 @@ export function ResponseBody({
       case "short-text":
       case "long-text":
         content = <p className="whitespace-pre-wrap">{v.text ?? ""}</p>;
+        break;
+      case "grid":
+        content = <GridAnswer table={gridTable(card, response.response_value)} />;
         break;
       case "document-link":
         content = v.url ? (

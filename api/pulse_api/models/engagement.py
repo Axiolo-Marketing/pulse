@@ -49,6 +49,7 @@ class Engagement(SQLModel, table=True):
     created_by: uuid.UUID | None = Field(default=None, foreign_key="users.id")
     engagement_name: str | None = None
     brief: str | None = None
+    page_url: str | None = None
     voice_enabled: bool = False
     reminders_enabled: bool = True
     reactive_cards_enabled: bool = False

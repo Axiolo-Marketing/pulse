@@ -51,6 +51,7 @@ export function EditEngagementDialog({
   const [transcribe, setTranscribe] = useState(
     engagement.transcription_enabled ?? false,
   );
+  const [pageUrl, setPageUrl] = useState(engagement.page_url ?? "");
   const [error, setError] = useState<string | null>(null);
 
   // Org-level gate for the reactive-cards checkbox — superadmin-managed,
@@ -66,6 +67,7 @@ export function EditEngagementDialog({
       setReminders(engagement.reminders_enabled ?? false);
       setReactiveCards(engagement.reactive_cards_enabled ?? false);
       setTranscribe(engagement.transcription_enabled ?? false);
+      setPageUrl(engagement.page_url ?? "");
       setError(null);
     }
   }, [open, engagement]);
@@ -76,6 +78,7 @@ export function EditEngagementDialog({
         engagement_name: name.trim() || null,
         voice_enabled: voice,
         reminders_enabled: reminders,
+        page_url: pageUrl.trim(),
         // Only sent when the org allows it — never resend a stale `true`
         // for an org whose access has since been revoked (the checkbox is
         // disabled in that case; see `reactiveCardsAllowed` below).
@@ -118,6 +121,21 @@ export function EditEngagementDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Q3 brand refresh"
+            />
+          </Field>
+          <Field
+            id="ee-page-url"
+            label="Answer on a web page"
+            optional
+            hint="If respondents answer on a client document (Pulse page blocks), paste its address. Their links will open that page instead of the deck."
+          >
+            <Input
+              id="ee-page-url"
+              type="url"
+              inputMode="url"
+              value={pageUrl}
+              onChange={(e) => setPageUrl(e.target.value)}
+              placeholder="https://client-doc.quickhost.ing"
             />
           </Field>
           <div className="flex flex-col gap-2">

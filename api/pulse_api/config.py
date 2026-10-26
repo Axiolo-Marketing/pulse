@@ -161,6 +161,15 @@ class Settings(BaseSettings):
     reactive_max_retries: int = 2
 
     cors_allowed_origin: str = "http://localhost:4321"
+    # Origins whose pages may call the embed API (/api/embed/*) with a
+    # respondent token — comma-separated; "https://*.quickhost.ing" allows
+    # any subdomain. Empty = same-origin only.
+    embed_allowed_origins: str = ""
+
+    @property
+    def embed_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.embed_allowed_origins.split(",") if o.strip()]
+
     upload_dir: Path = Path("/var/lib/pulse/uploads")
     max_upload_bytes: int = 26_214_400
     # Per-recipient quota, checked in addition to the per-file cap above.
