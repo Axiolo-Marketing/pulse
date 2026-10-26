@@ -161,6 +161,9 @@ export interface Engagement {
   /** The client document respondents answer on (page blocks). When set,
    * respondent links point there instead of the deck. */
   page_url?: string | null;
+  /** Respondents edit one shared set of answers (every change logged)
+   * instead of answering separately. */
+  shared_answers?: boolean;
 }
 
 export interface Card {
@@ -646,8 +649,32 @@ export interface EngagementDetail {
   cards: Card[];
   responses: ClientResponse[];
   uploads: UploadRow[];
+  /** Shared-answers mode: the current answer per card (empty otherwise). */
+  shared_answers?: SharedAnswer[];
+  /** Shared-answers mode: every change, newest first. */
+  answer_events?: AnswerEvent[];
   /** Whether this server can transcribe voice answers at all. */
   transcription_available?: boolean;
+}
+
+export interface SharedAnswer {
+  card_id: string;
+  value: unknown;
+  updated_at: string;
+  /** Name (or email) of who changed it last; null if they were removed. */
+  updated_by_name: string | null;
+}
+
+export interface AnswerEvent {
+  id: string;
+  card_id: string;
+  recipient_id: string | null;
+  /** Name or email at the time of the change (kept if they're removed). */
+  actor_label: string;
+  /** `{text}` for a question, or `{cells}` with only the changed cells
+   * ("" = cleared). */
+  change: { text?: string; cells?: Record<string, Record<string, string>> } | null;
+  created_at: string;
 }
 
 export interface CreateEngagementArgs {
@@ -683,6 +710,7 @@ export interface UpdateEngagementArgs {
   transcription_enabled?: boolean;
   /** The client document respondents answer on; "" clears it. */
   page_url?: string;
+  shared_answers?: boolean;
 }
 
 export interface CreateCardArgs {

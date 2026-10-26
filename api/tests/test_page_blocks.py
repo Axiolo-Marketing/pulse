@@ -81,14 +81,27 @@ def test_parse_rejects_bad_pages(html: str, expected: str) -> None:
     assert expected in str(exc.value)
 
 
-def test_clean_answer_validates_grid_cells() -> None:
+def test_grid_changes_merge_cell_by_cell() -> None:
     _, g = page_blocks.parse_blocks(PAGE)
     card = {"response_type": "grid", "block_config": g.card_fields()["block_config"]}
-    ok = page_blocks.clean_answer(
-        card, {"cells": {"crm": {"how-it-s-staffed": "Open seat", "does-the-work": " "}}}
+    change = page_blocks.clean_change(
+        card, {"cells": {"crm": {"how-it-s-staffed": "Open seat", "does-the-work": " Pat "}}}
     )
-    assert ok == {"cells": {"crm": {"how-it-s-staffed": "Open seat"}}}
-    assert page_blocks.clean_answer(card, {"cells": {}}) is None
+    assert change == {"cells": {"crm": {"how-it-s-staffed": "Open seat", "does-the-work": "Pat"}}}
+    current = {"cells": {"lead-response": {"does-the-work": "Sam"}}}
+    merged = page_blocks.apply_change(card, current, change)
+    assert merged == {
+        "cells": {
+            "lead-response": {"does-the-work": "Sam"},
+            "crm": {"how-it-s-staffed": "Open seat", "does-the-work": "Pat"},
+        }
+    }
+    # "" clears a cell; clearing the last one empties the answer.
+    cleared = page_blocks.apply_change(
+        card, {"cells": {"crm": {"does-the-work": "Pat"}}},
+        page_blocks.clean_change(card, {"cells": {"crm": {"does-the-work": ""}}}),
+    )
+    assert cleared is None
     for bad in (
         {"cells": {"nope": {}}},
         {"cells": {"crm": {"nope": "x"}}},
@@ -97,7 +110,15 @@ def test_clean_answer_validates_grid_cells() -> None:
         {"text": "x"},
     ):
         with pytest.raises(ValueError):
-            page_blocks.clean_answer(card, bad)
+            page_blocks.clean_change(card, bad)
+
+
+def test_question_changes_replace_the_text() -> None:
+    card = {"response_type": "long-text"}
+    assert page_blocks.apply_change(card, {"text": "old"}, {"text": "new"}) == {"text": "new"}
+    assert page_blocks.apply_change(card, {"text": "old"}, {"text": ""}) is None
+    with pytest.raises(ValueError):
+        page_blocks.clean_change(card, {"text": "x" * 20_001})
 
 
 def test_deck_url_points_at_the_page_when_set() -> None:
@@ -338,3 +359,200 @@ async def test_embed_cors_only_for_allowed_origins_and_embed_paths(
         headers={"Origin": "https://avenus.quickhost.ing", "X-Pulse-Token": "0" * 16},
     )
     assert simple.headers["access-control-allow-origin"] == "https://avenus.quickhost.ing"
+
+
+# ── shared answers ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def shared_admin_session(db_conn, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bind the embed API's BYPASSRLS session to the test connection. It runs
+    inside the request (not a detached task), so it must not take
+    ``db_conn_lock`` (the anon session holds it); it switches to the owner
+    role for its queries and puts the request's role back afterwards."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from pulse_api.routes import embed
+
+    @asynccontextmanager
+    async def _override():
+        prev = (await db_conn.execute(text("select current_user"))).scalar_one()
+        await db_conn.execute(text("reset role"))
+        factory = async_sessionmaker(bind=db_conn, expire_on_commit=False, class_=AsyncSession)
+        try:
+            async with factory() as session:
+                yield session
+        finally:
+            if prev in ("pulse_anon", "pulse_member"):
+                await db_conn.execute(text(f"set local role {prev}"))
+
+    monkeypatch.setattr(embed, "_admin_session", _override)
+
+
+async def _shared_engagement(
+    admin: AsyncClient, db: AsyncSession, seed_client: dict[str, str]
+) -> dict[str, str]:
+    """Synced PAGE in shared mode with two respondents, Adam (seeded) and Chachi."""
+    eid = seed_client["id"]
+    await _sync(admin, eid)
+    r = await admin.patch(f"/api/admin/engagements/{eid}", json={"shared_answers": True})
+    assert r.json()["shared_answers"] is True
+    await db.execute(
+        text("update public.recipients set name = 'Adam' where id = cast(:r as uuid)"),
+        {"r": seed_client["recipient_id"]},
+    )
+    chachi = (
+        await admin.post(
+            f"/api/admin/engagements/{eid}/recipients",
+            json={"email": "chachi@example.com", "name": "Chachi"},
+        )
+    ).json()
+    return {"eid": eid, "adam": seed_client["token"], "chachi": chachi["token"]}
+
+
+async def _save(admin: AsyncClient, token: str, block: str, value: dict):
+    r = await admin.post(
+        "/api/embed/responses",
+        headers={"X-Pulse-Token": token},
+        json={"block_id": block, "value": value},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_shared_answers_overwrite_and_log_every_change(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    shared_admin_session: None,
+) -> None:
+    e = await _shared_engagement(admin_authed, db, seed_client)
+
+    await _save(admin_authed, e["adam"], "budget", {"text": "$10k"})
+    out = await _save(admin_authed, e["chachi"], "budget", {"text": "$15k"})
+    assert out["value"] == {"text": "$15k"}
+    assert out["updated_by"] == "Chachi"
+
+    # Different rows of the grid, edited by different people, both survive.
+    await _save(admin_authed, e["adam"], "ownership", {"cells": {"crm": {"does-the-work": "Pat"}}})
+    await _save(
+        admin_authed,
+        e["chachi"],
+        "ownership",
+        {"cells": {"lead-response": {"how-it-s-staffed": "Open seat"}}},
+    )
+
+    # Adam's page shows Chachi's overwrite and the merged grid.
+    seen = (
+        await admin_authed.get("/api/embed/blocks", headers={"X-Pulse-Token": e["adam"]})
+    ).json()
+    assert seen["shared"] is True
+    assert seen["blocks"]["budget"]["value"] == {"text": "$15k"}
+    assert seen["blocks"]["budget"]["updated_by"] == "Chachi"
+    assert seen["blocks"]["ownership"]["value"] == {
+        "cells": {
+            "crm": {"does-the-work": "Pat"},
+            "lead-response": {"how-it-s-staffed": "Open seat"},
+        }
+    }
+
+    # Admin: current answers plus the full trail, newest first.
+    detail = (await admin_authed.get(f"/api/admin/engagements/{e['eid']}")).json()
+    assert len(detail["shared_answers"]) == 2
+    trail = [(ev["actor_label"], ev["change"]) for ev in detail["answer_events"]]
+    assert trail == [
+        ("Chachi", {"cells": {"lead-response": {"how-it-s-staffed": "Open seat"}}}),
+        ("Adam", {"cells": {"crm": {"does-the-work": "Pat"}}}),
+        ("Chachi", {"text": "$15k"}),
+        ("Adam", {"text": "$10k"}),
+    ]
+    # Shared mode doesn't write per-respondent responses.
+    assert detail["responses"] == []
+
+    # Clearing logs too, and the answer disappears.
+    cleared = await _save(admin_authed, e["adam"], "budget", {"text": ""})
+    assert cleared["state"] == "viewed"
+    detail = (await admin_authed.get(f"/api/admin/engagements/{e['eid']}")).json()
+    assert len(detail["shared_answers"]) == 1
+    assert detail["answer_events"][0]["change"] == {"text": ""}
+
+    # Reset clears answers and history.
+    r = await admin_authed.post(f"/api/admin/engagements/{e['eid']}/reset")
+    assert r.status_code == 200
+    detail = (await admin_authed.get(f"/api/admin/engagements/{e['eid']}")).json()
+    assert detail["shared_answers"] == [] and detail["answer_events"] == []
+
+
+async def test_removed_respondent_stays_in_the_log(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    shared_admin_session: None,
+) -> None:
+    e = await _shared_engagement(admin_authed, db, seed_client)
+    await _save(admin_authed, e["chachi"], "budget", {"text": "$15k"})
+    rid = (
+        await db.execute(
+            text("select id::text from public.recipients where token = :t"), {"t": e["chachi"]}
+        )
+    ).scalar_one()
+    await admin_authed.delete(f"/api/admin/engagements/{e['eid']}/recipients/{rid}")
+    detail = (await admin_authed.get(f"/api/admin/engagements/{e['eid']}")).json()
+    assert detail["answer_events"][0]["actor_label"] == "Chachi"
+    assert detail["answer_events"][0]["recipient_id"] is None
+    assert detail["shared_answers"][0]["value"] == {"text": "$15k"}
+
+
+async def test_shared_tables_are_org_scoped(
+    db: AsyncSession, db_conn, seed_client: dict[str, str], seed_cards: list[dict[str, str]]
+) -> None:
+    """Members see their own org's shared answers and trail, never another's."""
+    from tests.conftest import become_member
+
+    params = {
+        "c": seed_cards[0]["id"],
+        "e": seed_client["id"],
+        "o": seed_client["org_id"],
+    }
+    await db.execute(
+        text(
+            "insert into public.shared_answers (card_id, engagement_id, org_id, value) "
+            "values (cast(:c as uuid), cast(:e as uuid), cast(:o as uuid), '{}'::jsonb)"
+        ),
+        params,
+    )
+    await db.execute(
+        text(
+            "insert into public.answer_events (card_id, engagement_id, org_id, actor_label) "
+            "values (cast(:c as uuid), cast(:e as uuid), cast(:o as uuid), 'X')"
+        ),
+        params,
+    )
+    await become_member(db_conn, org_id=str(uuid.uuid4()))
+    for table in ("shared_answers", "answer_events"):
+        assert (await db.execute(text(f"select count(*) from public.{table}"))).scalar_one() == 0
+    await become_member(db_conn, org_id=seed_client["org_id"])
+    for table in ("shared_answers", "answer_events"):
+        assert (await db.execute(text(f"select count(*) from public.{table}"))).scalar_one() == 1
+
+
+async def test_list_progress_counts_shared_answers(
+    admin_authed: AsyncClient,
+    db: AsyncSession,
+    seed_client: dict[str, str],
+    shared_admin_session: None,
+) -> None:
+    e = await _shared_engagement(admin_authed, db, seed_client)
+
+    def row(rows):
+        return next(r for r in rows if r["id"] == e["eid"])
+
+    await _save(admin_authed, e["chachi"], "budget", {"text": "$15k"})
+    r = row((await admin_authed.get("/api/admin/engagements")).json())
+    assert (r["answered_responses"], r["completed_recipients"]) == (1, 0)
+
+    await _save(admin_authed, e["adam"], "ownership", {"cells": {"crm": {"does-the-work": "Pat"}}})
+    r = row((await admin_authed.get("/api/admin/engagements")).json())
+    assert (r["answered_responses"], r["completed_recipients"]) == (2, r["recipients_count"])

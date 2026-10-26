@@ -416,6 +416,7 @@ export function RecipientsPanel({
   recipients,
   hasCards,
   pageUrl,
+  sharedChanges,
 }: {
   engagementId: string;
   clientId?: string;
@@ -424,6 +425,9 @@ export function RecipientsPanel({
   hasCards: boolean;
   /** Respondent links open this page instead of the deck (page blocks). */
   pageUrl?: string | null;
+  /** Shared-answers mode: changes logged per respondent id. Replaces the
+   * per-respondent progress, which doesn't apply when answers are shared. */
+  sharedChanges?: Map<string, number>;
 }): React.ReactElement {
   const invalidate = useInvalidateRecipients(engagementId);
   const [adding, setAdding] = useState(false);
@@ -592,15 +596,24 @@ export function RecipientsPanel({
                   </div>
                 ) : null}
                 <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted">
-                    <span
-                      className="block h-full rounded-full bg-foreground"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </span>
-                  <span className="tabular-nums">
-                    {r.completed_count}/{total}
-                  </span>
+                  {sharedChanges ? (
+                    <span className="tabular-nums">
+                      {sharedChanges.get(r.id) ?? 0} change
+                      {(sharedChanges.get(r.id) ?? 0) === 1 ? "" : "s"}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-muted">
+                        <span
+                          className="block h-full rounded-full bg-foreground"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </span>
+                      <span className="tabular-nums">
+                        {r.completed_count}/{total}
+                      </span>
+                    </>
+                  )}
                   <span aria-hidden="true">·</span>
                   <span
                     className={cn(

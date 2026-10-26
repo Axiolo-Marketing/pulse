@@ -52,6 +52,7 @@ export function EditEngagementDialog({
     engagement.transcription_enabled ?? false,
   );
   const [pageUrl, setPageUrl] = useState(engagement.page_url ?? "");
+  const [shared, setShared] = useState(engagement.shared_answers ?? false);
   const [error, setError] = useState<string | null>(null);
 
   // Org-level gate for the reactive-cards checkbox — superadmin-managed,
@@ -68,6 +69,7 @@ export function EditEngagementDialog({
       setReactiveCards(engagement.reactive_cards_enabled ?? false);
       setTranscribe(engagement.transcription_enabled ?? false);
       setPageUrl(engagement.page_url ?? "");
+      setShared(engagement.shared_answers ?? false);
       setError(null);
     }
   }, [open, engagement]);
@@ -79,6 +81,7 @@ export function EditEngagementDialog({
         voice_enabled: voice,
         reminders_enabled: reminders,
         page_url: pageUrl.trim(),
+        shared_answers: shared,
         // Only sent when the org allows it — never resend a stale `true`
         // for an org whose access has since been revoked (the checkbox is
         // disabled in that case; see `reactiveCardsAllowed` below).
@@ -141,6 +144,13 @@ export function EditEngagementDialog({
           <div className="flex flex-col gap-2">
             <FormSectionLabel>Respondent experience</FormSectionLabel>
             <ToggleList>
+              <ToggleRow
+                id="ee-shared"
+                label="Shared answers"
+                description="Everyone edits one set of answers and can change each other's. Every change is logged with who made it and when."
+                checked={shared}
+                onCheckedChange={setShared}
+              />
               <ToggleRow
                 id="ee-voice"
                 label="Voice answers"

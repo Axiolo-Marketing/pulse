@@ -36,6 +36,7 @@ from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
+from pulse_api.repos import shared_answers as shared_answers_repo
 from pulse_api.repos import uploads as uploads_repo
 
 router = APIRouter(
@@ -84,6 +85,9 @@ class UpdateEngagementRequest(BaseModel):
     # The client document respondents open instead of the deck (page
     # blocks); "" clears it. Must be http(s).
     page_url: str | None = Field(default=None, max_length=2000)
+    # Respondents edit one shared set of answers (every change logged)
+    # instead of answering separately.
+    shared_answers: bool | None = None
 
     @model_validator(mode="after")
     def _page_url_scheme(self) -> "UpdateEngagementRequest":
@@ -238,6 +242,18 @@ async def get_engagement(
         "cards": await cards_repo.list_for_engagement(session, engagement_id),
         "responses": await responses_repo.list_for_engagement(session, engagement_id),
         "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
+        # Shared-answers mode (page blocks): the current answer per card and
+        # the change log. Empty for one-answer-each engagements.
+        **(
+            {
+                "shared_answers": list(
+                    (await shared_answers_repo.current_for_engagement(session, engagement_id)).values()
+                ),
+                "answer_events": await shared_answers_repo.list_events(session, engagement_id),
+            }
+            if engagement.get("shared_answers")
+            else {"shared_answers": [], "answer_events": []}
+        ),
         # Whether this deployment can transcribe voice answers at all — the
         # UI hides/disables the per-engagement toggle when it can't.
         "transcription_available": transcription.available(),
@@ -453,6 +469,7 @@ async def reset_engagement(
     # cascades nothing and `ai_cards_removed` is an exact card count.
     removed_uploads = await uploads_repo.delete_all_for_engagement(session, engagement_id)
     responses_cleared = await responses_repo.delete_all_for_engagement(session, engagement_id)
+    responses_cleared += await shared_answers_repo.delete_for_engagement(session, engagement_id)
     ai_cards_removed = await cards_repo.delete_generated_for_engagement(
         session, engagement_id
     )

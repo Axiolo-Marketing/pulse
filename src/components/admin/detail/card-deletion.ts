@@ -11,16 +11,18 @@ export interface CardDeletionImpact {
 
 /** What deleting these cards (or every card) would erase. */
 export function cardDeletionImpact(
-  detail: Pick<EngagementDetail, "cards" | "responses" | "uploads">,
+  detail: Pick<EngagementDetail, "cards" | "responses" | "uploads" | "shared_answers">,
   cardIds: string[] | "all",
 ): CardDeletionImpact {
   const ids = new Set(cardIds === "all" ? detail.cards.map((c) => c.id) : cardIds);
   const answers = detail.responses.filter(
     (r) => ids.has(r.card_id) && r.state !== "viewed",
   );
+  // Shared-answers mode keeps one answer per card outside `responses`.
+  const shared = (detail.shared_answers ?? []).filter((a) => ids.has(a.card_id)).length;
   return {
     questions: detail.cards.filter((c) => ids.has(c.id)).length,
-    answers: answers.length,
+    answers: answers.length + shared,
     respondents: new Set(answers.map((r) => r.recipient_id)).size,
     uploads: detail.uploads.filter((u) => ids.has(u.card_id)).length,
   };

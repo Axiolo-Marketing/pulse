@@ -196,10 +196,15 @@ def parse_blocks(html: str) -> list[Block]:
     return p.blocks
 
 
-def clean_answer(card: dict[str, Any], value: Any) -> dict[str, Any] | None:
-    """Validate an answer posted from a page for ``card``. Returns the
-    ``response_value`` to store, or None when the answer is empty (the
-    respondent cleared it). Raises ``ValueError`` on a malformed value."""
+def clean_change(card: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Validate a change posted from a page for ``card``.
+
+    * question: ``{"text": str}`` — the whole answer ("" clears it).
+    * grid: ``{"cells": {row: {col: str}}}`` — only the cells that changed;
+      "" clears a cell. Sending changes, not the whole grid, lets two people
+      edit different rows without overwriting each other.
+
+    Returns the normalised change; raises ``ValueError`` on bad input."""
     if not isinstance(value, dict):
         raise ValueError("value must be an object")
     if card["response_type"] == "grid":
@@ -219,17 +224,35 @@ def clean_answer(card: dict[str, Any], value: Any) -> dict[str, Any] | None:
                 if not isinstance(cell, str):
                     raise ValueError("cell values must be text")
                 cell = cell.strip()[:MAX_CELL_CHARS]
-                if not cell:
-                    continue
                 opts = cols[ck]
-                if opts and cell not in opts:
+                if cell and opts and cell not in opts:
                     raise ValueError(f"{cell!r} isn't an option for {ck!r}")
                 cells.setdefault(rk, {})[ck] = cell
-        return {"cells": cells} if cells else None
+        return {"cells": cells}
     text = value.get("text")
     if not isinstance(text, str):
         raise ValueError("value needs text")
     text = text.strip()
     if len(text) > MAX_TEXT_CHARS:
         raise ValueError("answer is too long")
-    return {"text": text} if text else None
+    return {"text": text}
+
+
+def apply_change(
+    card: dict[str, Any], current: dict[str, Any] | None, change: dict[str, Any]
+) -> dict[str, Any] | None:
+    """The answer after ``change`` (from ``clean_change``) is applied to
+    ``current``. None means the answer is now empty."""
+    if card["response_type"] == "grid":
+        cells = {
+            rk: dict(row) for rk, row in ((current or {}).get("cells") or {}).items()
+        }
+        for rk, row in change["cells"].items():
+            for ck, cell in row.items():
+                if cell:
+                    cells.setdefault(rk, {})[ck] = cell
+                elif rk in cells:
+                    cells[rk].pop(ck, None)
+        cells = {rk: row for rk, row in cells.items() if row}
+        return {"cells": cells} if cells else None
+    return {"text": change["text"]} if change["text"] else None

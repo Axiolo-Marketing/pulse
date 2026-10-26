@@ -26,6 +26,7 @@
     (script && script.getAttribute("data-api")) ||
     (script && script.src ? new URL(script.src).origin : location.origin);
   var SAVE_DELAY = 900;
+  var POLL_MS = 20000;
 
   // ── token ────────────────────────────────────────────────────────────
   function readToken() {
@@ -89,7 +90,9 @@
   var failed = 0;
   function refreshBadge() {
     if (!TOKEN) return;
-    var who = respondent ? "Answering as " + respondent : "Your answers";
+    var who = respondent
+      ? (SHARED ? "Shared answers · editing as " : "Answering as ") + respondent
+      : "Your answers";
     if (failed) setBadge("Some answers didn't save. Check your connection.", "warn");
     else if (pending) setBadge(who + " · Saving…", "busy");
     else setBadge(who + " · All changes saved", "ok");
@@ -115,10 +118,13 @@
   }
 
   // ── autosave per block ───────────────────────────────────────────────
-  function makeSaver(el, blockId, getValue) {
+  // take() returns { value, ack }: the change to send now, and a callback
+  // run with the server's reply once it's saved (so a grid can forget the
+  // cells it just sent unless they were edited again meanwhile).
+  function makeSaver(el, blockId, take, onSaved) {
     var timer = null;
     var inflight = false;
-    var dirty = false;
+    var again = false;
     var status = el.querySelector(".pulse-status");
 
     function show(state, text) {
@@ -130,15 +136,16 @@
       clearTimeout(timer);
       timer = null;
       if (inflight) {
-        dirty = true;
+        again = true;
         return;
       }
+      var job = take();
       inflight = true;
-      dirty = false;
+      again = false;
       pending++;
       refreshBadge();
       show("saving", "Saving…");
-      api("/api/embed/responses", { block_id: blockId, value: getValue() })
+      api("/api/embed/responses", { block_id: blockId, value: job.value })
         .then(function (res) {
           pending--;
           inflight = false;
@@ -146,10 +153,12 @@
             el.__pulseFailed = false;
             failed--;
           }
+          if (job.ack) job.ack(res);
           var answered = res.state === "answered";
           show(answered ? "answered" : "empty", answered ? "Saved" : "");
+          if (onSaved) onSaved(res);
           refreshBadge();
-          if (dirty) flush(0);
+          if (again) flush(0);
         })
         .catch(function (err) {
           pending--;
@@ -199,6 +208,49 @@
     }
   });
 
+  // ── shared answers ───────────────────────────────────────────────────
+  var SHARED = false;
+  var live = {}; // block id → applyRemote(state), for shared refreshes
+
+  function when(iso) {
+    try {
+      return new Date(iso).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function showMeta(el, state) {
+    if (!SHARED) return;
+    var st = el.getAttribute("data-pulse-state");
+    if (st === "saving" || st === "error") return;
+    var status = el.querySelector(".pulse-status");
+    if (!status) return;
+    status.textContent =
+      state && state.updated_by
+        ? "Last changed by " + state.updated_by + " · " + when(state.updated_at)
+        : "";
+  }
+
+  function poll() {
+    if (!SHARED || document.hidden) return;
+    api("/api/embed/blocks")
+      .then(function (data) {
+        var blocks = data.blocks || {};
+        Object.keys(live).forEach(function (id) {
+          if (blocks[id]) live[id](blocks[id]);
+        });
+      })
+      .catch(function () {
+        /* next poll retries */
+      });
+  }
+
   // ── blocks ───────────────────────────────────────────────────────────
   function statusLine() {
     var s = document.createElement("span");
@@ -225,15 +277,33 @@
       ta.disabled = true;
       return;
     }
-    var v = state.value && typeof state.value.text === "string" ? state.value.text : "";
-    ta.value = v;
-    el.setAttribute("data-pulse-state", v ? "answered" : "empty");
-    var saver = makeSaver(el, id, function () {
-      return { text: ta.value };
-    });
+    function textOf(st) {
+      return st && st.value && typeof st.value.text === "string" ? st.value.text : "";
+    }
+    ta.value = textOf(state);
+    el.setAttribute("data-pulse-state", ta.value ? "answered" : "empty");
+    showMeta(el, state);
+    var saver = makeSaver(
+      el,
+      id,
+      function () {
+        return { value: { text: ta.value } };
+      },
+      function (res) {
+        showMeta(el, res);
+      },
+    );
     savers.push(saver);
     ta.addEventListener("input", saver.schedule);
     ta.addEventListener("blur", saver.flushNow);
+    live[id] = function (st) {
+      // Never overwrite what this person is typing.
+      if (document.activeElement === ta || saver.isPending()) return;
+      var v = textOf(st);
+      if (ta.value !== v) ta.value = v;
+      el.setAttribute("data-pulse-state", v ? "answered" : "empty");
+      showMeta(el, st);
+    };
   }
 
   function slug(label) {
@@ -267,7 +337,6 @@
   function renderGrid(el, state) {
     var rows = items(el, "pulse-row");
     var cols = items(el, "pulse-col");
-    var cells = (state && state.value && state.value.cells) || {};
     var wrap = document.createElement("div");
     wrap.className = "pulse-grid-wrap " + (el.getAttribute("wrap-class") || "");
     var table = document.createElement("table");
@@ -283,7 +352,7 @@
       if (c.tip) ths[i + 1].title = c.tip;
     });
     var tbody = table.querySelector("tbody");
-    var inputs = [];
+    var inputs = {}; // "row|col" → input
     rows.forEach(function (r) {
       var tr = document.createElement("tr");
       var th = document.createElement("th");
@@ -310,10 +379,9 @@
           input.type = "text";
         }
         input.setAttribute("aria-label", r.label + ", " + c.label);
-        input.value = (cells[r.key] && cells[r.key][c.key]) || "";
         input.disabled = !state;
         input.__pulse = { row: r.key, col: c.key };
-        inputs.push(input);
+        inputs[r.key + "|" + c.key] = input;
         td.appendChild(input);
         tr.appendChild(td);
       });
@@ -323,23 +391,69 @@
     el.appendChild(wrap);
     el.appendChild(statusLine());
     if (!state) return;
-    var any = inputs.some(function (i) {
-      return i.value;
-    });
-    el.setAttribute("data-pulse-state", any ? "answered" : "empty");
-    var saver = makeSaver(el, el.id, function () {
-      var out = {};
-      inputs.forEach(function (i) {
-        if (!i.value) return;
-        (out[i.__pulse.row] = out[i.__pulse.row] || {})[i.__pulse.col] = i.value;
+
+    var edits = {}; // "row|col" → edit version not yet confirmed saved
+    var version = 0;
+    function cellsOf(st) {
+      return (st && st.value && st.value.cells) || {};
+    }
+    function fill(st, force) {
+      var cells = cellsOf(st);
+      Object.keys(inputs).forEach(function (k) {
+        var i = inputs[k];
+        if (!force && (edits[k] || document.activeElement === i)) return;
+        var v = (cells[i.__pulse.row] && cells[i.__pulse.row][i.__pulse.col]) || "";
+        if (i.value !== v) i.value = v;
       });
-      return { cells: out };
-    });
+      var any = Object.keys(inputs).some(function (k) {
+        return inputs[k].value;
+      });
+      el.setAttribute("data-pulse-state", any ? "answered" : "empty");
+    }
+    fill(state, true);
+    showMeta(el, state);
+
+    var saver = makeSaver(
+      el,
+      el.id,
+      function () {
+        // Send only the cells changed since the last save ("" clears one),
+        // so people editing different rows don't overwrite each other.
+        var sent = {};
+        var cells = {};
+        Object.keys(edits).forEach(function (k) {
+          var i = inputs[k];
+          sent[k] = edits[k];
+          (cells[i.__pulse.row] = cells[i.__pulse.row] || {})[i.__pulse.col] = i.value;
+        });
+        return {
+          value: { cells: cells },
+          ack: function () {
+            Object.keys(sent).forEach(function (k) {
+              if (edits[k] === sent[k]) delete edits[k];
+            });
+          },
+        };
+      },
+      function (res) {
+        fill(res, false); // pick up other people's cells in the merged answer
+        showMeta(el, res);
+      },
+    );
     savers.push(saver);
-    inputs.forEach(function (i) {
-      i.addEventListener(i.tagName === "SELECT" ? "change" : "input", saver.schedule);
+    Object.keys(inputs).forEach(function (k) {
+      var i = inputs[k];
+      i.addEventListener(i.tagName === "SELECT" ? "change" : "input", function () {
+        edits[k] = ++version;
+        saver.schedule();
+      });
       i.addEventListener("blur", saver.flushNow);
     });
+    live[el.id] = function (st) {
+      if (saver.isPending()) return;
+      fill(st, false);
+      showMeta(el, st);
+    };
   }
 
   function renderAll(blocks) {
@@ -368,8 +482,14 @@
     api("/api/embed/blocks")
       .then(function (data) {
         respondent = data.respondent || null;
+        SHARED = !!data.shared;
         renderAll(data.blocks || {});
         refreshBadge();
+        if (SHARED) {
+          // Everyone edits the same answers: pick up other people's changes.
+          setInterval(poll, POLL_MS);
+          document.addEventListener("visibilitychange", poll);
+        }
       })
       .catch(function (err) {
         renderAll(null);

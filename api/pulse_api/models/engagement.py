@@ -50,6 +50,7 @@ class Engagement(SQLModel, table=True):
     engagement_name: str | None = None
     brief: str | None = None
     page_url: str | None = None
+    shared_answers: bool = False
     voice_enabled: bool = False
     reminders_enabled: bool = True
     reactive_cards_enabled: bool = False
