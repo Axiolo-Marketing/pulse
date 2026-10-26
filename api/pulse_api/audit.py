@@ -25,6 +25,7 @@ string emitted by the route layer appears in this list.
 * ``engagement.delete``     — engagement permanently removed
 * ``engagement.reset``      — engagement responses + uploads wiped for re-run
 * ``engagement.invites_sent`` — operator emailed the deck link to chosen respondents
+* ``engagement.page_sync``  — cards created/updated from a page's ``<pulse-*>`` blocks
 * ``recipient.add``         — respondent added to an engagement (no email sent)
 * ``recipient.remove``      — respondent removed (their answers cascade)
 * ``client.contact_save``   — person saved (or updated) on a client's contact list
@@ -74,6 +75,7 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "engagement.update",
         "engagement.delete",
         "engagement.reset",
+        "engagement.page_sync",
         # Recipients
         "recipient.add",
         "recipient.remove",

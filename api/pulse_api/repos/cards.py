@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 CARD_COLS = (
     "id::text, engagement_id::text, order_index, category, title, context, question, "
     "response_type, options, default_value, skip_allowed, attachment_path, created_at, "
-    "recipient_id::text, source, generated_from_response_id::text"
+    "recipient_id::text, source, generated_from_response_id::text, "
+    "block_id, block_config"
 )
 
 
@@ -72,6 +73,8 @@ async def create_card(
     recipient_id: str | None = None,
     source: str = "operator",
     generated_from_response_id: str | None = None,
+    block_id: str | None = None,
+    block_config: dict | None = None,
 ) -> dict | None:
     """Insert one card. ``org_id`` is NOT NULL on the table (0005), so
     every call must thread the active org's id through. Callers running
@@ -94,13 +97,15 @@ async def create_card(
             insert into public.cards
               (engagement_id, order_index, category, title, context, question,
                response_type, options, default_value, skip_allowed,
-               attachment_path, org_id, recipient_id, source, generated_from_response_id)
+               attachment_path, org_id, recipient_id, source, generated_from_response_id,
+               block_id, block_config)
             values
               (cast(:cid as uuid),
                coalesce((select max(order_index) from public.cards where engagement_id = cast(:cid as uuid)), 0) + 1,
                :cat, :title, :ctx, :q, :rt,
                cast(:opts as jsonb), :dv, :sa, :ap, cast(:org as uuid),
-               cast(:rid as uuid), :src, cast(:gfr as uuid))
+               cast(:rid as uuid), :src, cast(:gfr as uuid),
+               :bid, cast(:bcfg as jsonb))
             returning {CARD_COLS}
             """
         ),
@@ -119,9 +124,82 @@ async def create_card(
             "rid": recipient_id,
             "src": source,
             "gfr": generated_from_response_id,
+            "bid": block_id,
+            "bcfg": json.dumps(block_config) if block_config is not None else None,
         },
     )
     return dict(result.mappings().one())
+
+
+async def sync_page_blocks(
+    session: AsyncSession, *, engagement_id: str, org_id: str, blocks: list[Any]
+) -> dict[str, list[str]]:
+    """Make the engagement's page-block cards match ``blocks``
+    (``page_blocks.Block``): new ids become cards appended to the deck,
+    existing ids get their wording/config updated in place (answers kept).
+    Cards whose block disappeared from the page are left alone and reported
+    as ``missing`` — deleting answers is the operator's call.
+
+    Raises ``ValueError`` if a block changed type (its stored answers would
+    no longer fit)."""
+    existing = {
+        r["block_id"]: dict(r)
+        for r in (
+            await session.execute(
+                text(
+                    "select id::text, block_id, response_type from public.cards "
+                    "where engagement_id = cast(:e as uuid) and block_id is not null"
+                ),
+                {"e": engagement_id},
+            )
+        ).mappings()
+    }
+    out: dict[str, list[str]] = {"created": [], "updated": [], "missing": []}
+    for b in blocks:
+        f = b.card_fields()
+        cur = existing.pop(b.block_id, None)
+        if cur is None:
+            await create_card(
+                session,
+                engagement_id=engagement_id,
+                org_id=org_id,
+                category=f["category"],
+                title=f["title"],
+                context=f["context"],
+                question=f["question"],
+                response_type=f["response_type"],
+                options=None,
+                default_value=None,
+                skip_allowed=True,
+                attachment_path=None,
+                block_id=b.block_id,
+                block_config=f["block_config"],
+            )
+            out["created"].append(b.block_id)
+            continue
+        if cur["response_type"] != f["response_type"]:
+            raise ValueError(
+                f"block {b.block_id!r} changed from {cur['response_type']} to "
+                f"{f['response_type']}; give it a new id instead"
+            )
+        await session.execute(
+            text(
+                "update public.cards set category = :cat, title = :title, "
+                "context = :ctx, question = :q, block_config = cast(:bcfg as jsonb) "
+                "where id = cast(:id as uuid)"
+            ),
+            {
+                "cat": f["category"],
+                "title": f["title"],
+                "ctx": f["context"],
+                "q": f["question"],
+                "bcfg": json.dumps(f["block_config"]) if f["block_config"] else None,
+                "id": cur["id"],
+            },
+        )
+        out["updated"].append(b.block_id)
+    out["missing"] = sorted(existing)
+    return out
 
 
 async def update_card(session: AsyncSession, card_id: str, fields: dict) -> dict | None:

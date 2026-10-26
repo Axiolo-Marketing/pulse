@@ -31,7 +31,9 @@ import {
   ApiError,
   type Card as CardModel,
   type EngagementDetail as EngagementDetailData,
+  type AnswerEvent,
   type Recipient,
+  type SharedAnswer,
 } from "@/lib/api";
 import {
   buildCardMarkdown,
@@ -39,6 +41,7 @@ import {
   exportFilename,
 } from "@/lib/markdown-export";
 import { formatTimestamp } from "@/lib/format-time";
+import { describeChange, sharedExportDetail } from "@/lib/shared-answers";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
@@ -85,7 +88,7 @@ import { AdminError, AdminLoading } from "./states";
 
 function buildMarkdown(detail: EngagementDetailData): string {
   return buildEngagementExport(
-    detail,
+    detail.engagement.shared_answers ? sharedExportDetail(detail) : detail,
     (id) => adminApi.uploadDownloadUrl(id),
     recipientLabel,
   );
@@ -147,6 +150,7 @@ const RESPONSE_TYPE_LABELS: Record<string, string> = {
   "document-link": "Link",
   "contact-share": "Contact",
   "file-upload": "File upload",
+  grid: "Grid (page)",
 };
 
 const MARKDOWN_PROSE = cn(
@@ -265,6 +269,75 @@ function BriefCard({
   );
 }
 
+/** Shared-answers mode: the one current answer, who changed it last, and
+ * every change (newest first). */
+function SharedAnswerPanel({
+  card,
+  answer,
+  events,
+}: {
+  card: CardModel;
+  answer?: SharedAnswer;
+  events: AnswerEvent[];
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const response = answer
+    ? ({
+        state: "answered",
+        response_value: answer.value,
+        card_id: card.id,
+      } as unknown as Parameters<typeof ResponseBody>[0]["response"])
+    : undefined;
+  return (
+    <div className="border-t border-border bg-muted/30 px-4 py-3">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">Shared answer</span>
+        {answer ? (
+          <span>
+            Last changed by {answer.updated_by_name ?? "a removed respondent"} ·{" "}
+            {formatTimestamp(answer.updated_at)}
+          </span>
+        ) : null}
+      </div>
+      {response ? (
+        <ResponseBody card={card} response={response} uploads={[]} />
+      ) : (
+        <p className="text-sm italic text-muted-foreground">No answer yet.</p>
+      )}
+      {events.length > 0 ? (
+        <div className="mt-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+            History ({events.length} change{events.length === 1 ? "" : "s"})
+          </button>
+          {open ? (
+            <ol className="mt-2 flex flex-col gap-2 border-l border-border pl-3">
+              {events.map((ev) => (
+                <li key={ev.id} className="text-xs">
+                  <div className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{ev.actor_label}</span> ·{" "}
+                    {formatTimestamp(ev.created_at)}
+                  </div>
+                  {describeChange(card, ev).map((line, i) => (
+                    <div key={i} className="whitespace-pre-wrap text-foreground">
+                      {line}
+                    </div>
+                  ))}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CardBlock({
   card,
   position,
@@ -272,6 +345,7 @@ function CardBlock({
   transcription,
   selected,
   onSelectedChange,
+  shared,
   onEdit,
   onDelete,
   onCopyAnswer,
@@ -282,6 +356,8 @@ function CardBlock({
   transcription: TranscriptionControls;
   selected: boolean;
   onSelectedChange: (selected: boolean) => void;
+  /** Shared-answers mode: replaces the per-respondent answers. */
+  shared?: { answer?: SharedAnswer; events: AnswerEvent[] };
   onEdit: () => void;
   onDelete: () => void;
   onCopyAnswer: (r: Recipient) => void;
@@ -313,7 +389,9 @@ function CardBlock({
               responses={detail.responses}
             />
           </div>
-          <p className="mt-0.5 text-sm text-muted-foreground">{card.question}</p>
+          {card.question.trim() !== card.title.trim() ? (
+            <p className="mt-0.5 text-sm text-muted-foreground">{card.question}</p>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {card.category ? (
               <span className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
@@ -350,7 +428,9 @@ function CardBlock({
         </DropdownMenu>
       </div>
 
-      {detail.recipients.length > 0 ? (
+      {shared ? (
+        <SharedAnswerPanel card={card} answer={shared.answer} events={shared.events} />
+      ) : detail.recipients.length > 0 ? (
         <ul className="divide-y divide-border border-t border-border bg-muted/30">
           {detail.recipients.map((r) => {
             const response = detail.responses.find(
@@ -648,6 +728,28 @@ export function EngagementDetail(): React.ReactElement {
   // Per-card parse errors come back newline-joined in the 400's detail;
   // show them as an inline list beside the Import control.
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
+  const pageSyncMut = useMutation({
+    mutationFn: (html: string) => adminApi.syncPage(id, html),
+    onMutate: () => setImportErrors(null),
+    onSuccess: ({ created, updated, missing }) => {
+      void qc.invalidateQueries({ queryKey: ["engagement", id] });
+      void qc.invalidateQueries({ queryKey: ["engagements"] });
+      const parts = [
+        created.length ? `${created.length} added` : null,
+        updated.length ? `${updated.length} updated` : null,
+      ].filter(Boolean);
+      toast.success(`Page synced: ${parts.join(", ") || "no changes"}.`, {
+        description: missing.length
+          ? `${missing.length} question${missing.length === 1 ? " is" : "s are"} no longer on the page (kept): ${missing.join(", ")}`
+          : undefined,
+      });
+    },
+    onError: (err) => {
+      const detail =
+        err instanceof ApiError ? err.detail : "Could not read that page.";
+      setImportErrors(detail.split("\n").map((l) => l.trim()).filter(Boolean));
+    },
+  });
   const importMut = useMutation({
     mutationFn: ({ markdown, replace }: { markdown: string; replace: boolean }) =>
       adminApi.importMarkdownCards(id, markdown, replace),
@@ -695,7 +797,13 @@ export function EngagementDetail(): React.ReactElement {
       return next;
     });
   }
-  function onImportFile(markdown: string): void {
+  function onImportFile(file: File, text: string): void {
+    // A client document with <pulse-*> blocks syncs its questions instead.
+    if (/\.html?$/i.test(file.name) || file.type === "text/html") {
+      pageSyncMut.mutate(text);
+      return;
+    }
+    const markdown = text;
     if (cards.length > 0) setPendingImport(markdown);
     else importMut.mutate({ markdown, replace: false });
   }
@@ -740,15 +848,39 @@ export function EngagementDetail(): React.ReactElement {
 
   // ── Summary numbers ──
   const recipients = detail.recipients;
-  const doneRecipients = recipients.filter(
-    (r) => r.total_cards > 0 && r.completed_count >= r.total_cards,
-  ).length;
-  const answeredCount = detail.responses.filter(
-    (r) => r.state === "answered" || r.state === "skipped" || r.state === "needs_edit",
-  ).length;
-  const expectedAnswers = recipients.reduce((n, r) => n + r.total_cards, 0);
-  const lastActive = recipients
-    .map((r) => r.last_active_at)
+  const isShared = !!engagement.shared_answers;
+  const sharedByCard = new Map((detail.shared_answers ?? []).map((a) => [a.card_id, a]));
+  const eventsByCard = new Map<string, AnswerEvent[]>();
+  for (const ev of detail.answer_events ?? []) {
+    eventsByCard.set(ev.card_id, [...(eventsByCard.get(ev.card_id) ?? []), ev]);
+  }
+  const sharedDone = cards.length > 0 && sharedByCard.size >= cards.length;
+  const sharedChangesByRecipient = new Map<string, number>();
+  for (const ev of detail.answer_events ?? []) {
+    if (ev.recipient_id) {
+      sharedChangesByRecipient.set(
+        ev.recipient_id,
+        (sharedChangesByRecipient.get(ev.recipient_id) ?? 0) + 1,
+      );
+    }
+  }
+  const doneRecipients = isShared
+    ? sharedDone
+      ? recipients.length
+      : 0
+    : recipients.filter((r) => r.total_cards > 0 && r.completed_count >= r.total_cards).length;
+  const answeredCount = isShared
+    ? sharedByCard.size
+    : detail.responses.filter(
+        (r) => r.state === "answered" || r.state === "skipped" || r.state === "needs_edit",
+      ).length;
+  const expectedAnswers = isShared
+    ? cards.length
+    : recipients.reduce((n, r) => n + r.total_cards, 0);
+  const lastActive = [
+    ...recipients.map((r) => r.last_active_at),
+    ...(detail.shared_answers ?? []).map((a) => a.updated_at),
+  ]
     .filter((t): t is string => Boolean(t))
     .sort()
     .at(-1);
@@ -786,6 +918,7 @@ export function EngagementDetail(): React.ReactElement {
                 year: "numeric",
               })}
             </span>
+            <FeatureChip on={!!engagement.shared_answers}>Shared answers</FeatureChip>
             <FeatureChip on={engagement.voice_enabled}>Voice</FeatureChip>
             <FeatureChip on={engagement.reminders_enabled}>Reminders</FeatureChip>
             <FeatureChip on={engagement.transcription_enabled}>Transcripts</FeatureChip>
@@ -926,22 +1059,22 @@ export function EngagementDetail(): React.ReactElement {
               <label className="inline-flex">
                 <input
                   type="file"
-                  accept=".md,.markdown,.txt,text/markdown,text/plain"
+                  accept=".md,.markdown,.txt,.html,.htm,text/markdown,text/plain,text/html"
                   className="peer sr-only"
-                  disabled={importMut.isPending}
+                  disabled={importMut.isPending || pageSyncMut.isPending}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
-                    if (file) void file.text().then(onImportFile);
+                    if (file) void file.text().then((t) => onImportFile(file, t));
                   }}
                 />
                 <span className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-xs hover:bg-accent peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50">
-                  {importMut.isPending ? (
+                  {importMut.isPending || pageSyncMut.isPending ? (
                     <LoaderCircle className="size-4 animate-spin" />
                   ) : (
                     <Upload className="size-4" />
                   )}
-                  {importMut.isPending ? "Importing…" : "Import"}
+                  {importMut.isPending || pageSyncMut.isPending ? "Importing…" : "Import"}
                 </span>
               </label>
               <Button size="sm" onClick={() => setCardEditor({ open: true })}>
@@ -999,6 +1132,11 @@ export function EngagementDetail(): React.ReactElement {
                 transcription={transcriptionControls}
                 selected={selected.has(card.id)}
                 onSelectedChange={(on) => toggleCard(card.id, on)}
+                shared={
+                  isShared
+                    ? { answer: sharedByCard.get(card.id), events: eventsByCard.get(card.id) ?? [] }
+                    : undefined
+                }
                 onEdit={() => setCardEditor({ open: true, card })}
                 onDelete={() => setDeletingCard(card)}
                 onCopyAnswer={(r) => void copyAnswer(card, r)}
@@ -1014,6 +1152,8 @@ export function EngagementDetail(): React.ReactElement {
             clientName={engagement.name}
             recipients={detail.recipients}
             hasCards={detail.cards.length > 0}
+            pageUrl={engagement.page_url}
+            sharedChanges={isShared ? sharedChangesByRecipient : undefined}
           />
           <BriefCard engagementId={id} brief={engagement.brief} />
         </aside>

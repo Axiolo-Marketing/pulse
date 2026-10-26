@@ -243,7 +243,7 @@ async def list_due_reminders(
             """
             select
               r.id::text as id, r.email, r.name, r.token,
-              e.engagement_name, o.name as org_name
+              e.engagement_name, e.page_url, o.name as org_name
             from public.recipients r
             join public.engagements e on e.id = r.engagement_id
             join public.organizations o on o.id = r.org_id

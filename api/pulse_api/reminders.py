@@ -13,8 +13,12 @@ _UNSUBSCRIBE_PURPOSE = "reminder-unsubscribe"
 _UNSUBSCRIBE_MAX_AGE = 3650 * 24 * 3600  # ~10 years — links never practically expire
 
 
-def deck_url(token: str) -> str:
-    """The recipient's private ``?t=`` deck link."""
+def deck_url(token: str, page_url: str | None = None) -> str:
+    """The recipient's private ``?t=`` link: to the engagement's page when it
+    has one (page blocks), else to the deck."""
+    if page_url:
+        base = page_url.split("#", 1)[0]
+        return f"{base}{'&' if '?' in base else '?'}t={token}"
     return f"{settings.frontend_base_url.rstrip('/')}/?t={token}"
 
 

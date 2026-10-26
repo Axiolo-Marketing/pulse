@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
-from pulse_api import reactive, reminders, storage, transcription
+from pulse_api import page_blocks, reactive, reminders, storage, transcription
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (
@@ -36,6 +36,7 @@ from pulse_api.repos import clients as clients_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
+from pulse_api.repos import shared_answers as shared_answers_repo
 from pulse_api.repos import uploads as uploads_repo
 
 router = APIRouter(
@@ -81,6 +82,19 @@ class UpdateEngagementRequest(BaseModel):
     reminders_enabled: bool | None = None
     reactive_cards_enabled: bool | None = None
     transcription_enabled: bool | None = None
+    # The client document respondents open instead of the deck (page
+    # blocks); "" clears it. Must be http(s).
+    page_url: str | None = Field(default=None, max_length=2000)
+    # Respondents edit one shared set of answers (every change logged)
+    # instead of answering separately.
+    shared_answers: bool | None = None
+
+    @model_validator(mode="after")
+    def _page_url_scheme(self) -> "UpdateEngagementRequest":
+        if self.page_url:
+            if not self.page_url.startswith(("https://", "http://")):
+                raise ValueError("page_url must start with https:// or http://")
+        return self
 
 
 class AddRecipientRequest(BaseModel):
@@ -157,6 +171,21 @@ class ImportMarkdownRequest(BaseModel):
     replace: bool = False
 
 
+class SyncPageRequest(BaseModel):
+    """A client document's HTML; its ``<pulse-*>`` blocks become cards.
+    ``page_url`` (optional) is where respondents open it — their links then
+    point there instead of the deck."""
+
+    html: str = Field(min_length=1, max_length=2_000_000)
+    page_url: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _page_url_scheme(self) -> "SyncPageRequest":
+        if self.page_url and not self.page_url.startswith(("https://", "http://")):
+            raise ValueError("page_url must start with https:// or http://")
+        return self
+
+
 class BulkDeleteCardsRequest(BaseModel):
     """Either specific ``card_ids`` or ``all=True`` (every card, including AI
     follow-ups). Exactly one must be given."""
@@ -213,6 +242,18 @@ async def get_engagement(
         "cards": await cards_repo.list_for_engagement(session, engagement_id),
         "responses": await responses_repo.list_for_engagement(session, engagement_id),
         "uploads": await uploads_repo.list_for_engagement(session, engagement_id),
+        # Shared-answers mode (page blocks): the current answer per card and
+        # the change log. Empty for one-answer-each engagements.
+        **(
+            {
+                "shared_answers": list(
+                    (await shared_answers_repo.current_for_engagement(session, engagement_id)).values()
+                ),
+                "answer_events": await shared_answers_repo.list_events(session, engagement_id),
+            }
+            if engagement.get("shared_answers")
+            else {"shared_answers": [], "answer_events": []}
+        ),
         # Whether this deployment can transcribe voice answers at all — the
         # UI hides/disables the per-engagement toggle when it can't.
         "transcription_available": transcription.available(),
@@ -303,6 +344,8 @@ async def update_engagement(
 ) -> dict[str, Any]:
     user, membership = org_member
     fields = req.model_dump(exclude_unset=True)
+    if "page_url" in fields:
+        fields["page_url"] = (fields["page_url"] or "").strip() or None
     if fields.get("reactive_cards_enabled") is True:
         # Gate only the false→true transition: a UI resending an
         # already-enabled engagement's flag (stale org-allow snapshot
@@ -426,6 +469,7 @@ async def reset_engagement(
     # cascades nothing and `ai_cards_removed` is an exact card count.
     removed_uploads = await uploads_repo.delete_all_for_engagement(session, engagement_id)
     responses_cleared = await responses_repo.delete_all_for_engagement(session, engagement_id)
+    responses_cleared += await shared_answers_repo.delete_for_engagement(session, engagement_id)
     ai_cards_removed = await cards_repo.delete_generated_for_engagement(
         session, engagement_id
     )
@@ -633,7 +677,7 @@ async def _send_invites(
 
     for r in recipients:
         subject, body = engagement_invite_email(
-            deck_url=reminders.deck_url(r["token"]),
+            deck_url=reminders.deck_url(r["token"], engagement.get("page_url")),
             org_name=str(org_name),
             recipient_name=r.get("name"),
             engagement_name=engagement.get("engagement_name"),
@@ -880,6 +924,54 @@ async def import_cards_markdown(
     for path in upload_paths:
         storage.delete_upload(path)
     return {"created": created, "replaced": len(replaced)}
+
+
+@router.post("/engagements/{engagement_id}/page")
+async def sync_page(
+    engagement_id: str,
+    req: SyncPageRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    """Create/update this engagement's cards from a page's ``<pulse-*>``
+    blocks (``pulse_api/page_blocks.py``). Re-syncing after editing the page
+    rewords cards in place and keeps answers; blocks removed from the page
+    are reported as ``missing``, not deleted. All-or-nothing: an invalid
+    page (400, every problem listed) changes nothing."""
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    try:
+        blocks = page_blocks.parse_blocks(req.html)
+    except page_blocks.PageBlockError as exc:
+        raise HTTPException(status_code=400, detail="\n".join(exc.errors)) from exc
+    user, membership = org_member
+    try:
+        result = await cards_repo.sync_page_blocks(
+            session,
+            engagement_id=engagement_id,
+            org_id=str(membership.org_id),
+            blocks=blocks,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if req.page_url is not None:
+        await engagements_repo.update_engagement(
+            session, engagement_id, {"page_url": req.page_url.strip() or None}
+        )
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="engagement.page_sync",
+        target_type="engagement",
+        target_id=engagement_id,
+        metadata={k: len(v) for k, v in result.items()},
+    )
+    await session.commit()
+    return result
 
 
 @router.post("/engagements/{engagement_id}/cards/bulk-delete")

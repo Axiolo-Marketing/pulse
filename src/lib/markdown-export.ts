@@ -5,6 +5,7 @@ import type {
   EngagementDetail,
   Recipient,
 } from "./api";
+import { gridMarkdown, gridTable } from "./grid";
 
 export interface UploadInfo {
   id: string;
@@ -144,6 +145,9 @@ function renderResponseBody(
     case "short-text":
     case "long-text":
       body = v.text ?? "";
+      break;
+    case "grid":
+      body = gridMarkdown(gridTable(card, response.response_value));
       break;
     case "document-link":
       body = v.url ? `<${v.url}>` : "";

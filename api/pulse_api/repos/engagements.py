@@ -45,7 +45,8 @@ async def get_my_engagement(session: AsyncSession) -> dict | None:
         text(
             "select c.id::text, cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.reactive_cards_enabled, c.created_at, "
-            "r.last_active_at, r.name as recipient_name, "
+            "c.page_url, c.shared_answers, r.last_active_at, r.name as recipient_name, "
+            "r.id::text as recipient_id, r.email as recipient_email, c.org_id::text as org_id, "
             "o.name as org_name, "
             "o.logo_path as org_logo_path, o.branding as org_branding "
             "from public.engagements c "
@@ -190,7 +191,7 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               c.created_by::text                                 as created_by,
               c.engagement_name, c.brief, c.voice_enabled,
               c.reminders_enabled, c.reactive_cards_enabled,
-              c.transcription_enabled, c.created_at,
+              c.transcription_enabled, c.page_url, c.shared_answers, c.created_at,
               (select count(*) from public.cards cd
                  where cd.engagement_id = c.id)::int             as total_cards,
               (select count(*) from public.cards cda
@@ -201,6 +202,18 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               (select max(rc.last_active_at) from public.recipients rc
                  where rc.engagement_id = c.id)                  as last_active_at,
               (
+                -- Shared answers: everyone is done once every card has an answer.
+                case when c.shared_answers then
+                  case when (select count(*) from public.cards cd4
+                               where cd4.engagement_id = c.id) > 0
+                        and (select count(*) from public.shared_answers sa
+                               where sa.engagement_id = c.id)
+                            >= (select count(*) from public.cards cd5
+                                  where cd5.engagement_id = c.id)
+                       then (select count(*) from public.recipients rc2
+                               where rc2.engagement_id = c.id)
+                       else 0 end
+                else (
                 select count(*) from public.recipients rc
                 where rc.engagement_id = c.id
                   and (select count(*) from public.cards cd2
@@ -212,10 +225,15 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
                       >= (select count(*) from public.cards cd3
                             where cd3.engagement_id = c.id
                               and (cd3.recipient_id is null or cd3.recipient_id = rc.id))
+                ) end
               )::int                                             as completed_recipients,
-              (select count(*) from public.responses rr
-                 where rr.engagement_id = c.id
-                   and rr.state in ('answered', 'skipped'))::int as answered_responses,
+              (case when c.shared_answers
+                 then (select count(*) from public.shared_answers sa2
+                         where sa2.engagement_id = c.id)
+                 else (select count(*) from public.responses rr
+                         where rr.engagement_id = c.id
+                           and rr.state in ('answered', 'skipped'))
+               end)::int                                         as answered_responses,
               (
                 select coalesce(
                   json_agg(
@@ -290,8 +308,8 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
             "select c.id::text, c.client_id::text as client_id, "
             "cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.reminders_enabled, "
-            "c.reactive_cards_enabled, c.transcription_enabled, "
-            "c.created_by::text as created_by, c.created_at "
+            "c.reactive_cards_enabled, c.transcription_enabled, c.page_url, "
+            "c.shared_answers, c.created_by::text as created_by, c.created_at "
             "from public.engagements c "
             "join public.clients cl on cl.id = c.client_id "
             "where c.id = cast(:cid as uuid)"
@@ -340,14 +358,15 @@ async def create_engagement(
             "          cast(:by as uuid)) "
             "  returning id, client_id, engagement_name, brief, "
             "            voice_enabled, reminders_enabled, reactive_cards_enabled, "
-            "            transcription_enabled, "
+            "            transcription_enabled, page_url, shared_answers, "
             "            created_by, created_at"
             ") "
             "select ins.id::text, ins.client_id::text as client_id, "
             "cl.name as name, cl.name as client_name, "
             "ins.engagement_name, "
             "ins.brief, ins.voice_enabled, ins.reminders_enabled, "
-            "ins.reactive_cards_enabled, ins.transcription_enabled, "
+            "ins.reactive_cards_enabled, ins.transcription_enabled, ins.page_url, "
+            "ins.shared_answers, "
             "ins.created_by::text as created_by, ins.created_at "
             "from ins join public.clients cl on cl.id = ins.client_id"
         ),
@@ -370,7 +389,7 @@ async def update_engagement(
 
     All writable fields (``engagement_name``, ``brief``, ``voice_enabled``,
     ``reminders_enabled``, ``reactive_cards_enabled``,
-    ``transcription_enabled``) are plain columns. The customer-facing name lives
+    ``transcription_enabled``, ``page_url``) are plain columns. The customer-facing name lives
     on ``clients`` now and is NOT mutable through this path. The returned
     row joins ``clients`` so ``name`` + ``client_id`` stay present."""
     if not fields:

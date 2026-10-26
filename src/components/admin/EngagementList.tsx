@@ -212,7 +212,7 @@ function CopyLinkAction({ s }: { s: EngagementSummary }): React.ReactElement {
           ? recipients.find((x) => x.id === recipientId)
           : recipients[0];
         if (!r) throw new Error("recipient not found");
-        return deckUrl(r.token);
+        return deckUrl(r.token, s.page_url);
       });
 
     let url: string;

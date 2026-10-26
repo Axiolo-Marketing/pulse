@@ -95,7 +95,9 @@ export type ResponseType =
   | "long-text"
   | "file-upload"
   | "document-link"
-  | "contact-share";
+  | "contact-share"
+  /** Page blocks only: a table answered on a client document. */
+  | "grid";
 
 export type ResponseState =
   | "not_started"
@@ -156,6 +158,12 @@ export interface Engagement {
   reactive_cards_enabled?: boolean;
   /** Per-engagement opt-in to transcribe voice answers (admin views). */
   transcription_enabled?: boolean;
+  /** The client document respondents answer on (page blocks). When set,
+   * respondent links point there instead of the deck. */
+  page_url?: string | null;
+  /** Respondents edit one shared set of answers (every change logged)
+   * instead of answering separately. */
+  shared_answers?: boolean;
 }
 
 export interface Card {
@@ -188,6 +196,22 @@ export interface Card {
    * resolves this back to a parent card id to place the follow-up right
    * after it. `null`/absent for operator cards. */
   generated_from_response_id?: string | null;
+  /** Page blocks: the `<pulse-*>` element id this card was synced from. */
+  block_id?: string | null;
+  /** Page blocks: a grid's rows and columns. */
+  block_config?: GridConfig | null;
+}
+
+export interface GridConfig {
+  rows: { key: string; label: string }[];
+  columns: { key: string; label: string; options: string[] | null }[];
+}
+
+export interface PageSyncResult {
+  created: string[];
+  updated: string[];
+  /** Synced earlier but no longer on the page (left in place). */
+  missing: string[];
 }
 
 /** One row from `GET /api/generations` — the client deck's poll surface for
@@ -555,6 +579,8 @@ export interface EngagementSummary {
   /** Per-respondent breakdown (ordered by when they were added). Each carries
    * its own `answered` count, shown against `total_cards` as a badge. */
   recipients: EngagementSummaryRecipient[];
+  /** The client document respondents answer on (page blocks). */
+  page_url?: string | null;
 }
 
 /** A respondent as it appears in the engagement-list rollup — enough to show
@@ -623,8 +649,32 @@ export interface EngagementDetail {
   cards: Card[];
   responses: ClientResponse[];
   uploads: UploadRow[];
+  /** Shared-answers mode: the current answer per card (empty otherwise). */
+  shared_answers?: SharedAnswer[];
+  /** Shared-answers mode: every change, newest first. */
+  answer_events?: AnswerEvent[];
   /** Whether this server can transcribe voice answers at all. */
   transcription_available?: boolean;
+}
+
+export interface SharedAnswer {
+  card_id: string;
+  value: unknown;
+  updated_at: string;
+  /** Name (or email) of who changed it last; null if they were removed. */
+  updated_by_name: string | null;
+}
+
+export interface AnswerEvent {
+  id: string;
+  card_id: string;
+  recipient_id: string | null;
+  /** Name or email at the time of the change (kept if they're removed). */
+  actor_label: string;
+  /** `{text}` for a question, or `{cells}` with only the changed cells
+   * ("" = cleared). */
+  change: { text?: string; cells?: Record<string, Record<string, string>> } | null;
+  created_at: string;
 }
 
 export interface CreateEngagementArgs {
@@ -658,6 +708,9 @@ export interface UpdateEngagementArgs {
    * deployment has no transcription provider (see
    * `EngagementDetail.transcription_available`). */
   transcription_enabled?: boolean;
+  /** The client document respondents answer on; "" clears it. */
+  page_url?: string;
+  shared_answers?: boolean;
 }
 
 export interface CreateCardArgs {
@@ -819,6 +872,18 @@ export const adminApi = {
 
   deleteCard: (id: string): Promise<void> =>
     request(`/api/admin/cards/${id}`, { method: "DELETE" }),
+
+  /** Create/update this engagement's cards from a page's `<pulse-*>` blocks.
+   * Re-syncing rewords cards in place and keeps answers. */
+  syncPage: (
+    engagementId: string,
+    html: string,
+    pageUrl?: string,
+  ): Promise<PageSyncResult> =>
+    request(`/api/admin/engagements/${engagementId}/page`, {
+      method: "POST",
+      body: JSON.stringify(pageUrl === undefined ? { html } : { html, page_url: pageUrl }),
+    }),
 
   /** Delete the given cards on one engagement, or every card with `"all"`.
    * Their answers and uploads go too; the respondent links stay. */

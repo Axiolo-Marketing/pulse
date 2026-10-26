@@ -38,6 +38,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "card.delete": "Deleted card",
   "card.import": "Imported cards",
   "card.bulk_delete": "Deleted cards",
+  "engagement.page_sync": "Synced page",
   "card.reactive_generate": "AI follow-up generated",
   "attachment.upload": "Uploaded attachment",
   "upload.transcribe": "Requested transcript",
@@ -118,6 +119,8 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
       return m.replaced !== undefined
         ? `replaced the deck (${plural(num(m.replaced), "card")} removed, ${plural(num(m.count), "card")} imported)`
         : `imported ${plural(num(m.count), "card")}`;
+    case "engagement.page_sync":
+      return `synced questions from a page (${num(m.created)} added, ${num(m.updated)} updated)`;
     case "card.bulk_delete":
       return m.all
         ? `deleted all ${plural(num(m.count), "card")}`
