@@ -11,12 +11,13 @@ to ``/api/mcp/.well-known/...`` and break discovery.
 ``oauth_root_routes()`` returns the full Starlette ``Route`` list the
 main app registers on its own router:
 
-  * ``create_auth_routes(...)`` — AS metadata + authorize/token/register
-    /revoke, all driven by the PR-1 ``provider`` singleton.
-  * ``create_protected_resource_routes(...)`` — the root PRM doc at
-    ``/.well-known/oauth-protected-resource/api/mcp``, whose absolute URL
-    is exactly what the MCP endpoint's ``WWW-Authenticate`` header points
-    at.
+  * ``create_auth_routes(...)`` — authorize/token/register/revoke, all
+    driven by the PR-1 ``provider`` singleton.
+  * the AS metadata doc and the root PRM doc at
+    ``/.well-known/oauth-protected-resource/api/mcp`` (the absolute URL
+    the MCP endpoint's ``WWW-Authenticate`` header points at). Both are
+    built from the SDK models but served here so the issuer is the exact
+    string the consent redirect returns as ``iss``.
   * the Pulse consent page (``GET``/``POST /authorize/consent``).
 
 The consent page is server-rendered, Pulse-branded HTML with no client
@@ -37,18 +38,27 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from html import escape
-from urllib.parse import quote, urlencode
+from typing import Any
+from urllib.parse import quote, urlencode, urlparse
 
 from mcp.server.auth.provider import construct_redirect_uri
 from mcp.server.auth.routes import (
+    build_metadata,
+    build_resource_metadata_url,
+    cors_middleware,
     create_auth_routes,
-    create_protected_resource_routes,
 )
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+from mcp.shared.auth import ProtectedResourceMetadata
 from pydantic import AnyHttpUrl
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from starlette.routing import Route
 
 from pulse_api.auth.session import InvalidSessionError, decode_session_payload
@@ -421,34 +431,93 @@ def _client_label(payload: dict) -> str:
 # ── route assembly ──────────────────────────────────────────────────────────
 
 
+_AS_METADATA_PATH = "/.well-known/oauth-authorization-server"
+
+
+def _metadata_route(path: str, body: dict[str, Any]) -> Route:
+    """Build a CORS-enabled GET route serving a fixed discovery document.
+
+    Args:
+        path: The well-known path to serve the document at.
+        body: The JSON document, already fully serialized to plain types.
+
+    Returns:
+        A Starlette route shaped like the SDK's own metadata routes.
+    """
+
+    async def handle(request: Request) -> Response:
+        return JSONResponse(
+            body, headers={"Cache-Control": "public, max-age=3600"}
+        )
+
+    return Route(
+        path,
+        endpoint=cors_middleware(handle, ["GET", "OPTIONS"]),
+        methods=["GET", "OPTIONS"],
+    )
+
+
 def oauth_root_routes() -> list[Route]:
     """Return the full list of root-mounted OAuth Starlette routes.
+
+    The issuer identifier is published in three places — AS metadata
+    ``issuer``, PRM ``authorization_servers``, and the ``iss`` parameter
+    on the authorization response (RFC 9207). Clients compare them as
+    exact strings, so all three must be ``settings.mcp_issuer_base``
+    byte for byte. The SDK models type the issuer as ``AnyHttpUrl``,
+    which serializes a bare origin with a trailing slash
+    (``https://host/``) and so disagrees with ``iss``; the two discovery
+    documents are therefore served from here with the issuer written
+    back as the plain string.
 
     Returns:
         AS metadata + authorize/token/register/revoke + the root PRM doc
         + the Pulse consent page, ready to ``extend`` onto the root app's
         router.
     """
+    issuer_id = settings.mcp_issuer_base
     # The SDK's route builders type these as ``AnyHttpUrl`` and call
     # ``validate_issuer_url`` (which reads ``.scheme`` / ``.host``), so
     # coerce the plain config strings before handing them over.
-    issuer = AnyHttpUrl(settings.mcp_issuer_base)
+    issuer = AnyHttpUrl(issuer_id)
     resource = AnyHttpUrl(settings.mcp_resource_url)
-    routes = create_auth_routes(
-        provider=oauth_provider,
-        issuer_url=issuer,
-        client_registration_options=ClientRegistrationOptions(
-            enabled=True,
-            valid_scopes=["mcp"],
-            default_scopes=["mcp"],
-        ),
-        revocation_options=RevocationOptions(enabled=True),
+    registration_options = ClientRegistrationOptions(
+        enabled=True,
+        valid_scopes=["mcp"],
+        default_scopes=["mcp"],
     )
-    routes += create_protected_resource_routes(
-        resource_url=resource,
+    revocation_options = RevocationOptions(enabled=True)
+
+    routes = [
+        route
+        for route in create_auth_routes(
+            provider=oauth_provider,
+            issuer_url=issuer,
+            client_registration_options=registration_options,
+            revocation_options=revocation_options,
+        )
+        if route.path != _AS_METADATA_PATH
+    ]
+
+    as_metadata = build_metadata(
+        issuer, None, registration_options, revocation_options
+    ).model_dump(mode="json", exclude_none=True)
+    as_metadata["issuer"] = issuer_id
+    as_metadata["authorization_response_iss_parameter_supported"] = True
+    routes.append(_metadata_route(_AS_METADATA_PATH, as_metadata))
+
+    prm = ProtectedResourceMetadata(
+        resource=resource,
         authorization_servers=[issuer],
         scopes_supported=["mcp"],
+    ).model_dump(mode="json", exclude_none=True)
+    prm["authorization_servers"] = [issuer_id]
+    routes.append(
+        _metadata_route(
+            urlparse(str(build_resource_metadata_url(resource))).path, prm
+        )
     )
+
     routes.append(
         Route(
             "/authorize/consent",
