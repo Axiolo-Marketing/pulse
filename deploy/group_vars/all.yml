@@ -134,6 +134,10 @@ pulse_signup_enabled: false
 pulse_environment: production
 pulse_max_upload_bytes: 26214400 # 25 MB
 pulse_session_max_age_seconds: 2592000 # 30 days
+# Client documents allowed to save answers through the embed API (page
+# blocks, /api/embed/*): comma-separated origins; "https://*.quickhost.ing"
+# covers every QuickHost page. Empty disables cross-origin saves.
+pulse_embed_allowed_origins: "https://*.quickhost.ing"
 
 # ── Secrets (inline ansible-vault encrypted; decrypted at runtime) ─────────
 # Re-encrypt a value with:
