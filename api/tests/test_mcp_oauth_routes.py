@@ -228,6 +228,36 @@ async def test_authorization_server_metadata_shape(
     assert body["token_endpoint"].endswith("/token")
     assert body["registration_endpoint"].endswith("/register")
     assert body["code_challenge_methods_supported"] == ["S256"]
+    assert body["authorization_response_iss_parameter_supported"] is True
+
+
+async def test_issuer_is_one_exact_string_everywhere() -> None:
+    """Metadata ``issuer`` and PRM ``authorization_servers`` are the bare issuer.
+
+    Claude refuses to connect when these differ from the ``iss`` on the
+    authorization response by even a trailing slash, which is what the
+    SDK's ``AnyHttpUrl`` serialization adds to a bare origin. The app's
+    routes are built at import time, so build a fresh set under the
+    pinned issuer.
+    """
+    from starlette.applications import Starlette
+
+    from pulse_api.mcp.oauth.routes import oauth_root_routes
+
+    app = Starlette(routes=oauth_root_routes())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://pulse.axiolo.com"
+    ) as http:
+        metadata = (await http.get("/.well-known/oauth-authorization-server")).json()
+        prm = (
+            await http.get("/.well-known/oauth-protected-resource/api/mcp")
+        ).json()
+
+    assert settings.mcp_issuer_base == "https://pulse.axiolo.com"
+    assert metadata["issuer"] == settings.mcp_issuer_base
+    assert prm["authorization_servers"] == [settings.mcp_issuer_base]
+    assert prm["resource"] == settings.mcp_resource_url
+    assert metadata["token_endpoint"] == "https://pulse.axiolo.com/token"
 
 
 # ── DCR ─────────────────────────────────────────────────────────────────────
@@ -366,6 +396,8 @@ async def _approve_and_get_code(
     assert location.startswith(REDIRECT_URI)
     query = parse_qs(urlparse(location).query)
     assert query["state"][0] == "xyz"
+    # RFC 9207: ``iss`` must equal the metadata ``issuer`` exactly.
+    assert query["iss"] == [settings.mcp_issuer_base]
     return query["code"][0]
 
 
