@@ -104,6 +104,19 @@ A client document (e.g. a QuickHost page) can collect answers instead of the dec
 - **CORS**: `pulse_api/embed_cors.py` answers ONLY `/api/embed/*`, ONLY for `EMBED_ALLOWED_ORIGINS` (comma list, `https://*.quickhost.ing` wildcard), never with credentials.
 - **Tests**: `tests/test_page_blocks.py`, `src/lib/grid.test.ts`.
 
+### Deck templates (reusable decks)
+
+An org saves an engagement's deck as a template and starts new engagements from it (migration `0024`). A template is a JSON snapshot, not an engagement: `deck_templates` (`cards` jsonb in deck order, `settings` jsonb, name unique per org case-insensitively; org-scoped RLS for `pulse_member`, no anon access). Templates were deliberately NOT modelled as flagged engagements, which would have needed a filter in the list, status rollups, reminders job and MCP listing.
+
+- **Snapshot** (`POST /api/admin/templates` `{engagement_id, name, description?}`, or `PATCH …/templates/{id}` with `engagement_id` to save over one): operator-written shared cards only (`source='operator'`, no `recipient_id`, no `block_id`), so AI follow-ups and page-block cards never enter a template. No answers, respondents or brief. Settings kept: voice, reminders, reactive cards, transcription. `attachment_path` is copied as-is (attachment files are never deleted and aren't engagement-scoped). Audit `template.create` / `template.update` / `template.delete`.
+- **Start from a template**: `POST /api/admin/engagements` takes an optional `template_id` and creates the engagement, its cards and settings in one transaction, stamping `engagements.template_id`. Reactive cards and transcription are applied only when the org/server allows them, otherwise left off without an error. Nobody is emailed and no recipient is created: the result is a draft the operator edits and previews on the engagement page. Edits never flow back to the template. There is no template editor; a template changes by saving an edited engagement over it.
+- **Review banner**: an engagement with a `template_id`, cards, no invited respondent and no answers shows "Review this deck before you send it" (dismissal is per engagement in `localStorage`). A respondent's link works the moment they are added, which is why the banner says to finish editing first.
+- **Reorder**: `POST /api/admin/engagements/{id}/cards/reorder` `{card_ids}` (every shared card exactly once) reassigns those cards' existing `order_index` values in the new order, so recipient-scoped AI cards keep theirs. Two-step update because the unique `(engagement, order_index)` constraint isn't deferrable. Audit `card.reorder`. UI: Move up / Move down in each question's ⋯ menu.
+- **Importer**: `card_import.py` accepts an optional `**Pre-filled:**` block (aliases `Prefilled`, `Pre-filled value`, `Default`) on `confirm-edit` cards and stores it as `default_value`, which the deck shows as "What we have".
+- **MCP**: `pulse_list_templates`, `pulse_get_template`, `pulse_save_template`, and `template_id` on `pulse_create_engagement`.
+- **UI**: "Start from" picker with a question preview in the New engagement dialog, "Save as template" in the engagement ⋯ menu, and a Templates dialog (preview, rename, delete) from the engagement list header.
+- **Tests**: `tests/test_deck_templates.py`; pure helpers in `src/lib/` have Vitest tests.
+
 ### Completion alerts (owner email when a respondent finishes)
 
 When a respondent's last visible card (shared deck + their own AI follow-ups) gets an `answered`/`skipped` response, the engagement owner is emailed once ("Jane finished 2027 Revenue Plan", link to `/admin/#/client/{id}`). Owner = `engagements.created_by` while still a member of the org, else every org owner. Code: `api/pulse_api/completion.py`; template `respondent_finished_email`.

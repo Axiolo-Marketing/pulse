@@ -41,7 +41,8 @@ SELECT_TYPES = ("single-select", "multi-select")
 
 # Field labels that can appear inside a card block, used to slice values.
 CARD_LABELS = ("Category", "Type", "Skip", "Attachment", "Context",
-               "Question", "Options", "Default")
+               "Question", "Options", "Default", "Pre-filled", "Prefilled",
+               "Pre-filled value")
 
 PLACEHOLDER_RE = re.compile(r"<[^>]+>")
 
@@ -58,6 +59,11 @@ def _header_field(text: str, label: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+# A `---` / `***` / `___` rule on its own line at the end of a field. Decks
+# put one between cards; it is a separator, not part of the field above it.
+_TRAILING_RULE = re.compile(r"\n\s*([-*_])(\s*\1){2,}\s*$")
+
+
 def _split_value_by_labels(block: str) -> dict[str, str]:
     """Slice a card block into {label: raw_value} by locating each `**Label:**`
     marker and taking the text up to the next marker. Robust to fields being
@@ -72,6 +78,7 @@ def _split_value_by_labels(block: str) -> dict[str, str]:
     for i, (_start, end, label) in enumerate(marks):
         next_start = marks[i + 1][0] if i + 1 < len(marks) else len(block)
         raw = block[end:next_start].strip()
+        raw = _TRAILING_RULE.sub("", raw).strip()
         # First occurrence of a label wins; ignore stray repeats.
         values.setdefault(label, raw)
     return values
@@ -126,6 +133,12 @@ def parse_deck(text: str) -> tuple[dict, list[dict]]:
         rtype = (fields.get("Type") or "").strip().lower()
         skip_raw = (fields.get("Skip") or "optional").strip().lower()
         attachment = (fields.get("Attachment") or "").strip() or None
+        default_value = next(
+            (fields[k].strip() for k in
+             ("Pre-filled", "Prefilled", "Pre-filled value", "Default")
+             if fields.get(k, "").strip()),
+            None,
+        )
         if attachment and PLACEHOLDER_RE.search(attachment):
             attachment = None  # template placeholder, not a real path
 
@@ -139,6 +152,7 @@ def parse_deck(text: str) -> tuple[dict, list[dict]]:
             "options": _parse_options(fields.get("Options", "")) or None,
             "skip_allowed": "required" not in skip_raw,
             "attachment_path": attachment,
+            "default_value": default_value,
         }
         cards.append(card)
     return engagement, cards
@@ -176,6 +190,10 @@ def validate(engagement: dict, cards: list[dict]) -> list[str]:
                 errors.append(f"{where}: {c['response_type']} needs 2+ Options.")
         elif c["options"]:
             warnings.append(f"{where}: Options ignored for type {c['response_type']}.")
+        if c.get("default_value") and c["response_type"] != "confirm-edit":
+            errors.append(
+                f"{where}: a Pre-filled value only works on confirm-edit cards."
+            )
         for fld in ("context", "question"):
             if PLACEHOLDER_RE.search(c[fld]):
                 warnings.append(f"{where}: {fld} still contains a <placeholder>.")
@@ -259,6 +277,7 @@ class PulseClient:
             "options": card["options"],
             "skip_allowed": card["skip_allowed"],
             "attachment_path": card["attachment_path"],
+            "default_value": card.get("default_value"),
         }
         return self._request(
             "POST", f"/api/admin/engagements/{engagement_id}/cards", body

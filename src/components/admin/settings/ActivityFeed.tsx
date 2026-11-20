@@ -38,6 +38,10 @@ export const ACTION_LABELS: Record<string, string> = {
   "card.delete": "Deleted card",
   "card.import": "Imported cards",
   "card.bulk_delete": "Deleted cards",
+  "card.reorder": "Reordered cards",
+  "template.create": "Saved template",
+  "template.update": "Updated template",
+  "template.delete": "Deleted template",
   "engagement.page_sync": "Synced page",
   "card.reactive_generate": "AI follow-up generated",
   "attachment.upload": "Uploaded attachment",
@@ -125,6 +129,14 @@ export function formatActivityPhrase(entry: ActivityEntry): string {
       return m.all
         ? `deleted all ${plural(num(m.count), "card")}`
         : `deleted ${plural(num(m.count), "card")}`;
+    case "card.reorder":
+      return "reordered the questions";
+    case "template.create":
+      return `saved template ${quoted(m.name)}`;
+    case "template.update":
+      return `updated template ${quoted(m.name)}`;
+    case "template.delete":
+      return `deleted template ${quoted(m.name)}`;
     case "attachment.upload":
       return `uploaded attachment ${quoted(m.filename)}`;
     case "upload.transcribe":

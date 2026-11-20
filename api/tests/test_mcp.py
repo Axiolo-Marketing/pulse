@@ -291,6 +291,9 @@ async def test_tools_list_returns_all_tools(
             "pulse_update_card",
             "pulse_delete_card",
             "pulse_upload_attachment",
+            "pulse_list_templates",
+            "pulse_get_template",
+            "pulse_save_template",
         ]
     )
 
@@ -1205,3 +1208,104 @@ async def test_mcp_update_engagement_reactive_cards_gate(
         )
     )
     assert disabled["reactive_cards_enabled"] is False
+
+
+# ── Deck templates ───────────────────────────────────────────────────────
+
+
+async def _call(mcp_client: AsyncClient, raw: str, name: str, args: dict[str, Any]):
+    return await _mcp_call(
+        mcp_client, "tools/call", _tool_call_payload(name, args), api_key=raw
+    )
+
+
+async def test_templates_save_list_get_update_and_create_engagement(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    seed_client: dict[str, str],
+    seed_cards: list[dict[str, str]],
+) -> None:
+    org = seed_admin_user["org_id"]
+    raw = await _insert_admin_key(db, user_id=seed_admin_user["id"], org_id=org)
+
+    saved = await _call(
+        mcp_client, raw, "pulse_save_template",
+        {"engagement_id": seed_client["id"], "name": "MCP deck", "description": "d"},
+    )
+    assert saved["result"].get("isError") is not True, saved
+    tpl = _structured(saved)
+    assert tpl["card_count"] == 8 and tpl["description"] == "d"
+
+    listed = _structured(await _call(mcp_client, raw, "pulse_list_templates", {}))
+    assert [t["name"] for t in listed] == ["MCP deck"]
+    assert "cards" not in listed[0]
+    got = _structured(
+        await _call(mcp_client, raw, "pulse_get_template", {"template_id": tpl["id"]})
+    )
+    assert len(got["cards"]) == 8 and set(got["settings"]) >= {"voice_enabled"}
+
+    # Update in place: re-snapshot + rename via template_id.
+    updated = _structured(
+        await _call(
+            mcp_client, raw, "pulse_save_template",
+            {"engagement_id": seed_client["id"], "template_id": tpl["id"],
+             "name": "MCP deck v2"},
+        )
+    )
+    assert updated["id"] == tpl["id"] and updated["name"] == "MCP deck v2"
+
+    created = _structured(
+        await _call(
+            mcp_client, raw, "pulse_create_engagement",
+            {"client_name": "From Template", "template_id": tpl["id"]},
+        )
+    )
+    assert created["template_id"] == tpl["id"]
+    count = (
+        await db.execute(
+            text("select count(*) from public.cards where engagement_id = cast(:e as uuid)"),
+            {"e": created["id"]},
+        )
+    ).scalar_one()
+    assert count == 8
+    actions = {
+        r["action"] for r in await _fetch_audit_rows(db, org_id=org)
+    }
+    assert {"template.create", "template.update", "engagement.create"} <= actions
+    eng_audit = await _fetch_audit_rows(db, org_id=org, action="engagement.create")
+    assert eng_audit[0]["metadata"]["template_id"] == tpl["id"]
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "message"),
+    [
+        ("pulse_get_template",
+         {"template_id": "00000000-0000-0000-0000-000000000000"}, "template not found"),
+        ("pulse_create_engagement",
+         {"client_name": "X", "template_id": "00000000-0000-0000-0000-000000000000"},
+         "template not found"),
+        ("pulse_save_template", {"engagement_id": "$eng", "name": "n"},
+         "no questions to save"),
+        ("pulse_save_template", {"engagement_id": "$eng"}, "name is required"),
+        ("pulse_save_template",
+         {"engagement_id": "$eng", "template_id": "00000000-0000-0000-0000-000000000000"},
+         "template not found"),
+    ],
+)
+async def test_template_tool_errors(
+    mcp_client: AsyncClient,
+    db: AsyncSession,
+    seed_admin_user: dict[str, str],
+    seed_client: dict[str, str],
+    tool: str,
+    args: dict[str, Any],
+    message: str,
+) -> None:
+    raw = await _insert_admin_key(
+        db, user_id=seed_admin_user["id"], org_id=seed_admin_user["org_id"]
+    )
+    args = {k: (seed_client["id"] if v == "$eng" else v) for k, v in args.items()}
+    resp = await _call(mcp_client, raw, tool, args)
+    assert resp["result"].get("isError") is True
+    assert message in resp["result"]["content"][0]["text"]

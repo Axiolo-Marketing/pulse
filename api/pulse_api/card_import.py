@@ -20,6 +20,11 @@ delimited card blocks like:
     - option one
     - option two
 
+    **Pre-filled:**
+    Optional, `confirm-edit` only: the value shown for the respondent to
+    confirm or correct (also accepted as `Prefilled`, `Pre-filled value`,
+    `Default`).
+
 The parser ignores any non-card top-level sections (engagement header,
 sequencing summary, notes for Tom). Validation errors include the card
 index + title so the operator can fix the source file.
@@ -61,6 +66,7 @@ class ParsedCard:
     skip_allowed: bool
     options: list[str] | None
     attachment_path: str | None
+    default_value: str | None = None
 
     def to_create_kwargs(self) -> dict:
         return {
@@ -70,7 +76,7 @@ class ParsedCard:
             "question": self.question,
             "response_type": self.response_type,
             "options": self.options,
-            "default_value": None,
+            "default_value": self.default_value,
             "skip_allowed": self.skip_allowed,
             "attachment_path": self.attachment_path,
         }
@@ -81,8 +87,14 @@ _OTHER_HEADING = re.compile(r"^##\s+")
 _LABEL = re.compile(r"^\*\*([A-Za-z][A-Za-z _-]*):\*\*\s*(.*?)\s*$")
 _OPTION_LINE = re.compile(r"^[-*]\s+(.+?)\s*$")
 
+# A Markdown horizontal rule (`---`, `***`, `___`). Decks use one between
+# cards; it must not leak into the last field of the card above it.
+_RULE_LINE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
+
 _INLINE_FIELDS = {"category", "type", "skip", "attachment"}
-_BLOCK_FIELDS = {"context", "question", "options"}
+_BLOCK_FIELDS = {"context", "question", "options", "default"}
+# Accepted labels for the pre-filled value, normalised to ``default``.
+_DEFAULT_ALIASES = {"pre-filled", "prefilled", "pre-filled value", "default"}
 
 
 def parse_markdown(markdown: str) -> list[ParsedCard]:
@@ -107,6 +119,15 @@ def parse_markdown(markdown: str) -> list[ParsedCard]:
     return parsed
 
 
+def _block_body(lines: list[str]) -> str:
+    """Join a card's lines, dropping the blank lines and horizontal-rule
+    separators that trail it."""
+    end = len(lines)
+    while end and (not lines[end - 1].strip() or _RULE_LINE.match(lines[end - 1])):
+        end -= 1
+    return "\n".join(lines[:end]).strip()
+
+
 def _split_into_card_blocks(markdown: str) -> list[tuple[str, str]]:
     """Return (title, body) pairs, one per `## Card N:` heading. Any other
     `##` heading (e.g. `## Sequencing summary`, `## Notes for Tom`) ends
@@ -120,12 +141,12 @@ def _split_into_card_blocks(markdown: str) -> list[tuple[str, str]]:
         card_match = _CARD_HEADING.match(line)
         if card_match:
             if current_title is not None:
-                blocks.append((current_title, "\n".join(current_lines).strip()))
+                blocks.append((current_title, _block_body(current_lines)))
             current_title = card_match.group(1).strip()
             current_lines = []
             continue
         if _OTHER_HEADING.match(line) and current_title is not None:
-            blocks.append((current_title, "\n".join(current_lines).strip()))
+            blocks.append((current_title, _block_body(current_lines)))
             current_title = None
             current_lines = []
             continue
@@ -133,7 +154,7 @@ def _split_into_card_blocks(markdown: str) -> list[tuple[str, str]]:
             current_lines.append(line)
 
     if current_title is not None:
-        blocks.append((current_title, "\n".join(current_lines).strip()))
+        blocks.append((current_title, _block_body(current_lines)))
 
     return blocks
 
@@ -153,6 +174,7 @@ def _parse_card_block(title: str, body: str) -> ParsedCard:
     context = fields.get("context", "").strip()
     question = _normalize_question(fields.get("question", ""))
     options_raw = fields.get("options", "").strip()
+    default_value = fields.get("default", "").strip() or None
 
     missing = [
         name
@@ -198,6 +220,12 @@ def _parse_card_block(title: str, body: str) -> ParsedCard:
             f"Options provided but Type {type_value!r} doesn't take options"
         )
 
+    if default_value is not None and type_value != "confirm-edit":
+        raise CardImportError(
+            f"Pre-filled value provided but Type {type_value!r} doesn't take one "
+            "(only confirm-edit cards are pre-filled)"
+        )
+
     return ParsedCard(
         title=title,
         category=category,
@@ -207,6 +235,7 @@ def _parse_card_block(title: str, body: str) -> ParsedCard:
         skip_allowed=skip_allowed,
         options=options,
         attachment_path=attachment,
+        default_value=default_value,
     )
 
 
@@ -226,6 +255,8 @@ def _extract_fields(body: str) -> dict[str, str]:
         if m:
             flush()
             name = m.group(1).strip().lower()
+            if name in _DEFAULT_ALIASES:
+                name = "default"
             inline_value = m.group(2).strip()
             if name in _INLINE_FIELDS:
                 fields[name] = inline_value

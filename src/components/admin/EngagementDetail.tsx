@@ -5,6 +5,9 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
+  ArrowDown,
+  ArrowUp,
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -44,6 +47,13 @@ import { formatTimestamp } from "@/lib/format-time";
 import { describeChange, sharedExportDetail } from "@/lib/shared-answers";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
+import { responseTypeLabel } from "@/lib/response-types";
+import { moveSharedCard } from "@/lib/card-reorder";
+import {
+  readReviewDismissed,
+  shouldShowReviewBanner,
+  writeReviewDismissed,
+} from "@/lib/template-review";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -75,6 +85,7 @@ import {
   EditEngagementDialog,
 } from "./detail/EngagementDialogs";
 import { RecipientAvatar, RecipientsPanel } from "./detail/RecipientsPanel";
+import { SaveTemplateDialog } from "./detail/SaveTemplateDialog";
 import {
   AiFollowupBadge,
   rcKey,
@@ -140,18 +151,6 @@ function confirmCopy(detail: EngagementDetailData): {
   ].join(" ");
   return { resetDescription, deleteDescription };
 }
-
-const RESPONSE_TYPE_LABELS: Record<string, string> = {
-  "confirm-edit": "Confirm or edit",
-  "single-select": "Single choice",
-  "multi-select": "Multiple choice",
-  "short-text": "Short text",
-  "long-text": "Long text",
-  "document-link": "Link",
-  "contact-share": "Contact",
-  "file-upload": "File upload",
-  grid: "Grid (page)",
-};
 
 const MARKDOWN_PROSE = cn(
   "text-sm text-foreground",
@@ -349,6 +348,9 @@ function CardBlock({
   onEdit,
   onDelete,
   onCopyAnswer,
+  canMoveUp,
+  canMoveDown,
+  onMove,
 }: {
   card: CardModel;
   position: number;
@@ -361,6 +363,11 @@ function CardBlock({
   onEdit: () => void;
   onDelete: () => void;
   onCopyAnswer: (r: Recipient) => void;
+  /** Whether the card can move one step each way (false at the ends, while
+   * a move is saving, and always for recipient-scoped cards). */
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (direction: "up" | "down") => void;
 }): React.ReactElement {
   return (
     <article
@@ -399,7 +406,7 @@ function CardBlock({
               </span>
             ) : null}
             <span className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
-              {RESPONSE_TYPE_LABELS[card.response_type] ?? card.response_type}
+              {responseTypeLabel(card.response_type)}
             </span>
           </div>
         </div>
@@ -418,6 +425,14 @@ function CardBlock({
             <DropdownMenuItem onSelect={onEdit}>
               <Pencil />
               Edit card
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!canMoveUp} onSelect={() => onMove("up")}>
+              <ArrowUp />
+              Move up
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!canMoveDown} onSelect={() => onMove("down")}>
+              <ArrowDown />
+              Move down
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={onDelete}>
@@ -652,6 +667,26 @@ export function EngagementDetail(): React.ReactElement {
   const [bulkTarget, setBulkTarget] = useState<string[] | "all" | null>(null);
   // Markdown waiting on the add/replace choice (deck already has questions).
   const [pendingImport, setPendingImport] = useState<string | null>(null);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  // Ids whose review notice was dismissed this session (storage may be blocked).
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
+
+  const reorderMut = useMutation({
+    mutationFn: (cardIds: string[]) => adminApi.reorderCards(id, cardIds),
+    onSuccess: (res) => {
+      // Adopt the returned order straight away: a second move made before
+      // the refetch lands would otherwise be computed from the old order.
+      qc.setQueryData<EngagementDetailData>(["engagement", id], (d) =>
+        d ? { ...d, cards: res.cards } : d,
+      );
+      void qc.invalidateQueries({ queryKey: ["engagement", id] });
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.detail : "Could not move that question.",
+      );
+    },
+  });
 
   const resetMut = useMutation({
     mutationFn: () => adminApi.resetEngagement(id),
@@ -787,6 +822,22 @@ export function EngagementDetail(): React.ReactElement {
   const { engagement } = detail;
   const cards = [...detail.cards].sort((a, b) => a.order_index - b.order_index);
   // Ignore stale ids (cards deleted elsewhere since they were ticked).
+  const saveableCount = cards.filter(
+    (c) => (c.source ?? "operator") === "operator" && !c.recipient_id && !c.block_id,
+  ).length;
+  const showReviewBanner = shouldShowReviewBanner({
+    template_id: engagement.template_id,
+    cardCount: cards.length,
+    recipients: detail.recipients,
+    answeredCount: detail.responses.filter(
+      (r) => r.state === "answered" || r.state === "skipped" || r.state === "needs_edit",
+    ).length,
+    dismissed: dismissedIds.has(id) || readReviewDismissed(id),
+  });
+  function dismissReview(): void {
+    writeReviewDismissed(id);
+    setDismissedIds((prev) => new Set(prev).add(id));
+  }
   const selectedIds = cards.filter((c) => selected.has(c.id)).map((c) => c.id);
   const allSelected = cards.length > 0 && selectedIds.length === cards.length;
   function toggleCard(cardId: string, on: boolean): void {
@@ -969,6 +1020,14 @@ export function EngagementDetail(): React.ReactElement {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-48">
+              <DropdownMenuItem
+                disabled={saveableCount === 0}
+                onSelect={() => setSaveTemplateOpen(true)}
+              >
+                <BookmarkPlus />
+                Save as template
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => setResetOpen(true)}>
                 <RotateCcw />
                 Reset all answers
@@ -1085,6 +1144,31 @@ export function EngagementDetail(): React.ReactElement {
             )}
           </div>
 
+          {showReviewBanner ? (
+            <div
+              role="status"
+              className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm"
+            >
+              <p className="font-medium text-foreground">
+                Review this deck before you send it
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                These questions came from a template. Edit, add or remove any
+                of them, then preview the deck. A respondent's link works as
+                soon as they are added, so finish editing before you share one.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setPreviewOpen(true)}>
+                  <Eye />
+                  Preview
+                </Button>
+                <Button size="sm" variant="ghost" onClick={dismissReview}>
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {importErrors ? (
             <div
               role="alert"
@@ -1140,6 +1224,16 @@ export function EngagementDetail(): React.ReactElement {
                 onEdit={() => setCardEditor({ open: true, card })}
                 onDelete={() => setDeletingCard(card)}
                 onCopyAnswer={(r) => void copyAnswer(card, r)}
+                canMoveUp={
+                  !reorderMut.isPending && moveSharedCard(cards, card.id, "up") !== null
+                }
+                canMoveDown={
+                  !reorderMut.isPending && moveSharedCard(cards, card.id, "down") !== null
+                }
+                onMove={(dir) => {
+                  const next = moveSharedCard(cards, card.id, dir);
+                  if (next) reorderMut.mutate(next);
+                }}
               />
             ))
           )}
@@ -1159,6 +1253,12 @@ export function EngagementDetail(): React.ReactElement {
         </aside>
       </div>
 
+      <SaveTemplateDialog
+        engagementId={id}
+        questionCount={saveableCount}
+        open={saveTemplateOpen}
+        onOpenChange={setSaveTemplateOpen}
+      />
       <PreviewDialog
         engagementId={id}
         open={previewOpen}

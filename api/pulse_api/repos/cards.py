@@ -398,3 +398,54 @@ async def has_unanswered_ai_followup(
         {"resp": response_id, "rid": recipient_id},
     )
     return bool(result.scalar_one())
+
+
+async def reorder_shared(
+    session: AsyncSession, engagement_id: str, card_ids: list[str]
+) -> bool:
+    """Reorder an engagement's shared cards (``recipient_id is null``) to
+    ``card_ids``. Returns False (nothing changed) unless ``card_ids`` lists
+    every shared card exactly once.
+
+    The shared cards keep the SET of ``order_index`` values they already
+    hold, handed out in the new order, so recipient-scoped AI follow-up
+    cards keep their positions. ``unique (engagement_id, order_index)`` is
+    not deferrable, so the shared rows first move to a negative range
+    (``-order_index - 1``, which can't collide with the positive indexes),
+    then to their final values. The rows are locked and only the validated
+    ids move, so a card added concurrently is never left stranded at a
+    negative position."""
+    if not _valid_uuid(engagement_id) or not all(_valid_uuid(c) for c in card_ids):
+        return False
+    current = (
+        await session.execute(
+            text(
+                "select id::text as id, order_index from public.cards "
+                "where engagement_id = cast(:e as uuid) and recipient_id is null "
+                "order by order_index for update"
+            ),
+            {"e": engagement_id},
+        )
+    ).mappings().all()
+    if len(set(card_ids)) != len(card_ids) or {r["id"] for r in current} != set(
+        card_ids
+    ):
+        return False
+    slots = [r["order_index"] for r in current]
+    await session.execute(
+        text(
+            "update public.cards set order_index = -order_index - 1 "
+            "where engagement_id = cast(:e as uuid) and recipient_id is null "
+            "and id = any(cast(:ids as uuid[]))"
+        ),
+        {"e": engagement_id, "ids": card_ids},
+    )
+    await session.execute(
+        text(
+            "update public.cards c set order_index = v.idx "
+            "from unnest(cast(:ids as uuid[]), cast(:idx as int[])) as v(id, idx) "
+            "where c.id = v.id"
+        ),
+        {"ids": card_ids, "idx": slots},
+    )
+    return True

@@ -164,6 +164,8 @@ export interface Engagement {
   /** Respondents edit one shared set of answers (every change logged)
    * instead of answering separately. */
   shared_answers?: boolean;
+  /** The template this engagement was started from, if any (admin views). */
+  template_id?: string | null;
 }
 
 export interface Card {
@@ -685,6 +687,9 @@ export interface CreateEngagementArgs {
    * in the active org. Provide this OR `client_id`. */
   client_name?: string;
   engagement_name?: string | null;
+  /** Start from this template: the new engagement already holds its
+   * questions and settings. Omit for a blank deck. */
+  template_id?: string;
 }
 
 export interface UpdateEngagementArgs {
@@ -908,6 +913,17 @@ export const adminApi = {
       body: JSON.stringify({ markdown, replace }),
     }),
 
+  /** Put the shared cards in this order. `cardIds` must list every shared
+   * card of the engagement (no recipient-scoped ones) exactly once. */
+  reorderCards: (
+    engagementId: string,
+    cardIds: string[],
+  ): Promise<{ cards: Card[] }> =>
+    request(`/api/admin/engagements/${engagementId}/cards/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ card_ids: cardIds }),
+    }),
+
   uploadAttachment: (file: File): Promise<{ path: string; mime_type: string }> => {
     const fd = new FormData();
     fd.append("file", file, file.name);
@@ -925,6 +941,75 @@ export const adminApi = {
    * opted in. */
   transcribeUpload: (uploadId: string): Promise<{ status: "pending" }> =>
     request(`/api/admin/uploads/${uploadId}/transcribe`, { method: "POST" }),
+};
+
+/** A question as stored in a template. */
+export interface TemplateCard {
+  category: string;
+  title: string;
+  context: string;
+  question: string;
+  response_type: ResponseType;
+  options: string[] | null;
+  default_value: string | null;
+  skip_allowed: boolean;
+  attachment_path: string | null;
+}
+
+export interface TemplateSettings {
+  voice_enabled: boolean;
+  reminders_enabled: boolean;
+  reactive_cards_enabled: boolean;
+  transcription_enabled: boolean;
+}
+
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  card_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateDetail extends TemplateSummary {
+  cards: TemplateCard[];
+  settings: TemplateSettings;
+}
+
+/** Reusable decks, operator-only and org-scoped. Saving copies an
+ * engagement's questions and settings; starting from one copies them back
+ * into a new draft engagement via `adminApi.createEngagement`. */
+export const templatesApi = {
+  list: (): Promise<TemplateSummary[]> => request("/api/admin/templates"),
+
+  get: (id: string): Promise<TemplateDetail> =>
+    request(`/api/admin/templates/${id}`),
+
+  /** 400 when the engagement has no questions, 409 on a name clash. */
+  create: (args: {
+    engagement_id: string;
+    name: string;
+    description?: string | null;
+  }): Promise<TemplateDetail> =>
+    request("/api/admin/templates", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+
+  /** Passing `engagement_id` replaces the template's questions and
+   * settings with that engagement's. 409 on a name clash. */
+  update: (
+    id: string,
+    args: { name?: string; description?: string | null; engagement_id?: string },
+  ): Promise<TemplateDetail> =>
+    request(`/api/admin/templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(args),
+    }),
+
+  remove: (id: string): Promise<void> =>
+    request(`/api/admin/templates/${id}`, { method: "DELETE" }),
 };
 
 /** Real clients (companies), operator-only. Org-scoped on the backend via

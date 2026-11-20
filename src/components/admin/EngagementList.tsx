@@ -8,6 +8,7 @@ import {
   Check,
   ChevronsUpDown,
   ExternalLink,
+  LayoutTemplate,
   Link2,
   MoreHorizontal,
   Plus,
@@ -71,6 +72,7 @@ import { AiFollowupCountBadge } from "./detail/parts";
 import { ConfirmDialog } from "./detail/EngagementDialogs";
 import { AdminError, AdminLoading } from "./states";
 import { NewEngagementDialog } from "./NewEngagementDialog";
+import { TemplatesDialog } from "./TemplatesDialog";
 
 const UNASSIGNED = "__unassigned__";
 
@@ -419,6 +421,7 @@ export function EngagementList(): React.ReactElement {
     });
   }, [query, status, clientFilter, ownerFilter, sort]);
   const [newOpen, setNewOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [deleting, setDeleting] = useState<EngagementSummary | null>(null);
 
   const deleteMut = useMutation({
@@ -534,12 +537,23 @@ export function EngagementList(): React.ReactElement {
             across {clients.length} client{clients.length === 1 ? "" : "s"}
           </p>
         </div>
-        <Button type="button" onClick={() => setNewOpen(true)}>
-          <Plus />
-          New engagement
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setTemplatesOpen(true)}
+          >
+            <LayoutTemplate />
+            Templates
+          </Button>
+          <Button type="button" onClick={() => setNewOpen(true)}>
+            <Plus />
+            New engagement
+          </Button>
+        </div>
       </div>
       <NewEngagementDialog open={newOpen} onOpenChange={setNewOpen} />
+      <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative flex-1">

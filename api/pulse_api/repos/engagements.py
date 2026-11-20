@@ -191,7 +191,9 @@ async def list_all_with_counts(session: AsyncSession) -> list[dict]:
               c.created_by::text                                 as created_by,
               c.engagement_name, c.brief, c.voice_enabled,
               c.reminders_enabled, c.reactive_cards_enabled,
-              c.transcription_enabled, c.page_url, c.shared_answers, c.created_at,
+              c.transcription_enabled, c.page_url, c.shared_answers,
+              c.template_id::text                                as template_id,
+              c.created_at,
               (select count(*) from public.cards cd
                  where cd.engagement_id = c.id)::int             as total_cards,
               (select count(*) from public.cards cda
@@ -309,7 +311,8 @@ async def get_by_id(session: AsyncSession, engagement_id: str) -> dict | None:
             "cl.name as name, c.engagement_name, "
             "c.brief, c.voice_enabled, c.reminders_enabled, "
             "c.reactive_cards_enabled, c.transcription_enabled, c.page_url, "
-            "c.shared_answers, c.created_by::text as created_by, c.created_at "
+            "c.shared_answers, c.template_id::text as template_id, "
+            "c.created_by::text as created_by, c.created_at "
             "from public.engagements c "
             "join public.clients cl on cl.id = c.client_id "
             "where c.id = cast(:cid as uuid)"
@@ -327,6 +330,8 @@ async def create_engagement(
     engagement_name: str | None,
     org_id: str,
     created_by: str | None,
+    template_id: str | None = None,
+    settings: dict | None = None,
 ) -> dict:
     """Insert a new engagement under ``client_id`` and return its row.
 
@@ -343,6 +348,11 @@ async def create_engagement(
         org_id: Owning organization UUID — NOT NULL on the column.
         created_by: User who created the engagement (the active operator),
             or ``None``.
+        template_id: Deck template it was started from (provenance), or
+            ``None``.
+        settings: Optional initial toggles (``voice_enabled``,
+            ``reminders_enabled``, ``reactive_cards_enabled``,
+            ``transcription_enabled``); omitted keys keep the column default.
 
     Returns:
         Dict of the inserted row, including the joined client ``name`` +
@@ -353,20 +363,26 @@ async def create_engagement(
         text(
             "with ins as ("
             "  insert into public.engagements "
-            "  (client_id, engagement_name, org_id, created_by) "
+            "  (client_id, engagement_name, org_id, created_by, template_id, "
+            "   voice_enabled, reminders_enabled, reactive_cards_enabled, "
+            "   transcription_enabled) "
             "  values (cast(:cid as uuid), :e, cast(:org as uuid), "
-            "          cast(:by as uuid)) "
+            "          cast(:by as uuid), cast(:tid as uuid), "
+            "          coalesce(cast(:voice as boolean), false), "
+            "          coalesce(cast(:rem as boolean), true), "
+            "          coalesce(cast(:react as boolean), false), "
+            "          coalesce(cast(:trans as boolean), false)) "
             "  returning id, client_id, engagement_name, brief, "
             "            voice_enabled, reminders_enabled, reactive_cards_enabled, "
             "            transcription_enabled, page_url, shared_answers, "
-            "            created_by, created_at"
+            "            template_id, created_by, created_at"
             ") "
             "select ins.id::text, ins.client_id::text as client_id, "
             "cl.name as name, cl.name as client_name, "
             "ins.engagement_name, "
             "ins.brief, ins.voice_enabled, ins.reminders_enabled, "
             "ins.reactive_cards_enabled, ins.transcription_enabled, ins.page_url, "
-            "ins.shared_answers, "
+            "ins.shared_answers, ins.template_id::text as template_id, "
             "ins.created_by::text as created_by, ins.created_at "
             "from ins join public.clients cl on cl.id = ins.client_id"
         ),
@@ -375,6 +391,11 @@ async def create_engagement(
             "e": engagement_name,
             "org": org_id,
             "by": created_by,
+            "tid": template_id,
+            "voice": (settings or {}).get("voice_enabled"),
+            "rem": (settings or {}).get("reminders_enabled"),
+            "react": (settings or {}).get("reactive_cards_enabled"),
+            "trans": (settings or {}).get("transcription_enabled"),
         },
     )
     return dict(result.mappings().one())

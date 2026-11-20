@@ -30,6 +30,7 @@ from pulse_api.routes import oauth as oauth_routes
 from pulse_api.routes import orgs as orgs_routes
 from pulse_api.routes import reminders as reminders_routes
 from pulse_api.routes import superadmin as superadmin_routes
+from pulse_api.routes import templates as templates_routes
 from pulse_api.routes import uploads as uploads_routes
 
 configure_logging()
@@ -83,6 +84,7 @@ app.include_router(client_api_routes.router)
 app.include_router(embed_routes.router)
 app.include_router(uploads_routes.router)
 app.include_router(admin_api_routes.router)
+app.include_router(templates_routes.router)
 app.include_router(attachments_routes.admin_router)
 app.include_router(attachments_routes.public_router)
 app.include_router(orgs_routes.router)

@@ -20,6 +20,11 @@ Mappings to the REST routes (see ``routes/admin_api.py`` and
     pulse_update_card           ←  PATCH  /api/admin/cards/{id}
     pulse_delete_card           ←  DELETE /api/admin/cards/{id}
     pulse_upload_attachment     ←  POST   /api/admin/attachments
+    pulse_list_templates        ←  GET    /api/admin/templates
+    pulse_get_template          ←  GET    /api/admin/templates/{id}
+    pulse_save_template         ←  POST   /api/admin/templates
+                                   (or PATCH /api/admin/templates/{id} with template_id)
+    pulse_create_engagement     ←  also POST /api/admin/engagements with template_id
 
 Each tool authenticates first via ``authenticate_request``, which
 returns ``(user, org_id)`` read off the access token validated at the
@@ -48,6 +53,7 @@ from typing import Any
 from mcp.server.fastmcp.server import Context
 
 from pulse_api import reactive, storage
+from pulse_api import templates as templates_service
 from pulse_api.audit import record_audit
 from pulse_api.card_import import (
     CardImportError,
@@ -64,6 +70,7 @@ from pulse_api.mcp.server import (
 from pulse_api.repos import cards as cards_repo
 from pulse_api.repos import client_contacts as contacts_repo
 from pulse_api.repos import clients as clients_repo
+from pulse_api.repos import deck_templates as templates_repo
 from pulse_api.repos import engagements as engagements_repo
 from pulse_api.repos import recipients as recipients_repo
 from pulse_api.repos import responses as responses_repo
@@ -135,26 +142,48 @@ async def pulse_get_engagement(
         "company name); an existing client is reused, otherwise one is "
         "created. Returns the new engagement row (id, `client_id`, `name`, "
         "etc.) — NOT a deck link. The magic-link `?t=` URL lives on a "
-        "recipient: call `pulse_add_recipient` next to mint one."
+        "recipient: call `pulse_add_recipient` next to mint one. Pass "
+        "`template_id` (from `pulse_list_templates`) to start from a saved "
+        "deck template: its questions are copied in, in order, and its "
+        "settings applied (reactive cards / transcription only when the "
+        "org / server allow them, otherwise left off). A template-created "
+        "engagement has no recipients and nobody is emailed — review and "
+        "edit the questions first, then add recipients and send invites."
     ),
 )
 async def pulse_create_engagement(
     ctx: Context,
     client_name: str,
     engagement_name: str | None = None,
+    template_id: str | None = None,
 ) -> dict[str, Any]:
     user, org_id = await authenticate_request(ctx)
     async with _open_member_session(org_id) as session:
         client = await clients_repo.get_or_create(
             session, org_id=org_id, name=client_name
         )
-        row = await engagements_repo.create_engagement(
-            session,
-            client_id=str(client["id"]),
-            engagement_name=engagement_name,
-            org_id=org_id,
-            created_by=str(user.id),
-        )
+        audit_meta: dict[str, Any] = {}
+        if template_id is not None:
+            try:
+                row, copied = await templates_service.create_engagement_from_template(
+                    session,
+                    org_id=org_id,
+                    user_id=user.id,
+                    client_id=str(client["id"]),
+                    engagement_name=engagement_name,
+                    template_id=template_id,
+                )
+            except templates_service.TemplateError as exc:
+                raise ValueError(exc.message) from exc
+            audit_meta = {"template_id": template_id, "cards": copied}
+        else:
+            row = await engagements_repo.create_engagement(
+                session,
+                client_id=str(client["id"]),
+                engagement_name=engagement_name,
+                org_id=org_id,
+                created_by=str(user.id),
+            )
         await record_audit(
             session,
             org_id=org_id,
@@ -162,7 +191,7 @@ async def pulse_create_engagement(
             action="engagement.create",
             target_type="engagement",
             target_id=row["id"],
-            metadata={"name": row.get("name")},
+            metadata={"name": row.get("name"), **audit_meta},
         )
         await session.commit()
         return row
@@ -624,3 +653,95 @@ async def pulse_upload_attachment(
 
     storage.write_upload(relative_path=relative_path, content=content)
     return {"path": relative_path, "mime_type": mime_type}
+
+
+# ── Deck templates ───────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="pulse_list_templates",
+    description=(
+        "List the org's saved deck templates (`id`, `name`, `description`, "
+        "`card_count`, timestamps), sorted by name. A template is a reusable "
+        "snapshot of an engagement's questions plus its settings; start an "
+        "engagement from one with `pulse_create_engagement(template_id=...)`. "
+        "No arguments."
+    ),
+)
+async def pulse_list_templates(ctx: Context) -> list[dict[str, Any]]:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
+        return await templates_repo.list_for_org(session)
+
+
+@mcp.tool(
+    name="pulse_get_template",
+    description=(
+        "Fetch one deck template with its full `cards` (in deck order) and "
+        "`settings` (voice_enabled, reminders_enabled, "
+        "reactive_cards_enabled, transcription_enabled). "
+        "Returns 'template not found' if no template matches the id."
+    ),
+)
+async def pulse_get_template(ctx: Context, template_id: str) -> dict[str, Any]:
+    _, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
+        row = await templates_repo.get(session, template_id)
+        if row is None:
+            raise ValueError("template not found")
+        return row
+
+
+@mcp.tool(
+    name="pulse_save_template",
+    description=(
+        "Save an engagement's questions as a reusable deck template. Copies "
+        "the operator-authored shared questions (in order, with pre-filled "
+        "values) and the engagement's voice / reminders / reactive-cards / "
+        "transcription settings; AI follow-ups, per-respondent questions and "
+        "page-block questions are left out, and no answers or recipients are "
+        "copied. Pass `template_id` to update an existing template instead "
+        "of creating one: it is re-snapshotted from `engagement_id`, and "
+        "`name` / `description` change only when given. Fails when the name "
+        "is already used by another template or the engagement has no "
+        "questions."
+    ),
+)
+async def pulse_save_template(
+    ctx: Context,
+    engagement_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    template_id: str | None = None,
+) -> dict[str, Any]:
+    user, org_id = await authenticate_request(ctx)
+    async with _open_member_session(org_id) as session:
+        try:
+            if template_id is None:
+                if name is None:
+                    raise ValueError("name is required to create a template")
+                row = await templates_service.save_template(
+                    session,
+                    org_id=org_id,
+                    user_id=user.id,
+                    engagement_id=engagement_id,
+                    name=name,
+                    description=description,
+                )
+            else:
+                fields: dict[str, Any] = {"engagement_id": engagement_id}
+                if name is not None:
+                    fields["name"] = name
+                if description is not None:
+                    fields["description"] = description
+                row = await templates_service.update_template(
+                    session,
+                    org_id=org_id,
+                    user_id=user.id,
+                    template_id=template_id,
+                    fields=fields,
+                )
+        except templates_service.TemplateError as exc:
+            raise ValueError(exc.message) from exc
+        await session.commit()
+        return row

@@ -51,6 +51,7 @@ class Engagement(SQLModel, table=True):
     brief: str | None = None
     page_url: str | None = None
     shared_answers: bool = False
+    template_id: uuid.UUID | None = Field(default=None, foreign_key="deck_templates.id")
     voice_enabled: bool = False
     reminders_enabled: bool = True
     reactive_cards_enabled: bool = False
