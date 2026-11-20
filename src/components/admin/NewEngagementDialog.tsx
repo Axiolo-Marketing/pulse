@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
-import { adminApi, ApiError, clientsApi } from "@/lib/api";
+import { adminApi, ApiError, clientsApi, templatesApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -23,9 +23,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { Field, ToggleList, ToggleRow } from "./form-parts";
 import { RespondentPicker, type PickedRespondent } from "./RespondentPicker";
+import { TemplateQuestionList } from "./TemplateQuestionList";
+
+const BLANK = "__blank__";
 
 export function NewEngagementDialog({
   open,
@@ -40,6 +50,10 @@ export function NewEngagementDialog({
   const [clientName, setClientName] = useState("");
   const [engagementName, setEngagementName] = useState("");
   const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [templateId, setTemplateId] = useState(BLANK);
+  // The template whose voice setting we're waiting to apply, or null once the
+  // operator has set the toggle themselves (their choice always wins).
+  const voiceFollows = useRef<string | null>(null);
   const [respondents, setRespondents] = useState<PickedRespondent[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,6 +63,8 @@ export function NewEngagementDialog({
       setClientName("");
       setEngagementName("");
       setVoiceEnabled(false);
+      setTemplateId(BLANK);
+      voiceFollows.current = null;
       setRespondents([]);
       setError(null);
     }
@@ -69,6 +85,42 @@ export function NewEngagementDialog({
     enabled: open && !!matchedClient,
   });
 
+  const templatesQ = useQuery({
+    queryKey: ["templates"],
+    queryFn: () => templatesApi.list(),
+    enabled: open,
+  });
+  const templates = templatesQ.data ?? [];
+  const chosenTemplateId = templateId === BLANK ? null : templateId;
+  const templateQ = useQuery({
+    queryKey: ["templates", chosenTemplateId],
+    queryFn: () => templatesApi.get(chosenTemplateId!),
+    enabled: open && !!chosenTemplateId,
+  });
+
+  function pickTemplate(value: string): void {
+    setTemplateId(value);
+    // Follow the template's voice setting; the operator can still change it.
+    if (value === BLANK) {
+      voiceFollows.current = null;
+      return;
+    }
+    voiceFollows.current = value;
+    void queryClient
+      .fetchQuery({
+        queryKey: ["templates", value],
+        queryFn: () => templatesApi.get(value),
+      })
+      .then((t) => {
+        // Ignore a late answer for a template that's no longer selected, or
+        // one that arrives after the operator flipped the toggle.
+        if (voiceFollows.current !== value) return;
+        voiceFollows.current = null;
+        setVoiceEnabled(t.settings.voice_enabled);
+      })
+      .catch(() => undefined);
+  }
+
   const mutation = useMutation({
     mutationFn: async () => {
       const trimmed = clientName.trim();
@@ -79,9 +131,19 @@ export function NewEngagementDialog({
       const created = await adminApi.createEngagement({
         ...(match ? { client_id: match.id } : { client_name: trimmed }),
         engagement_name: engName || null,
+        ...(chosenTemplateId ? { template_id: chosenTemplateId } : {}),
       });
-      if (voiceEnabled) {
-        await adminApi.updateEngagement(created.id, { voice_enabled: true });
+      // A template already set voice; only touch it when the operator's
+      // toggle disagrees with what the new engagement got. While the
+      // template's setting is still loading the toggle isn't a choice yet,
+      // so leave what the template applied.
+      if (
+        voiceFollows.current === null &&
+        voiceEnabled !== created.voice_enabled
+      ) {
+        await adminApi.updateEngagement(created.id, {
+          voice_enabled: voiceEnabled,
+        });
       }
       // Add respondents one by one — nobody is emailed. A failure on one
       // (e.g. a malformed address the server rejects) doesn't stop the rest.
@@ -139,7 +201,8 @@ export function NewEngagementDialog({
         <DialogHeader>
           <DialogTitle>New engagement</DialogTitle>
           <DialogDescription>
-            Pick an existing client or type a new name to create one.
+            Pick an existing client or type a new name to create one. Nothing
+            is sent until you invite someone.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -211,6 +274,43 @@ export function NewEngagementDialog({
               placeholder="e.g. Q3 brand refresh"
             />
           </Field>
+          {templates.length > 0 ? (
+            <Field
+              id="new-eng-template"
+              label="Start from"
+              hint="A template copies its questions into a new draft you can edit before sending."
+            >
+              <Select
+                value={templateId}
+                onValueChange={pickTemplate}
+                disabled={submitting}
+              >
+                <SelectTrigger id="new-eng-template" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={BLANK}>Blank deck</SelectItem>
+                  {templates.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name} ({t.card_count}{" "}
+                      {t.card_count === 1 ? "question" : "questions"})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {chosenTemplateId ? (
+                templateQ.data ? (
+                  <TemplateQuestionList cards={templateQ.data.cards} />
+                ) : templateQ.isError ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    Could not load this template's questions.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Loading questions…</p>
+                )
+              ) : null}
+            </Field>
+          ) : null}
           <Field
             id="new-eng-respondents"
             label="Respondents"
@@ -231,7 +331,10 @@ export function NewEngagementDialog({
               label="Voice answers"
               description="Respondents can record a voice note on any card."
               checked={voiceEnabled}
-              onCheckedChange={setVoiceEnabled}
+              onCheckedChange={(on) => {
+                voiceFollows.current = null;
+                setVoiceEnabled(on);
+              }}
               disabled={submitting}
             />
           </ToggleList>

@@ -36,6 +36,10 @@ string emitted by the route layer appears in this list.
 * ``card.import``           — bulk markdown import (one row per call;
   ``replaced`` in metadata when it replaced the existing deck)
 * ``card.bulk_delete``      — several (or all) cards removed in one call
+* ``card.reorder``          — shared questions put in a new order
+* ``template.create``       — engagement's deck saved as a template
+* ``template.update``       — template renamed / re-described / re-snapshotted
+* ``template.delete``       — template removed
 * ``card.reactive_generate`` — reactive-cards engine auto-inserted an AI follow-up card
 * ``attachment.upload``     — admin uploaded an active-reference file
 * ``upload.transcribe``     — operator (re)queued transcription of a voice answer
@@ -89,6 +93,11 @@ AUDIT_ACTIONS: frozenset[str] = frozenset(
         "card.delete",
         "card.import",
         "card.bulk_delete",
+        "card.reorder",
+        # Deck templates
+        "template.create",
+        "template.update",
+        "template.delete",
         "card.reactive_generate",
         # Attachments + uploads
         "attachment.upload",

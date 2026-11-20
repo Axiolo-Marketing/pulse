@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse_api import email as email_module
 from pulse_api import page_blocks, reactive, reminders, storage, transcription
+from pulse_api import templates as templates_service
 from pulse_api.audit import record_audit
 from pulse_api.auth.email_messages import engagement_invite_email
 from pulse_api.auth.middleware import (
@@ -61,6 +62,9 @@ class CreateEngagementRequest(BaseModel):
     client_id: str | None = None
     client_name: str | None = Field(default=None, min_length=1, max_length=200)
     engagement_name: str | None = None
+    # Start from a saved deck template: its questions and settings are copied
+    # in. The engagement has no recipients and nobody is emailed.
+    template_id: str | None = None
 
 
 class UpdateEngagementRequest(BaseModel):
@@ -186,6 +190,12 @@ class SyncPageRequest(BaseModel):
         return self
 
 
+class ReorderCardsRequest(BaseModel):
+    """Every shared question of the engagement, once, in the new order."""
+
+    card_ids: list[str] = Field(max_length=1000)
+
+
 class BulkDeleteCardsRequest(BaseModel):
     """Either specific ``card_ids`` or ``all=True`` (every card, including AI
     follow-ups). Exactly one must be given."""
@@ -281,13 +291,28 @@ async def create_engagement(
     """
     user, membership = org_member
     client_id = await _resolve_client_id(session, req, membership.org_id)
-    row = await engagements_repo.create_engagement(
-        session,
-        client_id=client_id,
-        engagement_name=req.engagement_name,
-        org_id=str(membership.org_id),
-        created_by=str(user.id),
-    )
+    audit_meta: dict[str, Any] = {}
+    if req.template_id is not None:
+        try:
+            row, copied = await templates_service.create_engagement_from_template(
+                session,
+                org_id=membership.org_id,
+                user_id=user.id,
+                client_id=client_id,
+                engagement_name=req.engagement_name,
+                template_id=req.template_id,
+            )
+        except templates_service.TemplateError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+        audit_meta = {"template_id": req.template_id, "cards": copied}
+    else:
+        row = await engagements_repo.create_engagement(
+            session,
+            client_id=client_id,
+            engagement_name=req.engagement_name,
+            org_id=str(membership.org_id),
+            created_by=str(user.id),
+        )
     await record_audit(
         session,
         org_id=membership.org_id,
@@ -295,7 +320,7 @@ async def create_engagement(
         action="engagement.create",
         target_type="engagement",
         target_id=row["id"],
-        metadata={"name": row.get("name")},
+        metadata={"name": row.get("name"), **audit_meta},
     )
     await session.commit()
     return row
@@ -1012,6 +1037,40 @@ async def bulk_delete_cards(
     for path in upload_paths:
         storage.delete_upload(path)
     return {"deleted": len(titles)}
+
+
+@router.post("/engagements/{engagement_id}/cards/reorder")
+async def reorder_cards(
+    engagement_id: str,
+    req: ReorderCardsRequest,
+    session: AsyncSession = Depends(get_org_scoped_session),
+    org_member: tuple[User, OrganizationMembership] = Depends(
+        get_current_org_member
+    ),
+) -> dict[str, Any]:
+    """Put the engagement's shared questions in a new order. ``card_ids`` must
+    list every shared question exactly once; recipient-scoped AI follow-ups
+    keep their positions. Returns the engagement's full card list."""
+    engagement = await engagements_repo.get_by_id(session, engagement_id)
+    if engagement is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    if not await cards_repo.reorder_shared(session, engagement_id, req.card_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="card_ids must list every question on this engagement exactly once",
+        )
+    user, membership = org_member
+    await record_audit(
+        session,
+        org_id=membership.org_id,
+        user_id=user.id,
+        action="card.reorder",
+        target_type="engagement",
+        target_id=engagement_id,
+        metadata={"count": len(req.card_ids)},
+    )
+    await session.commit()
+    return {"cards": await cards_repo.list_for_engagement(session, engagement_id)}
 
 
 @router.patch("/cards/{card_id}")

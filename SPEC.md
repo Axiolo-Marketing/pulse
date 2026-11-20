@@ -204,6 +204,17 @@ on conflict (client_id, order_index) do update set
 
 The `on conflict` clause means re-running the same SQL updates the cards in place. Useful for iterating on wording.
 
+### Deck templates
+
+A deck that works for one client usually works for the next. An operator saves an engagement's questions as a template (engagement ⋯ menu → **Save as template**) and starts later engagements from it (**New engagement** → **Start from**, which lists the template's questions before anything is created).
+
+- A template holds the operator-written questions in order, plus the engagement's voice, reminder, AI follow-up and transcription settings. It holds no answers, respondents or brief. AI follow-up cards and page-block cards are left out.
+- Starting from a template creates an ordinary engagement with those questions already in it. Nobody is emailed. The operator edits, adds, removes and reorders questions, previews the deck, and only then adds respondents and sends invites. A notice on the engagement page says so until the first invite goes out or it is dismissed.
+- Changes to that engagement never change the template. To update a template, save an edited engagement over it (**Save as template** → **Replace an existing template**).
+- Templates are managed from the **Templates** button on the engagement list: preview the questions, rename, edit the description, delete. Deleting a template leaves engagements started from it untouched.
+- Questions can be moved with **Move up** / **Move down** in each question's ⋯ menu.
+- In the Markdown import format, a `confirm-edit` card may carry an optional `**Pre-filled:**` block. The respondent sees it as "What we have" and it seeds the correction box.
+
 ### Active References (HTML deliverables)
 
 If a card benefits from a visual reference (org chart, ICP one-pager, sales playbook excerpt), drop the HTML file at `pulse/public/deliverables/<slug>.html`, commit it, push it, then wire it onto the card via the admin Edit form (Active reference path = `deliverables/<slug>.html`).
