@@ -44,8 +44,9 @@ Each card has these fields:
 | **options** | for select types only | A list of 2-9 options for single/multi-select. Mutually exclusive for single, "any that apply" for multi. |
 | **skip allowed** | yes | `required` (must be answered before the deck is complete) or `optional` (client can skip). Most cards are optional. Make a card required only if Month 1 work blocks without it. |
 | **attachment** | optional | Path to an HTML reference file under `public/deliverables/<slug>.html`. Renders a "View Active Reference" button on the card. Use when a visual artifact (org chart, ICP one-pager, MRI report) helps the client confirm. |
+| **pre-filled** | optional, `confirm-edit` only | The specific value we have on file (a name, a number, a date, one short statement). The client sees it in a box labeled "What we have", and it is already in the edit box when they tap "Needs edit", so they fix it instead of retyping it. |
 
-`default_value` exists in the schema but is intentionally **not** surfaced to the client. The Needs edit textarea opens blank. Don't include it in the markdown.
+Use **pre-filled** when the thing being confirmed is a concrete value the client can correct in place. Keep it short: a line or two. The reasoning and background still go in `context`. Leave it out when there is no single value to show, and the edit box opens blank.
 
 ## Response type decision tree
 
@@ -59,7 +60,7 @@ When you have a pending item to turn into a card, walk this tree top to bottom:
 6. **Is the answer one of a discrete set of choices?**
    - **Mutually exclusive (pick one)** → `single-select` with 2-5 options.
    - **Several can apply (pick any)** → `multi-select` with 2-9 options.
-7. **Otherwise: we already believe something specific is true and want the client to confirm or push back** → `confirm-edit`. This is the most common type. The client sees the context, taps "Yes, correct" / "Needs edit" / "Skip for now". Tapping Edit opens a blank textarea for free-form correction.
+7. **Otherwise: we already believe something specific is true and want the client to confirm or push back** → `confirm-edit`. This is the most common type. The client sees the context, taps "Yes, correct" / "Needs edit" / "Skip for now". Tapping Edit opens a textarea for free-form correction. It starts with the card's pre-filled value when there is one, and blank otherwise.
 
 If you find yourself drafting a `confirm-edit` card with a paragraph in the context that ends with "right?" — you've got it. That's the shape.
 
@@ -129,6 +130,9 @@ Output your deck as a single markdown document with this shape. The operator (To
 **Question:**
 <One question.>
 
+**Pre-filled:**
+<Optional. The value we have on file, as the client should see it.>
+
 ---
 
 ## Card 2: <Title>
@@ -191,7 +195,7 @@ Cards are separated by `---` rules and start with `## Card N: <Title>` exactly. 
 
 Field labels are in bold (`**Category:**`, `**Type:**`, etc.). Text after the label until the next blank line or labeled field is the value.
 
-For `confirm-edit` cards, do **not** include a `**Default:**` field — Pulse no longer pre-fills the edit textarea, so any default text is just dead weight in the output.
+`confirm-edit` cards may end with an optional `**Pre-filled:**` block holding the value we have on file. Pulse shows it to the client as "What we have" and starts the edit box with it. The loader also accepts `**Default:**` as an older name for the same field. Any other card type with this block is rejected on import.
 
 ## Worked example: extracting cards from an ICP draft
 
@@ -287,7 +291,7 @@ That's the shape. Concise, sequenced, voice-correct, ready to hand off.
 - **Long context paragraphs.** 4 sentences max. If you have more, the artifact is the place; the card is the gate.
 - **Required-everything decks.** Most cards should be `optional`. Required is for true blockers only.
 - **Asking for passwords or other secrets.** Use `contact-share` to get who owns the credentials, then handle access exchange securely off-channel.
-- **Putting card text in `default_value`.** That field is no longer surfaced to clients. The "what we believe" goes in `context`.
+- **Putting the explanation in Pre-filled.** Pre-filled is the value the client corrects (a name, a number, one short statement). The "what we believe and why" goes in `context`.
 - **Confusing the operator with the recipient.** The operator is always Tom. The recipient is the named client. The card voice addresses the recipient ("you").
 
 ## Output checklist
@@ -297,6 +301,7 @@ Before handing the deck to the operator, verify:
 - [ ] Header block has Engagement (matches admin exactly), Client, Card count, Categories, Source material
 - [ ] Every card has Category, Type, Skip, Context, Question
 - [ ] Select-type cards have Options
+- [ ] Pre-filled appears only on `confirm-edit` cards, and holds a short value, never the explanation
 - [ ] No em-dashes anywhere
 - [ ] No compound questions
 - [ ] Required cards are deliberate, not default
