@@ -311,6 +311,21 @@ async def test_embed_rejects_bad_values_and_unknown_blocks(
     assert missing.status_code == 404
 
 
+async def test_embed_blocks_survives_a_team_polling(
+    admin_authed: AsyncClient, seed_client: dict[str, str]
+) -> None:
+    """A shared-answers page re-reads its blocks every 20s per open tab, and
+    colleagues in one office share an address. Ten people for a minute is 30
+    reads, which the 10/minute token-validation limit used to turn into 429s."""
+    await _sync(admin_authed, seed_client["id"])
+    headers = {"X-Pulse-Token": seed_client["token"], "X-Real-IP": "203.0.113.9"}
+    codes = {
+        (await admin_authed.get("/api/embed/blocks", headers=headers)).status_code
+        for _ in range(30)
+    }
+    assert codes == {200}
+
+
 async def test_embed_needs_a_valid_token(client: AsyncClient) -> None:
     r = await client.get("/api/embed/blocks", headers={"X-Pulse-Token": "0" * 16})
     assert r.status_code in (401, 404)

@@ -65,7 +65,7 @@ def _iso(ts: Any) -> str | None:
 
 
 @router.get("/blocks")
-@limiter.limit(settings.rate_limit_token_validation)
+@limiter.limit(settings.rate_limit_embed)
 async def get_blocks(
     request: Request,
     session: AsyncSession = Depends(get_anon_session),
@@ -106,7 +106,7 @@ async def get_blocks(
 
 
 @router.post("/responses")
-@limiter.limit("240/minute")
+@limiter.limit(settings.rate_limit_embed)
 async def save_block(
     request: Request,
     req: EmbedSaveRequest,
