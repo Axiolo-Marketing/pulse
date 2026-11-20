@@ -188,6 +188,11 @@ class Settings(BaseSettings):
     # ── Rate limits (per-IP, per-minute) ─────────────────────────────────
     rate_limit_default: str = "60/minute"
     rate_limit_token_validation: str = "10/minute"  # /api/me + /api/auth/login
+    # Page blocks (/api/embed/*). A shared-answers page re-reads its blocks
+    # every 20s per open tab and saves on every edit, and colleagues in one
+    # office share an address, so this needs far more room than the token
+    # validation limit: 240/minute is about 80 open tabs behind one IP.
+    rate_limit_embed: str = "240/minute"
     rate_limit_account_enumeration: str = "5/minute"  # signup + forgot-password
     rate_limit_upload: str = "20/minute"  # client + admin file uploads
     rate_limit_sensitive: str = "10/minute"  # invite-accept, reset-password, verify-email
