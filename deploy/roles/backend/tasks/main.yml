@@ -69,6 +69,9 @@
     owner: "{{ pulse_user }}"
     group: "{{ pulse_group }}"
     mode: "0640"
+    # The reminders cron sources this file with /bin/sh, so refuse to install
+    # one sh can't even parse. `-n` only parses, it never runs a line.
+    validate: "/bin/sh -n %s"
   notify: Restart pulse-api
 
 # ── 3. Migrations ─────────────────────────────────────────────────────────
